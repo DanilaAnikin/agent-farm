@@ -1,0 +1,119 @@
+# =============================================================================
+# AgentFarm — produkční compose stack pro farm VPS (Hetzner CX53).
+# Verze imagů PINOVANÉ (žádný watchtower — auto-update pod 24/7 farmou je
+# zbytečný výpadkový vektor; updaty ručně v rámci kvartální revize).
+#
+# Síťová topologie:
+#   - `farmnet`  : interní síť služeb (litellm, orchestrator, publisher, …)
+#   - `workernet`: izolovaná síť worker/judge kontejnerů — egress allowlist
+#                  vynucený firewallem hostu (jen LiteLLM + npm registry).
+# =============================================================================
+name: agent-farm
+
+x-service-base: &service-base
+  restart: unless-stopped
+  env_file: ../../.env
+  networks: [farmnet]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  # --- LiteLLM proxy — brána LLM traffiku + rozpočtové stropy ----------------
+  litellm:
+    <<: *service-base
+    image: ghcr.io/berriai/litellm:main-v1.55.8-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ../litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      DATABASE_URL: ${DATABASE_URL}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      ZAI_API_KEY: ${ZAI_API_KEY}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+    ports:
+      - "127.0.0.1:4000:4000"   # jen loopback; nikdy veřejně
+
+  # --- Docker socket proxy — orchestrátor spouští sibling kontejnery ----------
+  # Omezuje přístup k docker.sock na nezbytné operace (run/kill labelovaných imagů).
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    networks: [farmnet]
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1          # umožní create/start/kill
+      EXEC: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      INFO: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # --- Orchestrátor — srdce farmy -------------------------------------------
+  orchestrator:
+    <<: *service-base
+    build:
+      context: ../..
+      dockerfile: infra/docker/service.Dockerfile
+      args: { SERVICE: orchestrator }
+    depends_on: [litellm, docker-socket-proxy]
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    volumes:
+      - workspaces:/var/lib/agent-farm/workspaces
+    networks: [farmnet, workernet]
+
+  # --- Publisher — jediný držitel publikačních tokenů ------------------------
+  publisher:
+    <<: *service-base
+    build:
+      context: ../..
+      dockerfile: infra/docker/service.Dockerfile
+      args: { SERVICE: publisher }
+    depends_on: [litellm]
+
+  # --- Media pipeline --------------------------------------------------------
+  media-pipeline:
+    <<: *service-base
+    build:
+      context: ../..
+      dockerfile: infra/docker/service.Dockerfile
+      args: { SERVICE: media-pipeline }
+    depends_on: [litellm]
+    volumes:
+      - media-tmp:/tmp/media
+
+  # --- Telegram bot ----------------------------------------------------------
+  telegram-bot:
+    <<: *service-base
+    build:
+      context: ../..
+      dockerfile: infra/docker/service.Dockerfile
+      args: { SERVICE: telegram-bot }
+    depends_on: [orchestrator]
+
+  # --- Dashboard (Next.js) ---------------------------------------------------
+  dashboard:
+    <<: *service-base
+    build:
+      context: ../..
+      dockerfile: apps/dashboard/Dockerfile
+    depends_on: [orchestrator]
+    ports:
+      - "3000:3000"
+
+networks:
+  farmnet:
+    driver: bridge
+  workernet:
+    driver: bridge
+    internal: false   # egress omezuje firewall hostu (allowlist), ne Docker
+
+volumes:
+  workspaces:
+  media-tmp:

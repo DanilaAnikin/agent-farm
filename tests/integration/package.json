@@ -1,0 +1,21 @@
+{
+  "name": "@farm/integration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Integrační test suite Perennial agent-farm — běží proti ŽIVÉMU Postgresu (Supabase-kompat shim + migrace). Dokazuje chování, nejen kompilaci.",
+  "scripts": {
+    "test": "tsx --test src/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@farm/billing": "workspace:*",
+    "@farm/core": "workspace:*",
+    "@farm/db": "workspace:*",
+    "drizzle-orm": "^0.38.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

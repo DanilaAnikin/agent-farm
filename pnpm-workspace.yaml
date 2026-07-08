@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "tests/*"
+
+onlyBuiltDependencies:
+  - esbuild
+  - "@swc/core"
+  - sharp

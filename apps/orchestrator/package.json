@@ -1,0 +1,30 @@
+{
+  "name": "@farm/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@farm/db": "workspace:*",
+    "@farm/core": "workspace:*",
+    "@farm/llm": "workspace:*",
+    "@farm/storage": "workspace:*",
+    "@farm/billing": "workspace:*",
+    "drizzle-orm": "^0.38.3",
+    "dockerode": "^4.0.2",
+    "simple-git": "^3.27.0",
+    "@octokit/rest": "^21.0.2"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^3.3.31",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

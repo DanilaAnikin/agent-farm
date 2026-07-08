@@ -1,0 +1,38 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": [
+    "NODE_ENV"
+  ],
+  "//": "envMode=loose: apky za runtime čtou desítky secretů z process.env (Supabase, LiteLLM, Groq, fal, ElevenLabs, Stripe, GitHub, Dokploy, CREDENTIALS_ENCRYPTION_KEY, PUBLIC_APP_URL, číselné config env…). Ve strict módu by je `turbo dev`/build nepředal a apky by padaly. Loose = předá všechny.",
+  "envMode": "loose",
+  "globalPassThroughEnv": [
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_ANON_KEY",
+    "DATABASE_URL",
+    "LITELLM_BASE_URL",
+    "LITELLM_MASTER_KEY"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

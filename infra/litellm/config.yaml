@@ -1,0 +1,124 @@
+# =============================================================================
+# LiteLLM proxy — jediná brána veškerého LLM traffiku farmy.
+# Vynucuje: vrstvené denní stropy, per-attempt ephemeral klíče, shadow pricing
+# GLM paušálu, failover, zápis nákladů do cost_ledger (přes callback).
+#
+# Env klíče (DEEPSEEK_API_KEY, ZAI_API_KEY, MOONSHOT_API_KEY, DASHSCOPE_API_KEY)
+# čte LiteLLM z prostředí kontejneru.
+# =============================================================================
+
+model_list:
+  # --- Manager: DeepSeek V4 Pro (thinking) -----------------------------------
+  - model_name: manager
+    litellm_params:
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/DEEPSEEK_API_KEY
+      api_base: https://api.deepseek.com
+    model_info:
+      input_cost_per_token: 0.000000435
+      output_cost_per_token: 0.00000087
+
+  # --- Worker (primární): GLM Coding Plan přes anthropic passthrough ----------
+  # POZOR: shadow pricing — paušál nemá marginální cenu za token, ale imputujeme
+  # list price GLM API, aby denní stropy a cost_ledger zůstaly smysluplné.
+  - model_name: worker
+    litellm_params:
+      model: anthropic/glm-4.7
+      api_key: os.environ/ZAI_API_KEY
+      api_base: https://api.z.ai/api/anthropic
+    model_info:
+      input_cost_per_token: 0.0000014   # shadow (GLM-4.7 list)
+      output_cost_per_token: 0.0000044  # shadow
+      metadata:
+        shadow_priced: true
+
+  - model_name: worker-hard
+    litellm_params:
+      model: anthropic/glm-5.2
+      api_key: os.environ/ZAI_API_KEY
+      api_base: https://api.z.ai/api/anthropic
+    model_info:
+      input_cost_per_token: 0.0000014
+      output_cost_per_token: 0.0000044
+      metadata:
+        shadow_priced: true
+
+  # --- Worker fallback: DeepSeek V4 Flash (pay-as-you-go, vždy zapojen) -------
+  - model_name: worker-fallback
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+      api_base: https://api.deepseek.com
+    model_info:
+      input_cost_per_token: 0.00000014
+      output_cost_per_token: 0.00000028
+
+  # --- Judge: Kimi K2.6 (jiná rodina než worker) -----------------------------
+  - model_name: judge
+    litellm_params:
+      model: moonshot/kimi-k2.6
+      api_key: os.environ/MOONSHOT_API_KEY
+      api_base: https://api.moonshot.ai/v1
+    model_info:
+      input_cost_per_token: 0.00000095
+      output_cost_per_token: 0.000004
+
+  # --- Levné pomocné (sumarizace, captions, commit messages) -----------------
+  - model_name: cheap
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+      api_base: https://api.deepseek.com
+    model_info:
+      input_cost_per_token: 0.00000014
+      output_cost_per_token: 0.00000028
+
+  # --- VLM pro kontrolu médií ------------------------------------------------
+  - model_name: media-vlm
+    litellm_params:
+      model: openai/glm-4.7v
+      api_key: os.environ/ZAI_API_KEY
+      api_base: https://api.z.ai/api/paas/v4
+    model_info:
+      input_cost_per_token: 0.0000006
+      output_cost_per_token: 0.0000018
+
+  - model_name: media-vlm-fallback
+    litellm_params:
+      model: openai/qwen3-vl-plus
+      api_key: os.environ/DASHSCOPE_API_KEY
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+    model_info:
+      input_cost_per_token: 0.0000008
+      output_cost_per_token: 0.000002
+
+# --- Failover: worker → fallback při vyčerpání kvóty / chybě ------------------
+router_settings:
+  routing_strategy: simple-shuffle
+  fallbacks:
+    - worker: ["worker-fallback"]
+    - worker-hard: ["worker", "worker-fallback"]
+    - media-vlm: ["media-vlm-fallback"]
+  num_retries: 2
+  request_timeout: 600
+  allowed_fails: 3
+  cooldown_time: 60
+
+# --- Globální nastavení proxy ------------------------------------------------
+litellm_settings:
+  drop_params: true
+  # Callback píše skutečné náklady do cost_ledger (implementace ve službě
+  # `apps/orchestrator/src/litellm-callback` naslouchá na webhooku, nebo se
+  # použije nativní spend logging do stejného Postgresu — viz infra/litellm/README).
+  success_callback: ["postgres"]
+  failure_callback: ["postgres"]
+  max_budget: 15          # tvrdý denní strop CELÉ farmy (USD)
+  budget_duration: 1d
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # LiteLLM si ukládá klíče/spend do stejného Postgresu (Supabase).
+  database_url: os.environ/DATABASE_URL
+  # Umožní tvorbu ephemeral virtuálních klíčů přes admin API.
+  allow_user_auth: true
+  disable_spend_logs: false

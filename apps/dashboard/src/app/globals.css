@@ -1,0 +1,118 @@
+@import "tailwindcss";
+
+/* =============================================================================
+   AgentFarm dashboard — tmavý "mission control" motiv.
+   Tailwind v4: barevné tokeny a fonty přes @theme.
+   ============================================================================= */
+@theme {
+  --color-bg: #0a0c10;
+  --color-surface: #12151c;
+  --color-surface-2: #1a1f29;
+  --color-border: #232a36;
+  --color-border-strong: #303a4a;
+
+  --color-fg: #e6e9ef;
+  --color-muted: #8b95a7;
+  --color-faint: #5a6272;
+
+  /* Perennial brand — evergreen (emerald-teal): růst, nekonečná smyčka. */
+  --color-brand: #2ee6a6;
+  --color-brand-strong: #14c98c;
+  --color-brand-soft: #0e2b24;
+  --color-brand-2: #5ad1ff;
+
+  --color-accent: #2ee6a6;
+  --color-accent-fg: #04241b;
+
+  --color-ok: #34d399;
+  --color-ok-bg: #0f2a22;
+  --color-warn: #fbbf24;
+  --color-warn-bg: #2a2410;
+  --color-danger: #f87171;
+  --color-danger-bg: #2a1414;
+  --color-info: #60a5fa;
+  --color-info-bg: #101c2e;
+  --color-neutral: #94a3b8;
+  --color-neutral-bg: #1a1f29;
+  --color-violet: #a78bfa;
+  --color-violet-bg: #1c1730;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  --radius-card: 0.75rem;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+/* Jemný scrollbar do tmavého motivu. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 9999px;
+  border: 2px solid var(--color-bg);
+}
+
+/* Živý "pulse" indikátor pro běžící agenty. */
+@keyframes farm-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.animate-farm-pulse {
+  animation: farm-pulse 1.4s ease-in-out infinite;
+}
+
+/* =============================================================================
+   Perennial brand utility — používá landing i billing UI.
+   ============================================================================= */
+.brand-gradient-text {
+  background: linear-gradient(100deg, var(--color-brand) 0%, var(--color-brand-2) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.brand-gradient-bg {
+  background: linear-gradient(120deg, var(--color-brand) 0%, var(--color-brand-2) 100%);
+}
+.brand-glow {
+  box-shadow: 0 0 0 1px rgba(46, 230, 166, 0.25), 0 20px 60px -20px rgba(46, 230, 166, 0.35);
+}
+/* Jemná mřížka / radiální záře do hero sekcí landingu. */
+.brand-hero-bg {
+  background:
+    radial-gradient(60% 50% at 50% 0%, rgba(46, 230, 166, 0.12) 0%, transparent 70%),
+    radial-gradient(40% 40% at 85% 20%, rgba(90, 209, 255, 0.08) 0%, transparent 70%);
+}
+.brand-grid-bg {
+  background-image:
+    linear-gradient(var(--color-border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-border) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(circle at 50% 30%, black 0%, transparent 75%);
+}

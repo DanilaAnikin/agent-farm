@@ -1,0 +1,26 @@
+{
+  "name": "@farm/telegram-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@farm/db": "workspace:*",
+    "@farm/core": "workspace:*",
+    "@farm/storage": "workspace:*",
+    "@farm/llm": "workspace:*",
+    "drizzle-orm": "^0.38.3",
+    "grammy": "^1.30.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.10.5"
+  }
+}
