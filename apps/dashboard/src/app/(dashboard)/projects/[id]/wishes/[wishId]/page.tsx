@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { FileText } from "lucide-react";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -147,7 +148,7 @@ export default async function WishDetailPage({
                   editable={awaitingApproval && !trustMode}
                 />
               ) : (
-                <EmptyState icon="✎" title="Zatím bez specifikace" description="Manager právě přání zpracovává." />
+                <EmptyState icon={<FileText className="size-5" />} title="Zatím bez specifikace" description="Manager právě přání zpracovává." />
               )}
             </CardBody>
           </Card>

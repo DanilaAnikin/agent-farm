@@ -3,7 +3,7 @@
  * farm_settings je key→jsonb; klíč `global_pause` (bool) zastaví celou farmu.
  */
 import { getDb, farmSettings, profiles, projects, wishes } from "@farm/db";
-import { getPlan, planCaps } from "@farm/billing";
+import { getPlan, planCaps, effectivePlanKey } from "@farm/billing";
 import { eq } from "drizzle-orm";
 import { loadConfig } from "@farm/core";
 import type { CapSet } from "@farm/core";
@@ -50,13 +50,15 @@ export async function getCaps(
   const farmDailyCapUsd = await getSetting<number>("farm_daily_cap_usd", cfg.farmDailyCapUsd);
 
   // Uživatelský denní strop se řídí PLÁNEM (billing); admin může přepsat přes caps_override.
+  // EFEKTIVNÍ plán: při selhané platbě (past_due/unpaid) degradace na free — konzistentní
+  // s creditBalance, jinak by delikventní účet držel plný denní strop placeného tieru.
   const userRows = await getDb()
-    .select({ planKey: profiles.planKey, override: profiles.capsOverride })
+    .select({ planKey: profiles.planKey, subStatus: profiles.subscriptionStatus, override: profiles.capsOverride })
     .from(profiles)
     .where(eq(profiles.userId, userId))
     .limit(1);
   const userDailyCapUsd = userRows[0]
-    ? planCaps(getPlan(userRows[0].planKey), userRows[0].override).dailyCapUsd
+    ? planCaps(getPlan(effectivePlanKey(userRows[0].planKey, userRows[0].subStatus)), userRows[0].override).dailyCapUsd
     : cfg.defaultUserDailyCapUsd;
 
   const projRows = await getDb()

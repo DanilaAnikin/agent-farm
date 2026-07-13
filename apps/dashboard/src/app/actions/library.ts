@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { getPlan, effectivePlanKey } from "@farm/billing";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/app/actions/types";
 import type { MediaStatus } from "@/lib/types";
@@ -42,6 +43,19 @@ export async function requestPublish(input: {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, message: "Nepřihlášeno." };
+
+  // Feature-gate: Instagram publikace je jen v plánech s instagram=true (Pro+).
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("plan_key, subscription_status")
+    .eq("user_id", user.id)
+    .maybeSingle<{ plan_key: string; subscription_status: string | null }>();
+  if (!getPlan(effectivePlanKey(prof?.plan_key, prof?.subscription_status)).instagram) {
+    return {
+      ok: false,
+      message: "Instagram publikace je v plánu Pro a vyšším. Upgraduj v Nastavení → Předplatné.",
+    };
+  }
 
   const { data: pr, error } = await supabase
     .from("publish_requests")

@@ -1,9 +1,11 @@
 import { requireUser } from "@/lib/auth";
+import { FolderGit2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { startOfUtcDayIso } from "@/lib/time";
 import { formatUsd } from "@/lib/format";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { StatusPulse } from "@/components/ui/Live";
 import { NewProjectDialog } from "@/components/projects/NewProjectDialog";
 import { ProjectCard, type ProjectCardData, type ProjectCardWish } from "@/components/projects/ProjectCard";
 import { FirstRunChecklist } from "@/components/projects/FirstRunChecklist";
@@ -170,23 +172,35 @@ export default async function CommandCenterPage() {
     <>
       <RealtimeRefresh tables={["projects", "wishes", "tasks", "agents", "events", "approvals", "suggestions"]} throttleMs={2000} />
 
-      {/* Hlavička velína */}
-      <div className="mb-5">
-        <h1 className="text-2xl font-semibold">
-          <span className="brand-gradient-text">Velín farmy</span>
-        </h1>
-        <p className="mt-1 text-sm text-[--color-muted]">
-          {totalBusy > 0 ? (
-            <>
-              Právě pracuje <span className="font-medium text-[--color-brand]">{totalBusy}</span>{" "}
-              {totalBusy === 1 ? "agent" : "agentů"}
-            </>
-          ) : (
-            "Agenti čekají na tvé přání"
-          )}
-          {" · "}
-          {totalActiveWishes} aktivních přání · dnes {formatUsd(totalSpend)}
-        </p>
+      {/* Hlavička velína — editorial: eyebrow + t-title + hero metriky */}
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
+        <div className="min-w-0">
+          <div className="t-eyebrow flex items-center gap-2">
+            {totalBusy > 0 ? <StatusPulse className="h-1.5 w-1.5" /> : null}
+            {totalBusy > 0 ? "Živě · Velín" : "Velín farmy"}
+          </div>
+          <h1 className="t-title mt-2 text-[--color-fg]">
+            {totalBusy > 0 ? (
+              <>
+                Právě pracuje <span className="brand-gradient-text">{totalBusy}</span>{" "}
+                {totalBusy === 1 ? "agent" : "agentů"}
+              </>
+            ) : (
+              "Agenti čekají na tvé přání"
+            )}
+          </h1>
+        </div>
+        <div className="flex items-center gap-6">
+          <div>
+            <div className="t-eyebrow">Aktivní přání</div>
+            <div className="t-metric mt-1 text-2xl text-[--color-fg]">{totalActiveWishes}</div>
+          </div>
+          <div className="h-9 w-px bg-[--color-border-subtle]" />
+          <div>
+            <div className="t-eyebrow">Dnes</div>
+            <div className="t-metric mt-1 text-2xl text-[--color-fg]">{formatUsd(totalSpend)}</div>
+          </div>
+        </div>
       </div>
 
       {/* PRIMÁRNÍ AKCE: řekni farmě, co má udělat */}
@@ -199,7 +213,7 @@ export default async function CommandCenterPage() {
       {projects.length === 0 ? (
         <div className="mt-6">
           <EmptyState
-            icon="▣"
+            icon={<FolderGit2 className="size-5" />}
             title="Zatím žádné projekty"
             description="Napiš farmě přání nahoře (a založ nový projekt), nebo si projekt vytvoř ručně. Farma se pak sama nezastaví."
             action={<NewProjectDialog />}

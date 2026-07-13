@@ -448,7 +448,15 @@ async function architectWish(
     // BEST-OF-N: těžké code-tasky dostanou soupeřící kandidáty (výběr nejlepšího),
     // ostatní 1 (99 % provozu netknuté). Cap MAX_BEST_OF_N; MAX_BEST_OF_N=1 feature vypne.
     const hard = t.kind === "code" && estimateTaskDifficulty(`${t.title}\n${t.description}\n${t.done_condition}`) === "hard";
-    const bestOfN = hard ? Math.min(2, cfg.maxBestOfN) : 1;
+    // Per-projekt override (projects.autonomy.bestOfN) má přednost: tvůrce může zapnout
+    // soupeřící kandidáty na VŠECHNY code-tasky projektu (ne jen 'hard'). Vždy cap MAX_BEST_OF_N.
+    const autonomyBestOfN = project.autonomy?.bestOfN;
+    const bestOfN =
+      t.kind === "code" && typeof autonomyBestOfN === "number" && autonomyBestOfN >= 2
+        ? Math.min(autonomyBestOfN, cfg.maxBestOfN)
+        : hard
+          ? Math.min(2, cfg.maxBestOfN)
+          : 1;
     const inserted = await getDb()
       .insert(tasks)
       .values({

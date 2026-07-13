@@ -1,4 +1,5 @@
 import { requireUser } from "@/lib/auth";
+import { Receipt } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { lastUtcDays } from "@/lib/time";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -81,7 +82,7 @@ export default async function CostsPage() {
 
       {ledger.length === 0 ? (
         <div className="space-y-6">
-          <EmptyState icon="$" title="Zatím žádná útrata" description="Náklady se objeví, jakmile agenti začnou volat modely." />
+          <EmptyState icon={<Receipt className="size-5" />} title="Zatím žádná útrata" description="Náklady se objeví, jakmile agenti začnou volat modely." />
           <CapEditor projects={projects} isAdmin={isAdmin} farmDailyCap={farmDailyCap} farmMediaCap={farmMediaCap} />
         </div>
       ) : (

@@ -38,7 +38,7 @@ export function NewProjectDialog({ trigger }: { trigger?: React.ReactNode }) {
             <Input id="name" name="name" required placeholder="Např. IG kanál o AI nástrojích" />
           </Field>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Typ" htmlFor="kind">
               <Select id="kind" name="kind" defaultValue="code">
                 <option value="code">Kód (appka/CLI)</option>
@@ -79,7 +79,7 @@ export function NewProjectDialog({ trigger }: { trigger?: React.ReactNode }) {
             </>
           ) : null}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Měsíční rozpočet (USD)" htmlFor="monthly_budget_usd">
               <Input id="monthly_budget_usd" name="monthly_budget_usd" type="number" step="1" defaultValue={200} />
             </Field>
@@ -93,7 +93,7 @@ export function NewProjectDialog({ trigger }: { trigger?: React.ReactNode }) {
             Trust mode — přeskočit schvalování specifikací
           </label>
 
-          {error ? <p className="text-xs text-[--color-danger]">{error}</p> : null}
+          {error ? <p role="alert" className="text-xs text-[--color-danger]">{error}</p> : null}
 
           <DialogFooter>
             <DialogClose>Zrušit</DialogClose>

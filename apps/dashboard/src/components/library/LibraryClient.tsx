@@ -1,5 +1,7 @@
 "use client";
 
+import { Images } from "lucide-react";
+
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { getAssetDownloadUrl, setAssetStatus } from "@/app/actions/library";
@@ -8,6 +10,7 @@ import { Card, CardBody } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Field";
 import { StatusBadge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FormMessage } from "@/components/ui/FormMessage";
 import { Dialog, DialogContent } from "@/components/ui/Dialog";
 import { PublishDialog } from "@/components/library/PublishDialog";
 import { MEDIA_STATUS_META } from "@/lib/constants";
@@ -78,6 +81,9 @@ export function LibraryClient({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<AssetView | null>(null);
   const [pending, startTransition] = useTransition();
+  const [downloading, setDownloading] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<MediaStatus | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     return assets.filter((v) => {
@@ -113,13 +119,35 @@ export function LibraryClient({
   }
 
   async function downloadOne(id: string) {
-    const res = await getAssetDownloadUrl(id);
-    if (res.ok && res.url) window.open(res.url, "_blank");
+    // Dřív bez loading/disabled stavu → riziko dvojkliku a žádná chyba, když se signed
+    // URL nepodařilo získat (nebo popup blokován).
+    if (downloading) return;
+    setDownloading(true);
+    setActionError(null);
+    try {
+      const res = await getAssetDownloadUrl(id);
+      if (res.ok && res.url) {
+        const win = window.open(res.url, "_blank");
+        if (!win) setActionError("Prohlížeč zablokoval otevření souboru — povol vyskakovací okna.");
+      } else {
+        setActionError(res.message ?? "Stažení se nepodařilo.");
+      }
+    } finally {
+      setDownloading(false);
+    }
   }
 
   function changeStatus(id: string, status: MediaStatus) {
+    setActionError(null);
+    setPendingStatus(status); // discriminator — ať spinner točí JEN klikané tlačítko
     startTransition(async () => {
-      await setAssetStatus(id, status);
+      const res = await setAssetStatus(id, status);
+      setPendingStatus(null);
+      if (!res.ok) {
+        // Dřív se výsledek ignoroval → dialog se zavřel jako by se povedlo.
+        setActionError(res.message ?? "Změna stavu se nepodařila.");
+        return;
+      }
       setDetail(null);
       router.refresh();
     });
@@ -161,7 +189,7 @@ export function LibraryClient({
 
       {filtered.length === 0 ? (
         <EmptyState
-          icon="▦"
+          icon={<Images className="size-5" />}
           title="Knihovna je prázdná"
           description="Jakmile farma vygeneruje reely, obrázky nebo hudbu, objeví se tady ke stažení."
         />
@@ -195,7 +223,15 @@ export function LibraryClient({
       )}
 
       {/* Detail assetu */}
-      <Dialog open={detail !== null} onOpenChange={(o) => !o && setDetail(null)}>
+      <Dialog
+        open={detail !== null}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDetail(null);
+            setActionError(null);
+          }
+        }}
+      >
         <DialogContent title="Detail assetu" className="max-w-2xl">
           {detail ? (
             <div className="space-y-4">
@@ -225,8 +261,8 @@ export function LibraryClient({
                 </div>
               ) : null}
 
-              <div className="flex flex-wrap gap-2 border-t border-[--color-border] pt-4">
-                <Button size="sm" onClick={() => downloadOne(detail.asset.id)}>
+              <div className="flex flex-wrap items-center gap-2 border-t border-[--color-border] pt-4">
+                <Button size="sm" loading={downloading} onClick={() => downloadOne(detail.asset.id)}>
                   Stáhnout
                 </Button>
                 <PublishDialog
@@ -234,12 +270,29 @@ export function LibraryClient({
                   projectId={detail.asset.project_id}
                   defaultCaption={String((detail.asset.meta?.["caption"] as string) ?? "")}
                 />
-                <Button size="sm" variant="secondary" loading={pending} onClick={() => changeStatus(detail.asset.id, "selected")}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={pending && pendingStatus === "selected"}
+                  disabled={pending}
+                  onClick={() => changeStatus(detail.asset.id, "selected")}
+                >
                   Označit jako použité
                 </Button>
-                <Button size="sm" variant="ghost" loading={pending} onClick={() => changeStatus(detail.asset.id, "archived")}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={pending && pendingStatus === "archived"}
+                  disabled={pending}
+                  onClick={() => changeStatus(detail.asset.id, "archived")}
+                >
                   Archivovat
                 </Button>
+                {actionError ? (
+                  <FormMessage tone="error" className="w-full">
+                    {actionError}
+                  </FormMessage>
+                ) : null}
               </div>
             </div>
           ) : null}

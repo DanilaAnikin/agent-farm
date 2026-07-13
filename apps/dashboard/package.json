@@ -12,18 +12,19 @@
     "clean": "rm -rf .next"
   },
   "dependencies": {
+    "@farm/billing": "workspace:*",
     "@farm/core": "workspace:*",
     "@farm/db": "workspace:*",
     "@farm/storage": "workspace:*",
-    "@farm/billing": "workspace:*",
-    "stripe": "^17.5.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.47.10",
     "clsx": "^2.1.1",
+    "lucide-react": "^1.24.0",
     "next": "^16.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "recharts": "^2.15.0"
+    "recharts": "^2.15.0",
+    "stripe": "^17.5.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { assertSafeRepoUrl, InvalidRepoUrlError } from "@farm/core";
 import { createClient } from "@/lib/supabase/server";
 import { projectLimitError } from "@/lib/plan-limits";
 import type { ProjectKind, ProjectStatus, RepoMode } from "@/lib/types";
@@ -22,7 +23,22 @@ export async function createProject(formData: FormData): Promise<ActionResult> {
 
   const kind = (String(formData.get("kind") ?? "code") as ProjectKind) || "code";
   const repoMode = (String(formData.get("repo_mode") ?? "new") as RepoMode) || "new";
-  const repoUrl = String(formData.get("repo_url") ?? "").trim() || null;
+  let repoUrl = String(formData.get("repo_url") ?? "").trim() || null;
+  // BEZPEČNOST: existující repo klonuje orchestrátor s vloženým GitHub tokenem —
+  // nevalidované repo_url = token exfiltrace / SSRF / git arg injection. Povol jen
+  // https github.com. (repo_mode 'new'/'none' žádné uživatelské URL nepoužívají.)
+  if (repoMode === "existing") {
+    try {
+      repoUrl = assertSafeRepoUrl(repoUrl);
+    } catch (err) {
+      return {
+        ok: false,
+        message: err instanceof InvalidRepoUrlError ? err.message : "Neplatné repo URL.",
+      };
+    }
+  } else {
+    repoUrl = null;
+  }
   const trustMode = formData.get("trust_mode") === "on";
   const monthly = Number(formData.get("monthly_budget_usd") ?? 200);
   const daily = Number(formData.get("daily_cap_usd") ?? 3);

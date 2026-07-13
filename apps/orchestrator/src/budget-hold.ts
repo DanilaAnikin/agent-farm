@@ -6,7 +6,7 @@
  */
 import { getDb, projects } from "@farm/db";
 import { eq } from "drizzle-orm";
-import { projectMachine, shouldAutoResume, checkBudget } from "@farm/core";
+import { projectMachine, shouldAutoResume, checkBudget, loadConfig } from "@farm/core";
 import { creditBalance } from "@farm/billing";
 import { logEvent } from "./events.js";
 import { spendSnapshot } from "./cost.js";
@@ -15,18 +15,24 @@ import { getCaps } from "./settings.js";
 /** Jedna iterace budget-hold loopu. */
 export async function runBudgetHoldOnce(): Promise<void> {
   const now = new Date();
+  const cfg = loadConfig();
   const held = await getDb().select().from(projects).where(eq(projects.status, "budget_hold"));
 
   for (const project of held) {
     try {
-      // heldSince aproximujeme updatedAt (kdy projekt přešel do budget_hold).
+      // heldSince = kdy projekt přešel do budget_hold. Aproximujeme projects.updatedAt,
+      // který se přes $onUpdate bumpne na přechodu active→budget_hold (dispatch/judge/
+      // media-loop) — takže shouldAutoResume měří skutečnou dobu v holdu, ne stáří řádku.
       const heldSince = project.updatedAt ?? project.createdAt ?? now;
       if (!shouldAutoResume(heldSince, now)) continue;
 
-      // Po resetu okna ještě ověř, že útrata je opravdu pod DENNÍM stropem.
+      // Po resetu okna ověř, že útrata je opravdu pod DENNÍM stropem — a to se STEJNOU
+      // rezervou (perAttemptBudgetUsd), jakou drží dispatch (checkBudget(spend,caps,perAttempt)
+      // v dispatch.ts). Bez shodné rezervy vzniká flapping pásmo [cap−perAttempt, cap]:
+      // budget-hold obnoví „bezpečný" projekt, dispatch ho hned zas re-holdne.
       const caps = await getCaps(project.userId, project.id);
       const spend = await spendSnapshot(project.userId, project.id);
-      if (checkBudget(spend, caps) !== null) continue;
+      if (checkBudget(spend, caps, cfg.perAttemptBudgetUsd) !== null) continue;
 
       // A KRITICKY: pokud jsou vyčerpané MĚSÍČNÍ kredity (out_of_credits), NEobnovuj —
       // denní okno se resetuje každý den, ale kredity až s měsícem. Bez téhle brány

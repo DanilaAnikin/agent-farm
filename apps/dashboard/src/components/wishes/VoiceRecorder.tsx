@@ -98,7 +98,11 @@ export function VoiceRecorder({
         ) : null}
       </div>
       {message ? (
-        <p className={"mt-2 text-xs " + (state === "error" ? "text-[--color-danger]" : "text-[--color-ok]")}>
+        <p
+          role={state === "error" ? "alert" : "status"}
+          aria-live={state === "error" ? "assertive" : "polite"}
+          className={"mt-2 text-xs " + (state === "error" ? "text-[--color-danger]" : "text-[--color-ok]")}
+        >
           {message}
         </p>
       ) : null}

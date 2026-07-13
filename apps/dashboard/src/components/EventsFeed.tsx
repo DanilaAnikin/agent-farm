@@ -1,4 +1,5 @@
 import { formatRelative } from "@/lib/format";
+import { Activity } from "lucide-react";
 import type { EventLevel, EventRow } from "@/lib/types";
 import { EmptyState } from "@/components/ui/EmptyState";
 
@@ -11,7 +12,7 @@ const levelColor: Record<EventLevel, string> = {
 
 export function EventsFeed({ events }: { events: Pick<EventRow, "id" | "level" | "type" | "message" | "ts">[] }) {
   if (events.length === 0) {
-    return <EmptyState icon="≋" title="Zatím žádné události" description="Jakmile agenti začnou pracovat, objeví se tu živý stream." />;
+    return <EmptyState icon={<Activity className="size-5" />} title="Zatím žádné události" description="Jakmile agenti začnou pracovat, objeví se tu živý stream." />;
   }
   return (
     <ol className="relative space-y-3">

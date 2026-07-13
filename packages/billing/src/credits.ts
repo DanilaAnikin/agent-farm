@@ -10,7 +10,7 @@
  */
 import { getSql, getDb, profiles, creditLedger } from "@farm/db";
 import { eq } from "drizzle-orm";
-import { getPlan } from "./plans.js";
+import { getPlan, effectivePlanKey } from "./plans.js";
 
 export interface CreditBalance {
   planKey: string;
@@ -21,23 +21,53 @@ export interface CreditBalance {
   ok: boolean; // remaining > 0
 }
 
-/** Začátek účtovacího období = 1. den měsíce v UTC. */
-export function currentPeriodStartIso(): string {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01T00:00:00.000Z`;
+/**
+ * Začátek aktuálního fakturačního období (UTC, ISO).
+ * - S předplatným: kotví na DEN v měsíci, kdy se předplatné obnovuje (odvozeno ze
+ *   subscription_period_end) → poslední výskyt téhle kotvy ≤ now. Bez toho by se
+ *   měsíční příděl resetoval kalendářního 1., takže nákup ke konci měsíce (např. 28.)
+ *   dal plný příděl a o pár dní později (1.) ještě jednou → ~2× kredit za 1 platbu.
+ * - Bez předplatného (free): kalendářní 1. měsíce v UTC.
+ */
+export function currentPeriodStartIso(periodEndIso?: string | Date | null): string {
+  const now = new Date();
+  if (periodEndIso) {
+    const end = new Date(periodEndIso);
+    if (!Number.isNaN(end.getTime())) {
+      const anchorDay = end.getUTCDate();
+      // KRITICKÉ: kotvu ořízni na poslední den cílového měsíce. Date.UTC(y, m, 31) NEklampuje
+      // ale přeteče dopředu (31. únor → 3. březen), čímž by periodStart ležel v BUDOUCNOSTI,
+      // dotaz `ts >= periodStart` by nematchnul nic → spentUsd=0 → měsíční strop obejit.
+      const anchoredStart = (year: number, month: number): Date => {
+        const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+        return new Date(Date.UTC(year, month, Math.min(anchorDay, lastDay), 0, 0, 0));
+      };
+      let start = anchoredStart(now.getUTCFullYear(), now.getUTCMonth());
+      // Kotva tohoto měsíce ještě nenastala → aktuální období začalo minulý měsíc.
+      if (start > now) start = anchoredStart(now.getUTCFullYear(), now.getUTCMonth() - 1);
+      return start.toISOString();
+    }
+  }
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01T00:00:00.000Z`;
 }
 
 export async function creditBalance(userId: string): Promise<CreditBalance> {
   const profRows = await getDb()
-    .select({ planKey: profiles.planKey })
+    .select({
+      planKey: profiles.planKey,
+      subStatus: profiles.subscriptionStatus,
+      periodEnd: profiles.subscriptionPeriodEnd,
+    })
     .from(profiles)
     .where(eq(profiles.userId, userId))
     .limit(1);
-  const planKey = profRows[0]?.planKey ?? "free";
+  // Enforcement bere EFEKTIVNÍ plán: past_due/unpaid/canceled → degradace na free,
+  // dokud se platba nevyřeší (jinak plný nárok zdarma po celý Stripe dunning).
+  const planKey = effectivePlanKey(profRows[0]?.planKey, profRows[0]?.subStatus);
   const plan = getPlan(planKey);
 
   const sql = getSql();
-  const periodStart = currentPeriodStartIso();
+  const periodStart = currentPeriodStartIso(profRows[0]?.periodEnd ?? null);
   const monthlyAllowance = plan.monthlyCreditUsd;
 
   // Spotřeba TOHOTO měsíce (cost_ledger, včetně shadow — počítá se do kvóty).

@@ -4,7 +4,7 @@
 // Durabilita: kurzor posledního reportovaného eventu per chat je uložen v
 // farm_settings pod klíčem `tg_report_cursor:<chatId>` (ISO ts). Po restartu
 // se nespamuje ani neztrácí. Řadíme podle events.ts (id je náhodné uuid).
-import { Bot } from "grammy";
+import { Bot, GrammyError } from "grammy";
 import type { BotContext } from "./types.js";
 import { formatReport } from "./format.js";
 import { getPairedProfiles, getReportEvents, getSetting, setSetting } from "./db-helpers.js";
@@ -19,6 +19,15 @@ const cursorKey = (chatId: string): string => `tg_report_cursor:${chatId}`;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Je chyba Telegramu PERMANENTNÍ (nemá smysl retryovat tentýž event)?
+ * 403 = bot blokován / kicknut, 400 = chat neexistuje / zprávu nelze doručit.
+ * Naopak 429 (rate-limit) a síťové chyby jsou přechodné → event doručíme příště.
+ */
+function isPermanentTelegramError(err: unknown): boolean {
+  return err instanceof GrammyError && (err.error_code === 403 || err.error_code === 400);
 }
 
 /** Spustí polling proaktivních reportů. Vrací interval. */
@@ -48,22 +57,34 @@ export function startReporter(bot: Bot<BotContext>): NodeJS.Timeout {
     if (rows.length === 0) return;
 
     let newCursor = cursor;
+    let brokeEarly = false;
     for (const e of rows) {
-      newCursor = e.ts.toISOString();
+      const ts = e.ts.toISOString();
       const msg = formatReport({
         type: e.type,
         message: e.message,
         data: e.data,
         projectName: e.projectName,
       });
-      if (!msg) continue; // typ neumíme — kurzor stejně posuneme
+      if (!msg) {
+        newCursor = ts; // typ neumíme reportovat → přeskoč (posuň kurzor)
+        continue;
+      }
       try {
         await bot.api.sendMessage(chatId, msg, {
           parse_mode: "HTML",
           link_preview_options: { is_disabled: true },
         });
-      } catch {
-        // Chat nedostupný (blok/smazán) — kurzor posuneme, ať necyklíme donekonečna.
+        newCursor = ts; // KURZOR posuň JEN po skutečném doručení
+      } catch (err) {
+        // Přechodná chyba (429 rate-limit / síť) → NEposouvej kurzor a přeruš; tenhle
+        // event i jeho následníci se doručí příští tick (durabilita: „nic se neztratí").
+        // Permanentní (bot blokován / chat neexistuje) → přeskoč, ať necyklíme donekonečna.
+        if (!isPermanentTelegramError(err)) {
+          brokeEarly = true;
+          break;
+        }
+        newCursor = ts;
       }
       await sleep(THROTTLE_MS);
     }
@@ -71,13 +92,14 @@ export function startReporter(bot: Bot<BotContext>): NodeJS.Timeout {
     if (newCursor !== cursor) {
       // Kurzor je ms-přesný, ale event.ts v Postgresu má mikrosekundy → prosté
       // `ts > cursor(ms)` by poslední event posílalo donekonečna. Posun o +1 ms ho
-      // vyřadí. ALE když byl batch PLNÝ (rows.length === MAX_PER_TICK), možná jsme
-      // uřízli burst uprostřed jedné ms — pak +1 ms NEDĚLÁME (skiplo by nedoručené
-      // eventy téže ms); necháme přesný ts (příště se pár znovu načte = duplikáty,
-      // ale nic se neztratí).
+      // vyřadí. ALE +1 ms je bezpečný JEN když jsme batch DOTÁHLI do konce bez uříznutí:
+      //  - truncated (rows.length === MAX_PER_TICK): mohli jsme uříznout burst uvnitř 1 ms,
+      //  - brokeEarly (přechodná chyba): další event téže ms je nedoručený.
+      // V obou případech +1 ms NEDĚLÁME (jinak by se nedoručený event téže ms ztratil) —
+      // necháme přesný ts (příště se pár znovu načte = duplikát, ale nic se neztratí).
       const baseMs = new Date(newCursor).getTime();
-      const truncated = rows.length >= MAX_PER_TICK;
-      const next = new Date(truncated ? baseMs : baseMs + 1).toISOString();
+      const exact = rows.length >= MAX_PER_TICK || brokeEarly;
+      const next = new Date(exact ? baseMs : baseMs + 1).toISOString();
       cursors.set(chatId, next);
       await setSetting(cursorKey(chatId), next);
     }
@@ -98,6 +120,20 @@ export function startReporter(bot: Bot<BotContext>): NodeJS.Timeout {
     }
   };
 
-  void tick();
-  return setInterval(() => void tick(), POLL_MS);
+  // Re-entrancy guard: reportForUser může jeden tick natáhnout přes POLL_MS (12 zpráv ×
+  // 350 ms × N uživatelů). Bez guardu by další setInterval tick běžel souběžně, četl
+  // tentýž kurzor a poslal tytéž reporty DVAKRÁT. `busy` překryv zahodí.
+  let busy = false;
+  const guardedTick = async (): Promise<void> => {
+    if (busy) return;
+    busy = true;
+    try {
+      await tick();
+    } finally {
+      busy = false;
+    }
+  };
+
+  void guardedTick();
+  return setInterval(() => void guardedTick(), POLL_MS);
 }

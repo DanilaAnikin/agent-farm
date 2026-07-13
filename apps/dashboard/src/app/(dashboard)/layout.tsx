@@ -3,9 +3,12 @@ import { requireUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { startOfUtcDayIso } from "@/lib/time";
 import { Sidebar } from "@/components/shell/Sidebar";
+import { MobileNav } from "@/components/shell/MobileNav";
 import { StatusBar } from "@/components/shell/StatusBar";
 import { UserMenu } from "@/components/shell/UserMenu";
 import { ProjectSwitcher } from "@/components/shell/ProjectSwitcher";
+import { LogoMark } from "@/components/brand/Logo";
+import { DataBus } from "@/components/ui/Live";
 import type { ProjectRow } from "@/lib/types";
 
 // Celá přihlášená sekce je per-uživatel a čte živá data (Supabase + Postgres).
@@ -36,45 +39,43 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex min-h-screen">
       {/* Postranní panel */}
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-[--color-border] bg-[--color-surface]/50 md:flex">
-        <div className="flex h-14 items-center gap-2 border-b border-[--color-border] px-4">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[--color-accent] text-sm font-bold text-white">
-            ⬢
-          </span>
-          <span className="font-semibold">Perennial</span>
-        </div>
-        <Sidebar isAdmin={isAdmin} />
-        <div className="mt-auto p-3 text-xs text-[--color-faint]">
-          <Link href="/settings" className="hover:text-[--color-muted]">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-[--color-border-subtle] bg-[--color-surface-1]/60 md:flex">
+        <Link href="/projects" className="flex h-14 items-center gap-2.5 border-b border-[--color-border-subtle] px-4">
+          <LogoMark size={26} />
+          <span className="text-[1.05rem] font-semibold tracking-tight text-[--color-fg]">Perennial</span>
+        </Link>
+        <Sidebar isAdmin={isAdmin} ariaLabel="Hlavní navigace" />
+        <div className="mt-auto p-3">
+          <Link href="/settings" className="t-micro hover:text-[--color-muted]">
             v0.1 — mission control
           </Link>
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Horní pruh se stavem */}
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-[--color-border] bg-[--color-bg]/90 px-4 backdrop-blur">
-          <div className="flex items-center gap-3">
-            <ProjectSwitcher projects={projectList} />
-            <StatusBar
-              userId={user.id}
-              initialSpend={todaySpend}
-              userCap={userCap}
-              farmCap={farmCap}
-              initialGlobalPause={globalPause}
-            />
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {/* Horní pruh se stavem + tep celé farmy (data-bus seam) */}
+        <header className="sticky top-0 z-30 border-b border-[--color-border-subtle] bg-[--color-bg]/85 backdrop-blur">
+          <div className="flex h-14 items-center justify-between gap-3 px-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <MobileNav isAdmin={isAdmin} />
+              <ProjectSwitcher projects={projectList} />
+              <StatusBar
+                userId={user.id}
+                initialSpend={todaySpend}
+                userCap={userCap}
+                farmCap={farmCap}
+                initialGlobalPause={globalPause}
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <UserMenu email={user.email} role={user.profile?.role ?? "member"} />
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <UserMenu email={user.email} role={user.profile?.role ?? "member"} />
-          </div>
+          <DataBus />
         </header>
 
-        {/* Mobilní navigace */}
-        <div className="border-b border-[--color-border] px-2 py-1 md:hidden">
-          <Sidebar isAdmin={isAdmin} />
-        </div>
-
-        <main className="min-w-0 flex-1 p-4 sm:p-6">{children}</main>
+        {/* ambientní podklad velína — jemná záře shora, ať to není ploché prázdno */}
+        <main className="app-ambient min-w-0 flex-1 p-4 sm:p-6">{children}</main>
       </div>
     </div>
   );

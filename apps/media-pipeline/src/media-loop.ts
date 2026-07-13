@@ -17,19 +17,24 @@ import {
   readOne,
   type QueueMessage,
 } from "@farm/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { failJobAsset, handleMediaJob } from "./jobs.js";
 import type { MediaJob } from "./types.js";
 
 const POLL_IDLE_MS = 2000;
 const MAX_DELIVERIES = 5;
 
-/** Nastaví projekt do budget_hold (jen pokud běží). */
+/**
+ * Nastaví projekt do budget_hold — JEN z 'active' (status guard). Bez guardu se u už
+ * drženého projektu re-stampoval updated_at každý tick; kvůli $onUpdate (heldSince =
+ * updated_at) by se okno auto-resume posouvalo donekonečna a projekt by se nikdy
+ * neobnovil (porušení invariantu „farma se nikdy trvale nezastaví").
+ */
 async function setProjectBudgetHold(projectId: string): Promise<void> {
   await getDb()
     .update(projects)
-    .set({ status: "budget_hold", updatedAt: new Date() })
-    .where(eq(projects.id, projectId));
+    .set({ status: "budget_hold" })
+    .where(and(eq(projects.id, projectId), eq(projects.status, "active")));
 }
 
 async function logError(projectId: string, message: string, data?: Record<string, unknown>): Promise<void> {

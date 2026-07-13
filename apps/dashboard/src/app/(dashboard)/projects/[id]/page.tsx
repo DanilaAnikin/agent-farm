@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Sparkles } from "lucide-react";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { startOfUtcDayIso } from "@/lib/time";
@@ -157,7 +158,7 @@ export default async function ProjectMissionControl({
             <CardBody>
               {activeWishes.length === 0 ? (
                 <EmptyState
-                  icon="✦"
+                  icon={<Sparkles className="size-5" />}
                   title="Žádná aktivní přání"
                   description="Zadej přání — manager ho rozpadne na úkoly a agenti se pustí do práce."
                   action={

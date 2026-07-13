@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { Lightbulb } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -73,7 +74,7 @@ export async function SuggestionsPanel({
       <CardBody>
         {rows.length === 0 ? (
           <EmptyState
-            icon="💡"
+            icon={<Lightbulb className="size-5" />}
             title="Zatím žádné návrhy"
             description="Farma zatím nemá návrhy — jakmile projekt pochopí, začne navrhovat co dál."
           />

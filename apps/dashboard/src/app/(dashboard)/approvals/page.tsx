@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { CheckCircle2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card, CardBody } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/Badge";
@@ -77,7 +78,7 @@ export default async function ApprovalsPage() {
       />
 
       {approvals.length === 0 ? (
-        <EmptyState icon="✓" title="Nic nečeká" description="Žádná schválení k rozhodnutí. Farma běží dál." />
+        <EmptyState icon={<CheckCircle2 className="size-5" />} title="Nic nečeká" description="Žádná schválení k rozhodnutí. Farma běží dál." />
       ) : (
         <div className="space-y-4">
           {approvals.map((a) => (

@@ -1,4 +1,5 @@
 import { AGENT_STATUS_META } from "@/lib/constants";
+import { Bot } from "lucide-react";
 import { formatRelative } from "@/lib/format";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/Badge";
@@ -46,7 +47,7 @@ export function LiveAgents({
   if (agents.length === 0) {
     return (
       <EmptyState
-        icon="◇"
+        icon={<Bot className="size-5" />}
         title="Nikdo právě nepracuje"
         description={emptyHint ?? "Jakmile dostane farma přání, agenti naskočí a uvidíš je tady živě."}
       />

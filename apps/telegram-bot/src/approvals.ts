@@ -93,8 +93,21 @@ export function startApprovalsPoller(bot: Bot<BotContext>): NodeJS.Timeout {
       const now = Date.now();
       for (const r of rows) {
         if (notified.has(r.id)) continue;
-        if (r.expiresAt && r.expiresAt.getTime() < now) continue;
         if (!r.chatId) continue;
+        if (r.expiresAt && r.expiresAt.getTime() < now) {
+          // Expirované, ale stále 'pending' → stampni durabilní marker, ať vypadne
+          // z dotazu. Bez toho se re-selektovalo (a přeskakovalo) každých 8 s navždy.
+          const merged = {
+            ...((r.payload ?? {}) as Record<string, unknown>),
+            telegram_notified_at: new Date().toISOString(),
+          };
+          await getDb()
+            .update(approvals)
+            .set({ payload: merged })
+            .where(eq(approvals.id, r.id))
+            .catch(() => undefined);
+          continue;
+        }
         const kb = new InlineKeyboard()
           .text("✅ Schválit", `appr:approve:${r.id}`)
           .text("❌ Zamítnout", `appr:reject:${r.id}`);
@@ -114,8 +127,20 @@ export function startApprovalsPoller(bot: Bot<BotContext>): NodeJS.Timeout {
       // DB výpadek — tichý retry v dalším ticku.
     }
   };
-  void tick();
-  return setInterval(() => void tick(), POLL_MS);
+  // Re-entrancy guard: pomalý tick (mnoho approvalů × sendMessage) nesmí běžet souběžně
+  // s dalším a posílat duplicitní notifikace.
+  let busy = false;
+  const guardedTick = async (): Promise<void> => {
+    if (busy) return;
+    busy = true;
+    try {
+      await tick();
+    } finally {
+      busy = false;
+    }
+  };
+  void guardedTick();
+  return setInterval(() => void guardedTick(), POLL_MS);
 }
 
 /** Registruje callback handler pro rozhodnutí o approvalu. */

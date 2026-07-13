@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { SupabaseProvider } from "@/lib/supabase/provider";
 import { supabaseAnonKeyOptional, supabaseUrlOptional } from "@/lib/env";
+import { display, sans, mono } from "./fonts";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -19,7 +20,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0a0c10",
+  themeColor: "#07090d",
   width: "device-width",
   initialScale: 1,
 };
@@ -31,7 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const anonKey = supabaseAnonKeyOptional();
 
   return (
-    <html lang="cs">
+    <html lang="cs" className={`${display.variable} ${sans.variable} ${mono.variable}`}>
       <body className="min-h-screen bg-[--color-bg] text-[--color-fg] antialiased">
         <SupabaseProvider url={url} anonKey={anonKey}>
           {children}

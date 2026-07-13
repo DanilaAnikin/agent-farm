@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { FlaskConical } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatDate, formatRelative, formatUsd } from "@/lib/format";
@@ -77,7 +78,7 @@ export async function QaReport({ wishId }: { wishId: string }) {
   if (runs.length === 0) {
     return (
       <EmptyState
-        icon="🧪"
+        icon={<FlaskConical className="size-5" />}
         title="Zatím žádné QA běhy"
         description="Jakmile agenti dokončí práci, Tester přání otestuje end-to-end — proklik, screenshoty a ověření každého akceptačního kritéria."
       />

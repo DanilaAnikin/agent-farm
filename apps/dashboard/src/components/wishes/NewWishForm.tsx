@@ -138,7 +138,7 @@ export function NewWishForm({
               </Field>
 
               {wishType === "code" ? (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field label="Repo URL" htmlFor="repo_url" hint="volitelné">
                     <Input id="repo_url" name="repo_url" placeholder="https://github.com/…" />
                   </Field>
@@ -148,7 +148,7 @@ export function NewWishForm({
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <Field label="Téma" htmlFor="topic">
                       <Input id="topic" name="topic" placeholder="AI nástroje pro vývojáře" />
                     </Field>
@@ -156,7 +156,7 @@ export function NewWishForm({
                       <Input id="count" name="count" type="number" min={1} defaultValue={5} />
                     </Field>
                   </div>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <Field label="Styl" htmlFor="style">
                       <Input id="style" name="style" placeholder="dynamický, čistý" />
                     </Field>
@@ -174,7 +174,7 @@ export function NewWishForm({
                 <Input id="budget_usd" name="budget_usd" type="number" step="1" defaultValue={20} className="max-w-40" />
               </Field>
 
-              {error ? <p className="text-xs text-[--color-danger]">{error}</p> : null}
+              {error ? <p role="alert" className="text-xs text-[--color-danger]">{error}</p> : null}
 
               <div className="flex justify-end">
                 <Button type="submit" loading={pending}>

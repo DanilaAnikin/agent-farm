@@ -248,12 +248,27 @@ export async function refreshLongLivedToken(userId: string): Promise<InstagramCr
 export async function getFreshInstagramCredentials(userId: string): Promise<InstagramCredentials> {
   const { creds, connection } = await getCredentials<InstagramCredentials>(userId, "instagram");
   const meta = connection.meta as { tokenExpiresAt?: string };
+  const now = Date.now();
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+
   if (meta.tokenExpiresAt) {
     const expires = new Date(meta.tokenExpiresAt).getTime();
-    const sevenDays = 7 * 24 * 60 * 60 * 1000;
-    if (Number.isFinite(expires) && expires - Date.now() < sevenDays) {
+    if (Number.isFinite(expires) && expires - now < sevenDays) {
       return refreshLongLivedToken(userId);
     }
+    return creds;
+  }
+
+  // Fallback bez zaznamenaného expiry: connection se běžně ukládá s meta={} (OAuth
+  // callback ani upsertConnection expiry nepíší), takže expiry větev výše byla mrtvá
+  // a token po 60 dnech tiše vyexpiroval → publikace se rozbila bez varování. IG
+  // long-lived token žije 60 dní; odhadni stáří dle connection.updatedAt a obnov
+  // proaktivně po ~50 dnech. refreshLongLivedToken pak meta.tokenExpiresAt zapíše →
+  // od té chvíle běží přesná expiry větev výše.
+  const fiftyDays = 50 * 24 * 60 * 60 * 1000;
+  const updatedAt = connection.updatedAt ? new Date(connection.updatedAt).getTime() : NaN;
+  if (Number.isFinite(updatedAt) && now - updatedAt > fiftyDays) {
+    return refreshLongLivedToken(userId);
   }
   return creds;
 }

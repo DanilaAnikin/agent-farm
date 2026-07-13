@@ -16,21 +16,26 @@ export function Badge({
   children,
   className,
   dot,
+  pulse,
 }: {
   tone?: Tone;
   children: ReactNode;
   className?: string;
   dot?: boolean;
+  /** Dýchající tečka — JEN pro živé/běžící stavy (dává „něčemu žije" význam). */
+  pulse?: boolean;
 }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium tracking-wide",
         toneClasses[tone],
         className,
       )}
     >
-      {dot ? <span className="h-1.5 w-1.5 rounded-full bg-current" /> : null}
+      {dot || pulse ? (
+        <span className={cn("h-1.5 w-1.5 rounded-full bg-current", pulse && "status-pulse")} />
+      ) : null}
       {children}
     </span>
   );
@@ -40,14 +45,16 @@ export function Badge({
 export function StatusBadge({
   meta,
   dot,
+  pulse,
   className,
 }: {
   meta: { label: string; tone: Tone };
   dot?: boolean;
+  pulse?: boolean;
   className?: string;
 }) {
   return (
-    <Badge tone={meta.tone} dot={dot} className={className}>
+    <Badge tone={meta.tone} dot={dot} pulse={pulse} className={className}>
       {meta.label}
     </Badge>
   );

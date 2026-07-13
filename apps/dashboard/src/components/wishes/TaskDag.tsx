@@ -2,10 +2,9 @@ import { StatusBadge } from "@/components/ui/Badge";
 import { TASK_KIND_META, TASK_STATUS_META } from "@/lib/constants";
 import type { TaskRow } from "@/lib/types";
 
-// Task obohacený o závislosti (sloupec depends_on je jsonb pole UUID nadřazených
-// úkolů, které musí být 'done', než se tento smí spustit). TaskRow ho zatím
-// netypuje, proto přidáváme volitelně.
-export type DagTask = TaskRow & { depends_on?: string[] | null };
+// Task s DAG závislostmi. depends_on (jsonb pole UUID nadřazených úkolů, které musí
+// být 'done') už TaskRow typuje; alias necháváme kvůli čitelnosti volajících.
+export type DagTask = TaskRow;
 
 interface Node {
   task: DagTask;

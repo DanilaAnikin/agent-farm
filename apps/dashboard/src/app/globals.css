@@ -1,50 +1,106 @@
 @import "tailwindcss";
 
 /* =============================================================================
-   AgentFarm dashboard — tmavý "mission control" motiv.
-   Tailwind v4: barevné tokeny a fonty přes @theme.
+   PERENNIAL — "Living Mission Control" design system.
+   Tmavý mission-control motiv: vrstvené povrchy + elevace horní světelnou hranou,
+   sémantické rozdělení hue (zelená=růst, teplá=rozpočet, chladná=info), tabulární
+   mono telemetrie, jeden signature „lifeline / data-bus" living prvek.
+   Tailwind v4: tokeny přes @theme. Názvy stávajících tokenů zachovány (zpětná
+   kompatibilita se všemi `text-[--color-x]` třídami), hodnoty povýšeny.
    ============================================================================= */
 @theme {
-  --color-bg: #0a0c10;
-  --color-surface: #12151c;
-  --color-surface-2: #1a1f29;
-  --color-border: #232a36;
-  --color-border-strong: #303a4a;
+  /* ── BASE / ELEVACE (vrstvy místo jednoho surface) ─────────────────────── */
+  --color-bg: #07090d; /* stránka */
+  --color-bg-sunken: #05070a; /* wells, inputy, inset tracky, code */
+  --color-surface-1: #0d1017; /* klidová karta */
+  --color-surface: #0d1017; /* alias surface-1 (zpětná kompat) */
+  --color-surface-2: #12161f; /* hover / raised karta */
+  --color-surface-3: #171c27; /* popover, modal, tooltip, dropdown */
 
-  --color-fg: #e6e9ef;
-  --color-muted: #8b95a7;
-  --color-faint: #5a6272;
+  /* ── HRANY (3 úrovně) ─────────────────────────────────────────────────── */
+  --color-border-subtle: #191f2b; /* dividery uvnitř karet */
+  --color-border: #262d3b; /* default obrys karet/inputů */
+  --color-border-strong: #37414f; /* interaktivní / focus base */
+  --color-highlight-top: #ffffff0f; /* inset top-edge světlo = signatura elevace */
 
-  /* Perennial brand — evergreen (emerald-teal): růst, nekonečná smyčka. */
+  /* ── TEXT (nad WCAG na surface-1) ─────────────────────────────────────── */
+  --color-fg: #f1f4f8; /* nadpisy, hero čísla */
+  --color-muted: #aeb6c4; /* labely, tělo */
+  --color-tertiary: #7e8798; /* KRITICKÁ meta: časy, /cap */
+  --color-faint: #5c6472; /* JEN dekorace, nikdy číslo/čas */
+
+  /* ── BRAND (evergreen emerald-teal — identita + primary + „žije") ──────── */
   --color-brand: #2ee6a6;
-  --color-brand-strong: #14c98c;
-  --color-brand-soft: #0e2b24;
-  --color-brand-2: #5ad1ff;
+  --color-brand-strong: #17cf90;
+  --color-brand-dim: #1d7a5c; /* progress fill v klidu */
+  --color-brand-ink: #04241b; /* JEDINÝ fg na brand fillu */
+  --color-brand-soft: #10241f; /* tint plocha (badge bg) */
+  --color-brand-2: #5ad1ff; /* konec gradientu */
+  --color-brand-glow: #2ee6a659;
 
+  /* accent aliasy (zpětná kompat) */
   --color-accent: #2ee6a6;
   --color-accent-fg: #04241b;
 
-  --color-ok: #34d399;
-  --color-ok-bg: #0f2a22;
-  --color-warn: #fbbf24;
-  --color-warn-bg: #2a2410;
-  --color-danger: #f87171;
-  --color-danger-bg: #2a1414;
-  --color-info: #60a5fa;
-  --color-info-bg: #101c2e;
+  /* ── SÉMANTIKA (rozbíjí „všechno zelené") ─────────────────────────────── */
+  --color-ok: #3ecf8e;
+  --color-ok-bg: #10241f;
+  --color-success: #3ecf8e;
+  --color-success-ink: #04241b;
+  --color-info: #38bdf8;
+  --color-info-bg: #0c1f2b;
+  --color-warn: #f5b544;
+  --color-warn-ink: #241a02;
+  --color-warn-bg: #251c08;
+  --color-danger: #fb6f83;
+  --color-danger-ink: #2a0910;
+  --color-danger-bg: #241016;
   --color-neutral: #94a3b8;
-  --color-neutral-bg: #1a1f29;
-  --color-violet: #a78bfa;
-  --color-violet-bg: #1c1730;
+  --color-neutral-bg: #12161f;
+  --color-violet: #a78bfa; /* kreativní výstupy (media/reely/content) */
+  --color-violet-bg: #1a1430;
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  /* ── ROZPOČET = sekvenční TEPLÁ, NIKDY zelená ─────────────────────────── */
+  --color-budget-safe: #4a7a63;
+  --color-budget-caution: #f5b544;
+  --color-budget-over: #fb6f83;
 
-  --radius-card: 0.75rem;
+  /* ── PROGRESS / DATA-VIZ ──────────────────────────────────────────────── */
+  --color-track: #141a24;
+  --color-viz-1: #2ee6a6;
+  --color-viz-2: #38bdf8;
+  --color-viz-3: #a78bfa;
+  --color-viz-4: #f5b544;
+  --color-viz-5: #fb6f83;
+  --color-viz-6: #5eead4;
+
+  /* ── TYPOGRAFIE (self-hostováno přes next/font v fonts.ts) ─────────────── */
+  --font-display: var(--font-display-loaded), "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-sans-loaded), "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-mono-loaded), "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ── RADIUS (přepisuje default škálu → konzistentní napříč appkou) ─────── */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+
+  /* ── MOTION timing ────────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-loop: cubic-bezier(0.45, 0, 0.55, 1);
 }
 
+/* Elevace + focus jako plain custom props (referencovány utility třídami níže). */
 :root {
   color-scheme: dark;
+  --shadow-e1: inset 0 1px 0 0 var(--color-highlight-top), 0 1px 2px 0 #00000066, 0 0 0 1px var(--color-border);
+  --shadow-e2: inset 0 1px 0 0 #ffffff14, 0 6px 16px -4px #00000080, 0 0 0 1px var(--color-border-strong);
+  --shadow-e3: inset 0 1px 0 0 #ffffff1a, 0 20px 48px -12px #000000b3, 0 0 0 1px var(--color-border-strong);
+  --shadow-brand: inset 0 1px 0 0 #ffffff33, 0 8px 28px -6px var(--color-brand-glow);
+  --shadow-focus: 0 0 0 1px var(--color-brand), 0 0 0 4px #2ee6a629;
 }
 
 html,
@@ -53,13 +109,15 @@ body {
   color: var(--color-fg);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
+/* Default border color (zpětná kompat — komponenty používají `border` utilitu). */
 * {
   border-color: var(--color-border);
 }
 
-/* Jemný scrollbar do tmavého motivu. */
+/* Jemný scrollbar. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -72,23 +130,224 @@ body {
   border-radius: 9999px;
   border: 2px solid var(--color-bg);
 }
+::selection {
+  background: var(--color-brand-glow);
+  color: var(--color-fg);
+}
 
-/* Živý "pulse" indikátor pro běžící agenty. */
+/* =============================================================================
+   TYPE SCALE + elevace + utility (mimo @theme).
+   ============================================================================= */
+@layer components {
+  /* ── Type scale ── */
+  .t-hero {
+    font: 600 3rem/1 var(--font-display);
+    letter-spacing: -0.03em;
+  }
+  .t-display {
+    font: 600 2rem/1.05 var(--font-display);
+    letter-spacing: -0.02em;
+  }
+  .t-title {
+    font: 600 1.375rem/1.2 var(--font-display);
+    letter-spacing: -0.015em;
+  }
+  .t-heading {
+    font: 600 1rem/1.3 var(--font-sans);
+    letter-spacing: -0.01em;
+  }
+  .t-eyebrow {
+    font: 600 0.719rem/1.2 var(--font-sans);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--color-tertiary);
+  }
+  .t-body {
+    font: 400 0.875rem/1.5 var(--font-sans);
+  }
+  .t-body-strong {
+    font: 500 0.875rem/1.5 var(--font-sans);
+  }
+  .t-meta {
+    font: 400 0.781rem/1.4 var(--font-sans);
+    color: var(--color-tertiary);
+  }
+  .t-micro {
+    font: 400 0.688rem/1.3 var(--font-sans);
+    letter-spacing: 0.02em;
+    color: var(--color-faint);
+  }
+  .t-metric {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .t-code {
+    font: 400 0.781rem/1.4 var(--font-mono);
+  }
+
+  /* ── Elevace (border + inset top-highlight + jemný stín) ── */
+  .elev-1 {
+    box-shadow: var(--shadow-e1);
+  }
+  .elev-2 {
+    box-shadow: var(--shadow-e2);
+  }
+  .elev-3 {
+    box-shadow: var(--shadow-e3);
+  }
+  .elev-brand {
+    box-shadow: var(--shadow-brand);
+  }
+  .ring-focus:focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-focus);
+  }
+}
+
+/* =============================================================================
+   MOTION — „něco 24/7 žije, ale klidně jako přístroj".
+   ============================================================================= */
+
+/* dýchající halo místo blikání opacity (živý stav) */
+@keyframes pulse-halo {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--color-brand-glow);
+  }
+  50% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+.status-pulse {
+  animation: pulse-halo 2.4s var(--ease-loop) infinite;
+}
+
+/* zpětná kompat — stávající komponenty používají animate-farm-pulse */
 @keyframes farm-pulse {
   0%,
   100% {
     opacity: 1;
   }
   50% {
-    opacity: 0.35;
+    opacity: 0.4;
   }
 }
 .animate-farm-pulse {
-  animation: farm-pulse 1.4s ease-in-out infinite;
+  animation: farm-pulse 1.8s var(--ease-loop) infinite;
+}
+
+/* skeleton shimmer */
+@keyframes shimmer {
+  0% {
+    background-position: -150% 0;
+  }
+  100% {
+    background-position: 250% 0;
+  }
+}
+.shimmer {
+  /* background-IMAGE (ne shorthand) — ať prosvítá base background-color (bg-* utilita),
+     jinak by shorthand `background:` barvu smazal a skeleton bar by byl skoro průhledný. */
+  background-image: linear-gradient(90deg, transparent, #ffffff0d, transparent);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* řeka aktivity — vstup nového eventu */
+@keyframes event-in {
+  from {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.event-enter {
+  animation: event-in 260ms var(--ease-out) both;
+}
+
+/* count-up flash (nová hodnota krátce blikne brand) */
+@keyframes value-flash {
+  from {
+    color: var(--color-brand);
+  }
+  to {
+    color: inherit;
+  }
+}
+.value-flash {
+  animation: value-flash 600ms var(--ease-out);
 }
 
 /* =============================================================================
-   Perennial brand utility — používá landing i billing UI.
+   SIGNATURE — „THE LIFELINE / DATA-BUS" (living telemetry).
+   Putující světlo po žíle: 1px hrana → struktura. „Něco tu 24/7 žije a roste."
+   ============================================================================= */
+
+/* horizontální — pod topbarem shellu, přes celou šířku */
+.data-bus {
+  position: relative;
+  height: 1px;
+  background: var(--color-border-subtle);
+  overflow: hidden;
+}
+.data-bus::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 22%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-brand) 45%,
+    #baf7e3 50%,
+    var(--color-brand) 55%,
+    transparent
+  );
+  filter: drop-shadow(0 0 6px var(--color-brand-glow));
+  animation: bus-run 6s var(--ease-loop) infinite;
+}
+@keyframes bus-run {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(560%);
+  }
+}
+
+/* vertikální — levá hrana běžícího prvku (karta/řádek/stream) */
+.lifeline {
+  position: relative;
+}
+.lifeline::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, transparent, var(--color-brand) 50%, transparent);
+  background-size: 100% 220%;
+  animation: bus-run-y 3s var(--ease-loop) infinite;
+}
+@keyframes bus-run-y {
+  from {
+    background-position: 0 -120%;
+  }
+  to {
+    background-position: 0 120%;
+  }
+}
+
+/* =============================================================================
+   Perennial brand utility — landing + billing (zachováno, hodnoty aktualizovány).
    ============================================================================= */
 .brand-gradient-text {
   background: linear-gradient(100deg, var(--color-brand) 0%, var(--color-brand-2) 100%);
@@ -101,9 +360,8 @@ body {
   background: linear-gradient(120deg, var(--color-brand) 0%, var(--color-brand-2) 100%);
 }
 .brand-glow {
-  box-shadow: 0 0 0 1px rgba(46, 230, 166, 0.25), 0 20px 60px -20px rgba(46, 230, 166, 0.35);
+  box-shadow: 0 0 0 1px rgba(46, 230, 166, 0.22), 0 20px 60px -20px rgba(46, 230, 166, 0.32);
 }
-/* Jemná mřížka / radiální záře do hero sekcí landingu. */
 .brand-hero-bg {
   background:
     radial-gradient(60% 50% at 50% 0%, rgba(46, 230, 166, 0.12) 0%, transparent 70%),
@@ -111,8 +369,26 @@ body {
 }
 .brand-grid-bg {
   background-image:
-    linear-gradient(var(--color-border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--color-border) 1px, transparent 1px);
+    linear-gradient(var(--color-border-subtle) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-border-subtle) 1px, transparent 1px);
   background-size: 44px 44px;
   mask-image: radial-gradient(circle at 50% 30%, black 0%, transparent 75%);
+}
+/* ambientní podklad velína — jemná záře shora (statická) */
+.app-ambient {
+  background:
+    radial-gradient(70% 40% at 50% -5%, rgba(46, 230, 166, 0.05) 0%, transparent 60%),
+    radial-gradient(50% 30% at 90% 0%, rgba(90, 209, 255, 0.035) 0%, transparent 60%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-pulse,
+  .animate-farm-pulse,
+  .shimmer,
+  .event-enter,
+  .value-flash,
+  .data-bus::after,
+  .lifeline::before {
+    animation: none !important;
+  }
 }

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Field, Input } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
+import { FormMessage } from "@/components/ui/FormMessage";
 import type { ConnectionKind } from "@/lib/types";
 
 export function ConnectionsForm({
@@ -19,41 +20,46 @@ export function ConnectionsForm({
   telegramCode: string | null;
 }) {
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  // Oddělené pending stavy per karta — dřív jeden sdílený `pending` točil spinner na
+  // VŠECH třech kartách zároveň (jako by se ukládalo vše najednou).
+  const [ghPending, startGh] = useTransition();
+  const [tgPending, startTg] = useTransition();
+  const [igPending, startIg] = useTransition();
   const [github, setGithub] = useState("");
-  const [githubMsg, setGithubMsg] = useState<string | null>(null);
+  const [githubMsg, setGithubMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [code, setCode] = useState<string | null>(telegramCode);
+  const [tgMsg, setTgMsg] = useState<string | null>(null);
   const [igUserId, setIgUserId] = useState("");
   const [igToken, setIgToken] = useState("");
-  const [igMsg, setIgMsg] = useState<string | null>(null);
+  const [igMsg, setIgMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   const has = (k: ConnectionKind) => connectedKinds.includes(k);
 
   function saveGithub() {
     setGithubMsg(null);
-    startTransition(async () => {
+    startGh(async () => {
       const res = await upsertConnection({ kind: "github", credentials: github });
       if (res.ok) {
-        setGithubMsg("Uloženo. Orchestrátor token při prvním použití zašifruje.");
+        setGithubMsg({ tone: "success", text: "Uloženo. Orchestrátor token při prvním použití zašifruje." });
         setGithub("");
         router.refresh();
       } else {
-        setGithubMsg(res.message ?? "Uložení selhalo.");
+        setGithubMsg({ tone: "error", text: res.message ?? "Uložení selhalo." });
       }
     });
   }
 
   function saveInstagram() {
     setIgMsg(null);
-    startTransition(async () => {
+    startIg(async () => {
       const credentials = JSON.stringify({ igUserId: igUserId.trim(), accessToken: igToken.trim() });
       const res = await upsertConnection({ kind: "instagram", credentials });
       if (res.ok) {
-        setIgMsg("Uloženo. Publisher token při prvním použití zašifruje a obnovuje ho automaticky.");
+        setIgMsg({ tone: "success", text: "Uloženo. Publisher token zašifruje a obnovuje ho automaticky." });
         setIgToken("");
         router.refresh();
       } else {
-        setIgMsg(res.message ?? "Uložení selhalo.");
+        setIgMsg({ tone: "error", text: res.message ?? "Uložení selhalo." });
       }
     });
   }
@@ -77,8 +83,8 @@ export function ConnectionsForm({
               placeholder="github_pat_…"
             />
           </Field>
-          {githubMsg ? <p className="text-xs text-[--color-muted]">{githubMsg}</p> : null}
-          <Button size="sm" loading={pending} disabled={!github} onClick={saveGithub}>
+          {githubMsg ? <FormMessage tone={githubMsg.tone}>{githubMsg.text}</FormMessage> : null}
+          <Button size="sm" loading={ghPending} disabled={!github} onClick={saveGithub}>
             Uložit PAT
           </Button>
         </CardBody>
@@ -100,17 +106,24 @@ export function ConnectionsForm({
               <span className="text-xs text-[--color-muted]">Pošli botovi: /start {code}</span>
             </div>
           ) : null}
+          {tgMsg ? <FormMessage tone="error">{tgMsg}</FormMessage> : null}
           <Button
             size="sm"
             variant="secondary"
-            loading={pending}
-            onClick={() =>
-              startTransition(async () => {
+            loading={tgPending}
+            onClick={() => {
+              setTgMsg(null);
+              startTg(async () => {
                 const res = await generateTelegramCode();
-                if (res.ok && res.code) setCode(res.code);
-                router.refresh();
-              })
-            }
+                if (res.ok && res.code) {
+                  setCode(res.code);
+                  router.refresh();
+                } else {
+                  // Dřív se chyba ignorovala → tlačítko vypadalo, že nic nedělá.
+                  setTgMsg(res.message ?? "Vygenerování kódu se nepodařilo.");
+                }
+              });
+            }}
           >
             {code ? "Vygenerovat nový kód" : "Vygenerovat párovací kód"}
           </Button>
@@ -146,10 +159,10 @@ export function ConnectionsForm({
             Token i účet ID získáš ve své Meta dev app (IG Graph API). Publisher token zašifruje a sám
             obnovuje (platnost 60 dní). Publikace vždy až po tvém schválení.
           </p>
-          {igMsg ? <p className="text-xs text-[--color-muted]">{igMsg}</p> : null}
+          {igMsg ? <FormMessage tone={igMsg.tone}>{igMsg.text}</FormMessage> : null}
           <Button
             size="sm"
-            loading={pending}
+            loading={igPending}
             disabled={!igUserId.trim() || !igToken.trim()}
             onClick={saveInstagram}
           >

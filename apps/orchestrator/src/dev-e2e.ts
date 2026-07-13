@@ -183,7 +183,11 @@ async function seed(): Promise<{ userId: string; projectId: string; wishId: stri
   const sql = getSql();
   const u = await sql<{ id: string }[]>`INSERT INTO auth.users (email) VALUES ('e2e@farm.local') RETURNING id`;
   const userId = u[0]!.id;
-  await db.insert(profiles).values({ userId, role: "admin", displayName: "E2E", planKey: "pro" });
+  // subscriptionStatus MUSÍ být 'active' — jinak effectivePlanKey('pro','inactive')
+  // degraduje na free a celý E2E harness běží pod free stropy ($2/den, $5 kredit).
+  await db
+    .insert(profiles)
+    .values({ userId, role: "admin", displayName: "E2E", planKey: "pro", subscriptionStatus: "active" });
   const p = await db.insert(projects).values({ userId, name: "E2E todo", kind: "code", repoMode: "none", trustMode: true, autonomy: { proactive: false } }).returning({ id: projects.id });
   const projectId = p[0]!.id;
   const w = await db.insert(wishes).values({ projectId, title: "Postav TypeScript/Node CLI todo appku s testy", description: "add/list/done, automatické testy.", status: "new" }).returning({ id: wishes.id });

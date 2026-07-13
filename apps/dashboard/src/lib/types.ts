@@ -80,6 +80,15 @@ export interface ProfileRow {
   daily_media_cap_usd: number;
   telegram_chat_id: string | null;
   telegram_pairing_code: string | null;
+  telegram_pairing_expires_at: string | null;
+  // Billing (migrace 0002 + 0009) — auth.ts dělá select('*') do ProfileRow, takže tyhle
+  // sloupce v runtime existují; bez nich se musely re-dotazovat s ad-hoc casty.
+  stripe_customer_id: string | null;
+  plan_key: string;
+  subscription_status: string;
+  subscription_id: string | null;
+  subscription_period_end: string | null;
+  caps_override: Record<string, number> | null;
   created_at: string;
 }
 
@@ -174,6 +183,9 @@ export interface TaskRow {
   attempts_count: number;
   max_attempts: number;
   dedup_key: string;
+  // DAG závislosti + best-of-N (migrace 0004/0006) — dřív se depends_on bolt-on castoval.
+  depends_on: string[];
+  best_of_n: number;
   created_at: string;
   updated_at: string;
 }
@@ -193,6 +205,10 @@ export interface AttemptRow {
   cost_usd: number;
   diff_stat: Record<string, unknown> | null;
   output_summary: string | null;
+  // Best-of-N (migrace 0006): index kandidáta, skóre od judge, vítěz.
+  candidate_idx: number;
+  score: number | null;
+  is_winner: boolean;
   started_at: string;
   finished_at: string | null;
   heartbeat_at: string;

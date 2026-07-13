@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { Brain } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
@@ -105,7 +106,7 @@ export async function ProjectBrain({ projectId }: { projectId: string }) {
       <CardBody>
         {sections.length === 0 ? (
           <EmptyState
-            icon="✦"
+            icon={<Brain className="size-5" />}
             title="Farma se s projektem teprve seznamuje."
             description="Jakmile architekt navrhne řešení a agenti začnou pracovat, tady poroste paměť projektu — a bude chytřejší každým úkolem."
           />

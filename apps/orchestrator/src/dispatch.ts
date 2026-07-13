@@ -162,6 +162,35 @@ export async function runDispatchOnce(): Promise<void> {
     return;
   }
 
+  // --- Souběžnost workerů PER PROJEKT (projects.autonomy.maxParallelWorkers) ---
+  // Volitelný per-projekt strop nad rámec plánového per-user capu: kolik workerů smí
+  // běžet SOUČASNĚ na tomhle projektu (swarm paralelizace). undefined/0 = bez extra limitu.
+  const projMaxWorkers = project.autonomy?.maxParallelWorkers;
+  if (typeof projMaxWorkers === "number" && projMaxWorkers > 0) {
+    const runningForProject = await getDb()
+      .select({ n: sql<number>`count(*)::int` })
+      .from(attempts)
+      .innerJoin(tasks, eq(attempts.taskId, tasks.id))
+      .where(
+        and(
+          eq(tasks.projectId, project.id),
+          eq(attempts.status, "running"),
+          eq(tasks.status, "running"),
+          isNull(attempts.score),
+        ),
+      );
+    if (Number(runningForProject[0]?.n ?? 0) >= projMaxWorkers) {
+      await logEvent({
+        projectId: project.id,
+        taskId,
+        type: "worker_cap_reached",
+        message: `Dosažen per-projekt strop souběžných workerů (${projMaxWorkers}) — odkládám dispatch.`,
+        data: { projectMaxWorkers: projMaxWorkers },
+      });
+      return;
+    }
+  }
+
   // --- Idempotence: existuje už attempt pro (task_id, msg_id)? ---
   const existing = await getDb()
     .select({ id: attempts.id })
@@ -261,6 +290,11 @@ async function dispatchBestOfN(
   // 'hard' navrch by kandidáty srazilo na jeden model (collapse) a soupeření zmizí.
   const difficulty = estimateTaskDifficulty(`${task.title}\n${task.description}\n${task.doneCondition}`);
 
+  // Pokrytí dlouhého PRVNÍHO klonu: bumpni updated_at těsně před ensureRepo, aby
+  // reconcileStrandedRunning task (u kterého ještě neběží žádný attempt, protože klon
+  // stále probíhá) nepovažoval za stranded a nevrátil ho do 'queued'. Bez toho by se
+  // celý klon/setup zahodil a task by bouncoval. (Claim už bumpl přes $onUpdate; belt.)
+  await getDb().update(tasks).set({ updatedAt: new Date() }).where(eq(tasks.id, task.id));
   await ensureRepo(project);
   const candidates: BestOfNCandidate[] = [];
   await logEvent({

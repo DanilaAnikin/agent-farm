@@ -1,6 +1,9 @@
 // Kanonické doménové enumy. Ukládáme je jako text (+ $type v schema.ts) —
 // greenfield projekt, chceme flexibilitu bez bolesti s ALTER TYPE.
-// Konstanty slouží k CHECK constraintům i k validaci v `packages/core`.
+// POZOR: enum integritu vynucuje POUZE aplikační vrstva (validátory v `packages/core`
+// a Zod schémata v `packages/llm`) — v DB NEJSOU žádné CHECK constraints, sloupce jsou
+// prostý text. Přímý zápis mimo aplikaci (raw SQL, service-role skript) může vložit
+// hodnotu mimo množinu a DB ji nezamítne. Nespoléhej na DB-level guard.
 
 export const USER_ROLES = ["admin", "member"] as const;
 export type UserRole = (typeof USER_ROLES)[number];

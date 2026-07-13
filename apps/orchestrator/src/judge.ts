@@ -135,7 +135,16 @@ export async function runJudgeOnce(): Promise<void> {
 async function judgeAttempt(message: JudgeMessage): Promise<void> {
   const taskRows = await getDb().select().from(tasks).where(eq(tasks.id, message.taskId)).limit(1);
   const task = taskRows[0];
-  if (!task || task.status !== "judging") return; // zastaralé (už zpracováno / superseded)
+  if (!task || task.status !== "judging") {
+    // Zastaralé (task už zpracován / superseded / reaped reconciliací). Kandidát ale
+    // zůstal 'running' se score SET → žádná recon větev ho neuklidí (task není 'running'
+    // ani 'judging') a visel by jako fantom navždy. Finalizuj ho na terminální 'aborted'.
+    await getDb()
+      .update(attempts)
+      .set({ status: "aborted", finishedAt: new Date() })
+      .where(and(eq(attempts.id, message.attemptId), eq(attempts.status, "running")));
+    return;
+  }
   // Idempotence: message.attemptId už má review → byl posouzen (redelivery po vt/
   // crash-před-ack) → přeskoč, ať nemergujeme/nepíšeme dvakrát. (Souběžné dvojí
   // posouzení navíc brání 40min visibility timeout > max wall-clock judge běhu.)
@@ -437,7 +446,13 @@ async function applyDecision(
       break;
     }
     case "budget_hold": {
-      await getDb().update(projects).set({ status: "budget_hold" }).where(eq(projects.id, project.id));
+      // Guard na status='active' (jako dispatch): jinak by se u už drženého projektu
+      // re-stampoval updated_at (přes $onUpdate) a posouval heldSince → auto-resume by
+      // se odkládal donekonečna. Přechod jen z 'active' → hold nastane právě jednou.
+      await getDb()
+        .update(projects)
+        .set({ status: "budget_hold" })
+        .where(and(eq(projects.id, project.id), eq(projects.status, "active")));
       await logEvent({
         projectId: project.id,
         taskId: task.id,

@@ -57,7 +57,11 @@ export function KillSwitch({
         <div className={cn("text-sm font-medium", paused ? "text-[--color-warn]" : "text-[--color-ok]")}>
           {paused ? labelPaused : labelActive}
         </div>
-        {error ? <div className="mt-1 text-xs text-[--color-danger]">{error}</div> : null}
+        {error ? (
+          <div role="alert" className="mt-1 text-xs text-[--color-danger]">
+            {error}
+          </div>
+        ) : null}
       </div>
     </div>
   );

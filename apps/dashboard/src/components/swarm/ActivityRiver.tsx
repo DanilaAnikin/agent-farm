@@ -1,6 +1,7 @@
 // Řeka aktivity — živý proud posledních událostí napříč všemi projekty.
 // Nejnovější nahoře, jemné, čitelné na jeden pohled.
 import { cn } from "@/lib/cn";
+import { Activity } from "lucide-react";
 import { formatRelative } from "@/lib/format";
 import { EmptyState } from "@/components/ui/EmptyState";
 import type { EventLevel } from "@/lib/types";
@@ -24,7 +25,7 @@ export function ActivityRiver({ events }: { events: RiverEvent[] }) {
   if (events.length === 0) {
     return (
       <EmptyState
-        icon="≈"
+        icon={<Activity className="size-5" />}
         title="Zatím ticho"
         description="Jakmile roj něco udělá, objeví se to tady živě."
       />

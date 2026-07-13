@@ -19,7 +19,7 @@ import type { SimpleGit } from "simple-git";
 import { Octokit } from "@octokit/rest";
 import { getDb, connections, projects } from "@farm/db";
 import { and, eq } from "drizzle-orm";
-import { loadConfig, decryptCredentials } from "@farm/core";
+import { loadConfig, decryptCredentials, assertSafeRepoUrl } from "@farm/core";
 
 /** Jednoduchý in-process mutex klíčovaný per projectId (merge lock per repo). */
 class KeyedMutex {
@@ -81,8 +81,12 @@ function workspacePath(projectId: string): string {
 }
 
 function authRemoteUrl(repoUrl: string, token: string): string {
-  // Vloží token do https URL pro push/fetch (nikdy se nedostane k workerovi).
-  return repoUrl.replace(/^https:\/\//, `https://x-access-token:${token}@`);
+  // BEZPEČNOSTNÍ chokepoint: KAŽDÁ cesta, která vkládá token do remote URL (clone,
+  // pushMain, openPr), prochází tudy — proto se tu (znovu) validuje host/scheme.
+  // Bez toho by pushMain/openPr načetly project.repo_url čerstvě z DB a token vložily
+  // bez kontroly (exfiltrace na cizí host). assertSafeRepoUrl vrací normalizovanou URL.
+  const safe = assertSafeRepoUrl(repoUrl);
+  return safe.replace(/^https:\/\//, `https://x-access-token:${token}@`);
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -108,6 +112,13 @@ export async function ensureRepo(project: ProjectRow): Promise<{ workspacePath: 
   const creds = await githubCredsForUser(project.userId);
 
   let repoUrl = project.repoUrl;
+
+  // BEZPEČNOST (defense-in-depth): existující repo klonujeme s vloženým GitHub tokenem.
+  // Validuj host/scheme i tady, ne jen v dashboardu — řádek mohl vzniknout před touto
+  // kontrolou nebo přímým zápisem do DB. Uzavírá token exfiltraci / SSRF / arg injection.
+  if (project.repoMode === "existing") {
+    repoUrl = assertSafeRepoUrl(repoUrl);
+  }
 
   if (project.repoMode === "new") {
     if (!creds.token) {

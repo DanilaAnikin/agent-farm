@@ -5,6 +5,7 @@ import { signInWithMagicLink, signInWithPassword } from "@/app/actions/auth";
 import type { AuthResult } from "@/app/actions/types";
 import { Button } from "@/components/ui/Button";
 import { Field, Input } from "@/components/ui/Field";
+import { FormMessage } from "@/components/ui/FormMessage";
 import { Card } from "@/components/ui/Card";
 
 const initial: AuthResult = { ok: false };
@@ -51,9 +52,8 @@ export function LoginForm() {
         ) : null}
 
         {state.message ? (
-          <p className={state.ok ? "text-xs text-[--color-ok]" : "text-xs text-[--color-danger]"}>
-            {state.message}
-          </p>
+          // role/aria-live přes FormMessage: čtečka oznámí výsledek přihlášení hned.
+          <FormMessage tone={state.ok ? "success" : "error"}>{state.message}</FormMessage>
         ) : null}
 
         <Button type="submit" loading={pending} className="w-full">

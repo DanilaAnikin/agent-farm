@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { APPROVAL_TYPE_META } from "@/lib/constants";
@@ -38,7 +39,7 @@ export function AttentionPanel({
   if (total === 0) {
     return (
       <EmptyState
-        icon="✓"
+        icon={<CheckCircle2 className="size-5" />}
         title="Nic nečeká na tebe"
         description="Žádné zaparkované úkoly ani schválení. Farma běží dál sama."
       />

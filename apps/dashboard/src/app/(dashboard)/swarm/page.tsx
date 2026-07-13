@@ -146,12 +146,11 @@ export default async function SwarmPage() {
     <>
       <RealtimeRefresh tables={["agents", "tasks", "events"]} throttleMs={2000} />
 
-      {/* Hlavička */}
+      {/* Hlavička — editorial: eyebrow + t-title (gradient necháme jen pro hero na /projects) */}
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold">
-          <span className="brand-gradient-text">Velín roje</span>
-        </h1>
-        <p className="mt-1 text-sm text-[--color-muted]">
+        <div className="t-eyebrow">Roj</div>
+        <h1 className="t-title mt-2 text-[--color-fg]">Velín roje</h1>
+        <p className="mt-1.5 t-body text-[--color-muted]">
           Celý roj na jeden pohled — napříč všemi tvými projekty. {capacityLine}
         </p>
       </div>

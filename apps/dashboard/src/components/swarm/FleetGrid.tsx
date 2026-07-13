@@ -1,6 +1,7 @@
 // Živá mřížka roje — jedna dlaždice na každého právě pracujícího agenta.
 // Hustá responzivní mřížka, takže N paralelních agentů vypadá jako skutečný roj.
 import { cn } from "@/lib/cn";
+import { Bot } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ROLE_META, ROLE_ORDER, formatElapsed } from "./roles";
 import type { AgentRole } from "@/lib/types";
@@ -19,7 +20,7 @@ export function FleetGrid({ agents }: { agents: FleetAgent[] }) {
   if (agents.length === 0) {
     return (
       <EmptyState
-        icon="✦"
+        icon={<Bot className="size-5" />}
         title="Roj spí"
         description="Roj spí — zadej přání a agenti se probudí."
       />

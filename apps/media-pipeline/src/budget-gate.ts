@@ -12,7 +12,7 @@
  * úspěšném placeném volání — to je jediný zdroj pravdy pro tuto bránu.
  */
 import { BudgetExceededError, checkBudget, loadConfig, type CapSet, type SpendSnapshot } from "@farm/core";
-import { creditBalance } from "@farm/billing";
+import { creditBalance, getPlan, planCaps, effectivePlanKey } from "@farm/billing";
 import { costLedger, farmSettings, getDb, getSql, profiles, projects } from "@farm/db";
 import { eq } from "drizzle-orm";
 
@@ -66,12 +66,18 @@ export async function loadMediaCaps(ctx: MediaBudgetContext): Promise<CapSet> {
     farmCap = Number(rawFarm);
   }
 
-  // Uživatel: profiles.daily_media_cap_usd.
+  // Uživatel: denní media strop se řídí PLÁNEM (billing), stejně jako LLM strop v
+  // settings.getCaps — NE surovým sloupcem profiles.daily_media_cap_usd (ten se z plánu
+  // nikdy nesynchronizuje: free by dostal default $5 místo $0, Pro $5 místo $10 atd.).
+  // Admin může přepsat přes caps_override.dailyMediaCapUsd.
   const userRows = await db
-    .select({ cap: profiles.dailyMediaCapUsd })
+    .select({ planKey: profiles.planKey, subStatus: profiles.subscriptionStatus, override: profiles.capsOverride })
     .from(profiles)
     .where(eq(profiles.userId, ctx.userId));
-  const userCap = userRows[0]?.cap ?? cfg.defaultUserDailyCapUsd;
+  const userCap = userRows[0]
+    ? planCaps(getPlan(effectivePlanKey(userRows[0].planKey, userRows[0].subStatus)), userRows[0].override)
+        .dailyMediaCapUsd
+    : cfg.defaultUserDailyCapUsd;
 
   // Projekt: projects.daily_cap_usd (media se počítá do stejného denního totalu).
   const projRows = await db

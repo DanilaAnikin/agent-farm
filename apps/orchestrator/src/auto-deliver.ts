@@ -10,6 +10,7 @@ import {
   getDb,
   getSql,
   projects,
+  profiles,
   mediaAssets,
   publishRequests,
   approvals,
@@ -18,6 +19,7 @@ import {
 } from "@farm/db";
 import type { ProjectAutonomy } from "@farm/db";
 import { and, eq } from "drizzle-orm";
+import { getPlan, effectivePlanKey } from "@farm/billing";
 import { logEvent } from "./events.js";
 import { isGlobalPaused } from "./settings.js";
 
@@ -49,6 +51,17 @@ export async function runAutoDeliverOnce(): Promise<void> {
   for (const p of active) {
     const a = autonomy(p);
     if (!a.autoDeliver) continue;
+
+    // Feature-gate: Instagram publikace je jen v plánech s instagram=true (Pro+). Bez
+    // téhle brány by auto-deliver publikoval i pro Free/Starter, které IG v ceně nemají
+    // (plan.instagram se jinak nikde nevynucuje). Efektivní plán ⇒ respektuje i dunning.
+    const planRows = await getDb()
+      .select({ planKey: profiles.planKey, subStatus: profiles.subscriptionStatus })
+      .from(profiles)
+      .where(eq(profiles.userId, p.userId))
+      .limit(1);
+    if (!getPlan(effectivePlanKey(planRows[0]?.planKey, planRows[0]?.subStatus)).instagram) continue;
+
     const cap = a.deliverDailyCap && a.deliverDailyCap > 0 ? a.deliverDailyCap : DEFAULT_DELIVER_CAP;
 
     // Hotové reely bez publish_requestu.

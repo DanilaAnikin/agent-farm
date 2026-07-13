@@ -160,7 +160,12 @@ export const projects = pgTable(
     // Nastavení autonomie (proaktivní návrhy, self-run, auto-doručení) — kind-agnostické.
     autonomy: jsonb("autonomy").$type<ProjectAutonomy>().notNull().default({}),
     createdAt: now(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    // $onUpdate ⇒ každá Drizzle změna řádku (vč. přechodu do budget_hold) bumpne
+    // updated_at, takže budget-hold `heldSince` = kdy projekt reálně přešel do holdu.
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
   },
   (t) => [index("projects_user_idx").on(t.userId)],
 );
@@ -227,7 +232,14 @@ export const tasks = pgTable(
     // Best-of-N: kolik soupeřících kandidátů na tento úkol (1 = klasika).
     bestOfN: integer("best_of_n").notNull().default(1),
     createdAt: now(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    // KRITICKÉ: $onUpdate bumpne updated_at na KAŽDÉM přechodu stavu (queued→running→
+    // judging→…). Bez toho reconciliation měřila stáří od VZNIKU tasku, takže úkol
+    // v 'judging' déle než 15 min od vzniku (běžné) byl vytržen zpod běžícího judge
+    // → ping-pong dispatch→judging→reap→dispatch a pálení kreditů. Viz reconciliation.ts.
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
   },
   (t) => [
     index("tasks_project_idx").on(t.projectId),

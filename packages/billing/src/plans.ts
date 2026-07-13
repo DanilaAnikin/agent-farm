@@ -128,6 +128,26 @@ export function getPlan(key: string | null | undefined): Plan {
   return PLANS[(key as PlanKey) ?? "free"] ?? PLANS.free;
 }
 
+/** Statusy předplatného, které OPRAVŇUJÍ k placenému tieru. */
+const ENTITLED_SUB_STATUSES = new Set(["active", "trialing"]);
+
+/**
+ * Efektivní plán pro ENFORCEMENT (kredity, denní stropy, worker cap). Placený tier
+ * platí jen když je předplatné `active`/`trialing`. Při selhané platbě Stripe pošle
+ * `past_due` → `unpaid` a planKey klesne na 'free' až u `subscription.deleted`, což
+ * u dunningu trvá i ~3 týdny — bez téhle degradace by uživatel po celou dobu čerpal
+ * plný nárok placeného plánu zdarma. planKey píše VÝHRADNĚ Stripe webhook (nikdy admin
+ * ručně), takže placený key vždy implikuje reálný subscription status.
+ */
+export function effectivePlanKey(
+  planKey: string | null | undefined,
+  subscriptionStatus?: string | null,
+): PlanKey {
+  const key = (planKey as PlanKey) ?? "free";
+  if (key === "free") return "free";
+  return ENTITLED_SUB_STATUSES.has(subscriptionStatus ?? "") ? key : "free";
+}
+
 /** Denní kvóty pro uživatele (plán + volitelný admin override). */
 export interface UserCaps {
   dailyCapUsd: number;
