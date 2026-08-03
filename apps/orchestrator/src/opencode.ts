@@ -56,14 +56,28 @@ async function postJson<T>(url: string, body: unknown, signal?: AbortSignal): Pr
 
 /** Vytvoří novou session (fresh kontext na jeden pokus). */
 export async function createSession(baseUrl: string, signal?: AbortSignal): Promise<OpencodeSession> {
-  const json = await postJson<{ id?: string; sessionID?: string }>(
-    ENDPOINTS.createSession(baseUrl),
-    {},
-    signal,
-  );
-  const id = json.id ?? json.sessionID;
-  if (!id) throw new Error("opencode createSession nevrátil id session.");
-  return { id };
+  // Worker opencode server startuje ~8s; orchestrátor se může připojit dřív.
+  // Retry na connection chyby (fetch failed / ECONNREFUSED) až ~60s, než to vzdáme.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try {
+      const json = await postJson<{ id?: string; sessionID?: string }>(
+        ENDPOINTS.createSession(baseUrl),
+        {},
+        signal,
+      );
+      const id = json.id ?? json.sessionID;
+      if (!id) throw new Error("opencode createSession nevrátil id session.");
+      return { id };
+    } catch (err) {
+      lastErr = err;
+      const msg = String((err as { message?: string })?.message ?? err);
+      const isConn = msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ECONNRESET") || msg.includes("socket");
+      if (!isConn || attempt === 29) throw err;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  throw lastErr;
 }
 
 /**
@@ -83,11 +97,14 @@ export async function prompt(
       ...(input.apiKey ? { Authorization: `Bearer ${input.apiKey}` } : {}),
     },
     body: JSON.stringify({
-      agent: input.agent,
-      model: input.model,
-      // opencode přijímá buď `text`, nebo `parts` — posíláme text jako jednu část.
+      // opencode 1.18.x: model MUSÍ být objekt {providerID, modelID}, ne string.
+      model: { providerID: "farm", modelID: input.model },
+      // worker-build/worker-fix nejsou definované agenty v opencode.json →
+      // mapujeme na vestavěný primary agent "build" (plný edit/bash).
+      agent: "build",
+      // schema: additionalProperties:false, required:[parts] → JEN parts (žádný
+      // top-level `text`, jinak 400 Unexpected property).
       parts: [{ type: "text", text: input.text }],
-      text: input.text,
     }),
     signal: input.signal,
   });

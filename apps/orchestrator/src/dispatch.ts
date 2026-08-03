@@ -872,8 +872,12 @@ async function runWithLimits(args: {
  * Při upgradu opencode případně dolaď.
  */
 function isStepEvent(ev: OpencodeEvent): boolean {
-  const t = (ev.type ?? "").toLowerCase();
-  return t.includes("part") || t.includes("tool") || t.includes("step");
+  // opencode 1.18 streamuje desítky part.delta/part.updated eventů na JEDEN
+  // model-turn → počítat je jako kroky přeteče strop po ~2 taženích. Reálná
+  // hranice agent-kroku je "step-finish", ALE na /event streamu je zanořená:
+  // { type:"message.part.updated", properties:{ part:{ type:"step-finish" }}}.
+  const part = (ev.properties as { part?: { type?: string } } | undefined)?.part;
+  return part?.type === "step-finish";
 }
 
 async function touchHeartbeat(attemptId: string, steps: number): Promise<void> {

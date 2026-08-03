@@ -15,6 +15,9 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const execFileP = promisify(execFile);
 import type { SimpleGit } from "simple-git";
 import { Octokit } from "@octokit/rest";
 import { getDb, connections, projects } from "@farm/db";
@@ -207,6 +210,11 @@ export async function createWorktree(
     await git.branch(["-D", branch]).catch(() => undefined);
 
     await git.raw(["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
+      // Worker/judge opencode bezi jako UID 1001; orchestrator (root)
+      // vytvoril soubory jako root -> bez chownu "permission denied" na
+      // /workspace a agent nic nezmeni. Pres bind-mount se to promitne
+      // do worker kontejneru.
+      await execFileP("chown", ["-R", "1001:1001", worktreePath]).catch(() => undefined);
     return { worktreePath, branch };
   });
 }

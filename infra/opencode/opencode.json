@@ -4,12 +4,19 @@
     "farm": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "{env:LITELLM_BASE_URL}/v1"
+        "baseURL": "{env:LITELLM_BASE_URL}/v1",
+        "apiKey": "{env:LITELLM_API_KEY}"
       },
       "models": {
-        "worker": { "name": "worker" },
-        "worker-hard": { "name": "worker-hard" },
-        "worker-fallback": { "name": "worker-fallback" }
+        "worker": {
+          "name": "worker"
+        },
+        "worker-hard": {
+          "name": "worker-hard"
+        },
+        "worker-fallback": {
+          "name": "worker-fallback"
+        }
       }
     }
   },

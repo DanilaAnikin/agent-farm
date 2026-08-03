@@ -18,6 +18,8 @@ RUN npm install -g opencode-ai@latest
 
 # Neroot uživatel — worker kód běží bez privilegií.
 RUN useradd -ms /bin/bash worker
+RUN mkdir -p /home/worker/.config/opencode
+COPY --chown=worker:worker infra/opencode/opencode.json /home/worker/.config/opencode/opencode.json
 USER worker
 WORKDIR /home/worker/project
 

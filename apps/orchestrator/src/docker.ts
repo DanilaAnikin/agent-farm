@@ -82,7 +82,7 @@ export async function spawnWorker(input: SpawnWorkerInput): Promise<SpawnedWorke
   const container = await docker.createContainer({
     Image: cfg.workerImage,
     Labels: { [WORKER_LABEL]: input.projectId },
-    Env: [`FARM_PROJECT_ID=${input.projectId}`, `OPENCODE_PORT=${OPENCODE_PORT}`],
+    Env: [`FARM_PROJECT_ID=${input.projectId}`, `OPENCODE_PORT=${OPENCODE_PORT}`, `LITELLM_BASE_URL=${process.env.LITELLM_BASE_URL ?? "http://litellm:4000"}`, `LITELLM_API_KEY=${process.env.LITELLM_MASTER_KEY ?? ""}`],
     HostConfig: {
       // gVisor (runsc) na produkci; lokálně "runc" (WORKER_DOCKER_RUNTIME).
       Runtime: cfg.workerDockerRuntime,

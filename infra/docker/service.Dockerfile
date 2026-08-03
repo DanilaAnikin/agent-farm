@@ -7,10 +7,11 @@ RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+RUN git config --system --add safe.directory '*'
 WORKDIR /app
 
 FROM base AS deps
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* turbo.json tsconfig.base.json .npmrc ./
 COPY packages ./packages
 COPY apps ./apps
 RUN pnpm install --frozen-lockfile || pnpm install
