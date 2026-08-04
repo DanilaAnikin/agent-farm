@@ -61,7 +61,7 @@ function asUuid(s: unknown): string | null {
 
 interface SpendRow {
   request_id: string | null;
-  startTime: string | Date;
+  startTime: string; // castnuto na ::text v SQL → "YYYY-MM-DD HH:MM:SS.mmm" (UTC)
   spend: number | null;
   model: string | null;
   custom_llm_provider: string | null;
@@ -99,7 +99,7 @@ export async function runSpendSyncOnce(): Promise<void> {
     typeof wmRows[0]?.value === "string" ? (wmRows[0]!.value as string) : "1970-01-01T00:00:00Z";
 
   const logs = await lsql<SpendRow[]>`
-    SELECT request_id, "startTime", spend, model, custom_llm_provider,
+    SELECT request_id, "startTime"::text AS "startTime", spend, model, custom_llm_provider,
            prompt_tokens, completion_tokens, metadata, requester_ip_address, "user"
     FROM "LiteLLM_SpendLogs"
     WHERE "startTime" > ${watermark}::timestamp
@@ -120,7 +120,10 @@ export async function runSpendSyncOnce(): Promise<void> {
   const toInsert: (typeof costLedger.$inferInsert)[] = [];
   let maxTs = watermark;
   for (const l of logs) {
-    const iso = new Date(`${String(l.startTime).replace(" ", "T")}Z`).toISOString();
+    // startTime je ::text "YYYY-MM-DD HH:MM:SS.mmm" v UTC → doplň T a Z.
+    const d = new Date(`${l.startTime.replace(" ", "T")}Z`);
+    if (Number.isNaN(d.getTime())) continue; // nevalidní čas přeskoč (nikdy nekrasne loop)
+    const iso = d.toISOString();
     if (iso > maxTs) maxTs = iso;
     const refId = asUuid(l.request_id);
     if (refId && seen.has(refId)) continue;
