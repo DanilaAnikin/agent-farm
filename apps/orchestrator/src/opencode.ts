@@ -9,12 +9,29 @@
  * ověř a případně uprav cesty a tvar payloadu na jednom místě (ENDPOINTS).
  */
 
+import { Agent } from "undici";
+
 const ENDPOINTS = {
   createSession: (base: string) => `${base}/session`,
   message: (base: string, sessionId: string) => `${base}/session/${sessionId}/message`,
   events: (base: string) => `${base}/event`,
   abort: (base: string, sessionId: string) => `${base}/session/${sessionId}/abort`,
 } as const;
+
+// KRITICKÉ: prompt() blokuje po celou dobu běhu agenta (klidně ATTEMPT_WALL_CLOCK_MIN,
+// default 30 min) a /event je dlouho žijící SSE stream. Node global fetch (undici) má
+// ale defaultní headersTimeout i bodyTimeout 300 s → jakýkoli pokus delší než 5 min
+// umřel na "TypeError: fetch failed" (to byla příčina 463 „infra" selhání → parked →
+// paused). Vlastní dispatcher timeouty vypíná (0 = bez limitu); skutečný limit řídí
+// wall-clock guard + AbortSignal v dispatch.ts (runWithLimits).
+const workerDispatcher = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  keepAliveTimeout: 60_000,
+});
+
+// `dispatcher` není v standardním RequestInit typu (undici rozšíření Node fetche).
+type FetchInit = RequestInit & { dispatcher?: unknown };
 
 export interface OpencodeSession {
   id: string;
@@ -46,7 +63,8 @@ async function postJson<T>(url: string, body: unknown, signal?: AbortSignal): Pr
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
     signal,
-  });
+    dispatcher: workerDispatcher,
+  } as FetchInit);
   if (!res.ok) {
     const t = await res.text().catch(() => "");
     throw new Error(`opencode ${url} selhalo: ${res.status} ${t}`);
@@ -107,7 +125,8 @@ export async function prompt(
       parts: [{ type: "text", text: input.text }],
     }),
     signal: input.signal,
-  });
+    dispatcher: workerDispatcher,
+  } as FetchInit);
   if (!res.ok) {
     const t = await res.text().catch(() => "");
     throw new Error(`opencode prompt selhalo: ${res.status} ${t}`);
@@ -134,7 +153,8 @@ export async function* subscribeEvents(
   const res = await fetch(ENDPOINTS.events(baseUrl), {
     headers: { Accept: "text/event-stream" },
     signal,
-  });
+    dispatcher: workerDispatcher,
+  } as FetchInit);
   if (!res.ok || !res.body) {
     throw new Error(`opencode /event selhalo: ${res.status}`);
   }

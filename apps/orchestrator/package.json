@@ -19,7 +19,8 @@
     "drizzle-orm": "^0.38.3",
     "dockerode": "^4.0.2",
     "simple-git": "^3.27.0",
-    "@octokit/rest": "^21.0.2"
+    "@octokit/rest": "^21.0.2",
+    "undici": "^6.21.0"
   },
   "devDependencies": {
     "@types/dockerode": "^3.3.31",
