@@ -130,7 +130,8 @@ export async function runSpendSyncOnce(): Promise<void> {
   >`
     SELECT t.project_id, t.wish_id, a.started_at, a.finished_at
     FROM attempts a JOIN tasks t ON t.id = a.task_id
-    WHERE a.started_at <= ${maxT} AND (a.finished_at IS NULL OR a.finished_at >= ${minT})
+    WHERE a.started_at <= ${maxT.toISOString()}::timestamptz
+      AND (a.finished_at IS NULL OR a.finished_at >= ${minT.toISOString()}::timestamptz)
   `;
   const SLACK = 5000; // ms tolerance na okrajích pokusu
   function attribute(tms: number): { projectId: string | null; wishId: string | null } {
