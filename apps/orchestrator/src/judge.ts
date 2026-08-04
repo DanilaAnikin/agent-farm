@@ -78,11 +78,19 @@ export function scoreCandidate(input: { buildOk: boolean; testsOk: boolean; lint
   return Math.round(raw * 100) / 100;
 }
 
-export const JUDGE_CMD =
-  'set +e; pnpm install --ignore-scripts >/tmp/install.log 2>&1; echo "INSTALL_EXIT=$?"; ' +
-  'pnpm build >/tmp/build.log 2>&1; echo "BUILD_EXIT=$?"; ' +
-  'pnpm test >/tmp/test.log 2>&1; echo "TEST_EXIT=$?"; ' +
-  'pnpm lint >/tmp/lint.log 2>&1; echo "LINT_EXIT=$?"';
+// Mechanické kontroly. KLÍČOVÉ: chybějící skript = PASS (exit 0), NE selhání.
+// Dřív `pnpm build/test/lint` u greenfield/scaffold projektu (bez těch skriptů)
+// vracelo nenulový exit → build/tests/lint=false → judge automaticky REJECT → 0
+// hotových tasků navždy. Teď skript spustíme jen když v package.json existuje;
+// kvalitu jinak drží LLM review + done_condition.
+export const JUDGE_CMD = [
+  "set +e",
+  "pnpm install --ignore-scripts >/tmp/install.log 2>&1; echo INSTALL_EXIT=$?",
+  `has() { node -e 'try{const s=(require(process.cwd()+"/package.json").scripts)||{};process.exit(s[process.argv[1]]?0:1)}catch(e){process.exit(1)}' "$1"; }`,
+  "if has build; then pnpm build >/tmp/build.log 2>&1; echo BUILD_EXIT=$?; else echo BUILD_EXIT=0; fi",
+  "if has test; then pnpm test >/tmp/test.log 2>&1; echo TEST_EXIT=$?; else echo TEST_EXIT=0; fi",
+  "if has lint; then pnpm lint >/tmp/lint.log 2>&1; echo LINT_EXIT=$?; else echo LINT_EXIT=0; fi",
+].join("; ");
 
 /** Jedna iterace judge loopu. */
 export async function runJudgeOnce(): Promise<void> {
