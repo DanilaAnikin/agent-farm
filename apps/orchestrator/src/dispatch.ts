@@ -32,7 +32,7 @@ import {
   revokeKey,
   routeWorkerModel,
 } from "@farm/llm";
-import { creditBalance, getPlan, planCaps } from "@farm/billing";
+import { creditBalance } from "@farm/billing";
 import { logEvent } from "./events.js";
 import { spendSnapshot } from "./cost.js";
 import { isGlobalPaused, getCaps } from "./settings.js";
@@ -129,11 +129,10 @@ export async function runDispatchOnce(): Promise<void> {
     return;
   }
 
-  // --- Souběžnost workerů dle plánu (advertised „N souběžných workerů") ---
-  // Kolik pokusů uživateli právě běží napříč VŠEMI jeho projekty? Když je na
-  // stropu plánu, zprávu NEackujeme — vrátí se po vt a spustí, až se slot uvolní.
-  // (Globální WORKER_SLOTS je strop celé farmy; tohle je férové entitlement per user.)
-  const workerCap = planCaps(getPlan(credit.planKey)).maxWorkers;
+  // --- Souběžnost workerů (solo self-host: globální strop farmy, žádné plány) ---
+  // Kolik pokusů právě běží napříč VŠEMI projekty? Na stropu zprávu NEackujeme —
+  // vrátí se po vt a spustí, až se slot uvolní. Řízeno MAX_WORKERS_TOTAL.
+  const workerCap = cfg.maxWorkersTotal;
   // Počítáme jen AKTIVNĚ BĚŽÍCÍ workery: attempt 'running' + task 'running' + score
   // IS NULL. Attempty ve fázi 'judging' i best-of-N kandidáti, kteří UŽ doskórovali
   // (score SET, kontejner zabit, čekají na výběr), slot už nedrží — jinak by jeden
@@ -156,8 +155,8 @@ export async function runDispatchOnce(): Promise<void> {
       projectId: project.id,
       taskId,
       type: "worker_cap_reached",
-      message: `Dosažen strop souběžných workerů plánu (${workerCap}) — odkládám dispatch.`,
-      data: { workerCap, planKey: credit.planKey },
+      message: `Dosažen globální strop souběžných workerů (${workerCap}) — odkládám dispatch.`,
+      data: { workerCap },
     });
     return;
   }
