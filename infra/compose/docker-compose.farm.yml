@@ -112,7 +112,11 @@ services:
   dashboard:
     restart: unless-stopped
     env_file: ../../.env
-    networks: *id001
+    networks:
+    - farmnet
+    - agentfarm-supabase_default
+    - workernet
+    - dokploy-network
     logging: *id002
     build:
       context: ../..
@@ -132,6 +136,8 @@ networks:
     name: workernet
     driver: bridge
   agentfarm-supabase_default:
+    external: true
+  dokploy-network:
     external: true
 volumes:
   workspaces: null
