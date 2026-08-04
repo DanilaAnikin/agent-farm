@@ -243,6 +243,7 @@ async function judgeWork(
         lintOk,
         protectedTouched,
         deletedTests,
+        incremental: autopilot,
       }),
       validate: validateJudge,
       metadata: { userId: project.userId, projectId: project.id, taskId: task.id, scope: "system" },
@@ -251,7 +252,10 @@ async function judgeWork(
     reasons = review.data.reasons;
     checks = { ...review.data.checks, build: buildOk, tests: testsOk, lint: lintOk };
     // Pojistka: rozbitý build/testy nesmí projít, i kdyby model řekl approve.
-    if ((!buildOk || !testsOk) && verdict === "approve") {
+    // POD AUTOPILOTEM ale NE: greenfield projekt se buildí inkrementálně a celkový
+    // build/test u raných tasků legitimně padá — jinak by NIC nikdy nedokončilo (0/x).
+    // Kvalitu tam drží LLM verdikt nad diffem + done_condition.
+    if (!autopilot && (!buildOk || !testsOk) && verdict === "approve") {
       verdict = "reject";
       reasons = `Build/testy neprošly (build=${buildOk}, tests=${testsOk}). ${reasons}`;
     }

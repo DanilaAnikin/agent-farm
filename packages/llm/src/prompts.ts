@@ -470,6 +470,8 @@ export function judgePrompt(input: {
   lintOk: boolean;
   protectedTouched: string[];
   deletedTests: string[];
+  /** Greenfield/inkrementální projekt: build/testy celého projektu jsou poradní, ne auto-reject. */
+  incremental?: boolean;
 }): ChatMessage[] {
   return [
     {
@@ -481,7 +483,9 @@ export function judgePrompt(input: {
         `Return ONLY JSON: { "verdict": "approve"|"reject"|"escalate", "reasons": string, ` +
         `"checks": { "build": bool, "tests": bool, "lint": bool, "done_condition_met": bool, "diff_review": bool } }.\n\n` +
         `HARD RULES (in order):\n` +
-        `- If build failed OR tests failed → reject.\n` +
+        (input.incremental
+          ? `- Build/test checks run against the WHOLE project, which is being built INCREMENTALLY and may legitimately not build or fully pass yet (earlier tasks in the plan). Treat build/test results as ADVISORY context, NOT an automatic reject. Judge whether THIS task's done_condition is met by the diff with real, honest logic. Only reject for build/test if the diff ITSELF introduces a syntax error or breaks something it touched.\n`
+          : `- If build failed OR tests failed → reject.\n`) +
         `- If any PROTECTED harness file was modified (package.json scripts, lockfiles, tsconfig, lint/test/CI config, ` +
         `.farm/, .opencode/) → escalate. Never approve a harness change, even if it "looks reasonable".\n` +
         `- If a test file was deleted, or a test was weakened/skipped/commented-out/made trivially true (expect(true), ` +
