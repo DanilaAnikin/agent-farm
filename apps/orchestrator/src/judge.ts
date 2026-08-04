@@ -259,6 +259,13 @@ async function judgeWork(
       verdict = "reject";
       reasons = `Build/testy neprošly (build=${buildOk}, tests=${testsOk}). ${reasons}`;
     }
+    // Autopilot: „escalate na člověka" nedává smysl (žádný člověk neschvaluje) →
+    // ber to jako reject a nech farmu zkusit task znovu (fix). Po max pokusech se
+    // stejně zaparkuje, takže se nikdy neuvázne na čekání na lidský zásah.
+    if (autopilot && verdict === "escalate") {
+      verdict = "reject";
+      reasons = `[autopilot: escalate→reject] ${reasons}`;
+    }
   }
 
   // Zapiš review
