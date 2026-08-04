@@ -8,6 +8,8 @@
 # gVisor pozn.: chromium se spouští s --no-sandbox a --disable-dev-shm-usage
 # (runner to nastavuje), protože user-namespace sandbox pod runsc nefunguje.
 FROM node:22-bookworm-slim
+# farm.keep=1 chrání on-demand image před `docker image prune` (viz worker.Dockerfile). NEODSTRAŇOVAT.
+LABEL farm.keep=1
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Prohlížeče se instalují do sdílené, čitelné cesty (ne do ~judge), ať k nim

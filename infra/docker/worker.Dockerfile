@@ -3,6 +3,10 @@
 # svázaný s jedním projektem (label project_id), mount jen volume projektu.
 # Na produkci běží pod runsc (gVisor) s egress allowlistem: jen LiteLLM + npm.
 FROM node:22-bookworm-slim
+# farm.keep=1 chrání on-demand image před `docker image prune` (image nemá
+# trvalý kontejner mezi spawny → prune ho jinak smaže; homelab prune ho vylučuje
+# přes --filter label!=farm.keep=1). NEODSTRAŇOVAT.
+LABEL farm.keep=1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PNPM_HOME=/usr/local/bin \
