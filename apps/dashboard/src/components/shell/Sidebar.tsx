@@ -5,8 +5,6 @@ import { usePathname } from "next/navigation";
 import {
   FolderGit2,
   Boxes,
-  CheckCircle2,
-  Images,
   Receipt,
   Settings,
   ShieldCheck,
@@ -18,8 +16,6 @@ import { cn } from "@/lib/cn";
 const ICONS: Record<string, LucideIcon> = {
   "/projects": FolderGit2,
   "/swarm": Boxes,
-  "/approvals": CheckCircle2,
-  "/library": Images,
   "/costs": Receipt,
   "/settings": Settings,
   "/admin": ShieldCheck,

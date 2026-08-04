@@ -7,19 +7,16 @@ interface ChecklistItem {
   href: string;
 }
 
-// First-run checklist: klíče / Telegram / stropy (viz OVERVIEW §5.9).
+// First-run checklist: GitHub klíč / stropy (plně autonomní provoz, bez Telegramu).
 export function FirstRunChecklist({
   hasGithub,
-  hasTelegram,
   hasCaps,
 }: {
   hasGithub: boolean;
-  hasTelegram: boolean;
   hasCaps: boolean;
 }) {
   const items: ChecklistItem[] = [
     { label: "Připoj GitHub (PAT pro git operace)", done: hasGithub, href: "/settings" },
-    { label: "Spáruj Telegram pro schvalování a alerty", done: hasTelegram, href: "/settings" },
     { label: "Zkontroluj denní stropy útraty", done: hasCaps, href: "/costs" },
   ];
   const remaining = items.filter((i) => !i.done).length;

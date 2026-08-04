@@ -34,28 +34,7 @@ export default async function SettingsPage() {
         </Card>
 
         <div className="space-y-6">
-          <ConnectionsForm
-            connectedKinds={connectedKinds}
-            telegramChatId={user.profile?.telegram_chat_id ?? null}
-            telegramCode={user.profile?.telegram_pairing_code ?? null}
-          />
-
-          <Card>
-            <CardHeader title="Notifikace" description="Kam chodí alerty (parked, budget_hold, breaker)." />
-            <CardBody className="space-y-2 text-sm text-[--color-muted]">
-              <p>
-                Po spárování Telegramu ti bot posílá proaktivní reporty a schvalování (✅/❌ přímo v chatu),
-                alerty (parked, budget_hold, circuit breaker) i <strong>denní digest</strong>.
-              </p>
-              <p>
-                Kdykoliv si stav vyžádáš příkazy <code className="text-xs">/status</code>,{" "}
-                <code className="text-xs">/digest</code> nebo <code className="text-xs">/suggestions</code>.
-                {!user.profile?.telegram_chat_id
-                  ? " Zatím nemáš spárovaný Telegram — udělej to výše."
-                  : ""}
-              </p>
-            </CardBody>
-          </Card>
+          <ConnectionsForm connectedKinds={connectedKinds} />
         </div>
       </div>
     </>

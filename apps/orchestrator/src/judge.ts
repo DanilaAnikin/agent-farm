@@ -39,6 +39,7 @@ import { MODELS, structured, judgePrompt, validateJudge } from "@farm/llm";
 import type { JudgeOutput } from "@farm/llm";
 import type { JudgeVerdict } from "@farm/db";
 import { runJudgeContainer } from "./docker.js";
+import { isAutopilot } from "./settings.js";
 import { mergeToMain, pushMain, openPr } from "./git.js";
 import { logEvent } from "./events.js";
 import { registerAgent, releaseAgent } from "./agents-registry.js";
@@ -196,7 +197,11 @@ async function judgeWork(
   let reasons: string;
   let checks: Record<string, unknown>;
 
-  if (protectedTouched.length > 0) {
+  // Autopilot (trust_mode / global): žádná ruční config ráčna — chráněné soubory
+  // (package.json, lock…) se pod plnou autonomií řeší LLM reviewem jako běžný diff.
+  const autopilot = await isAutopilot(project.trustMode);
+
+  if (protectedTouched.length > 0 && !autopilot) {
     // Config ráčna: chráněné soubory změněny → eskalace na člověka (nikdy approve).
     verdict = "escalate";
     reasons = `Chráněné harness soubory změněny: ${protectedTouched.join(", ")}. Vyžaduje schválení config_change.`;

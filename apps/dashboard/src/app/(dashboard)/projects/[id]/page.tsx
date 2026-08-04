@@ -21,6 +21,10 @@ import { QaStatusBadge, type QaStatus } from "@/components/wishes/QaStatusBadge"
 import { PROJECT_STATUS_META, WISH_STATUS_META } from "@/lib/constants";
 import type { AgentRow, EventRow, ProjectRow, TaskRow, WishRow } from "@/lib/types";
 
+// Konzistentní primární akce jako odkaz (stejný vzhled jako <Button variant=primary>).
+const primaryLink =
+  "ring-focus inline-flex h-9 items-center gap-2 rounded-[--radius-sm] bg-[linear-gradient(180deg,var(--color-brand),var(--color-brand-strong))] px-4 text-sm font-medium text-[--color-brand-ink] elev-brand transition-[filter] hover:brightness-105";
+
 export default async function ProjectMissionControl({
   params,
 }: {
@@ -121,10 +125,7 @@ export default async function ProjectMissionControl({
         description="Mission control projektu — živý stav agentů, fronty a útraty."
         action={
           <div className="flex gap-2">
-            <Link
-              href={`/projects/${id}/wishes/new`}
-              className="inline-flex h-10 items-center rounded-lg bg-[--color-accent] px-4 text-sm font-medium text-white hover:brightness-110"
-            >
+            <Link href={`/projects/${id}/wishes/new`} className={primaryLink}>
               + Nové přání
             </Link>
             <PauseResumeButton projectId={id} status={project.status} />
@@ -162,10 +163,7 @@ export default async function ProjectMissionControl({
                   title="Žádná aktivní přání"
                   description="Zadej přání — manager ho rozpadne na úkoly a agenti se pustí do práce."
                   action={
-                    <Link
-                      href={`/projects/${id}/wishes/new`}
-                      className="inline-flex h-10 items-center rounded-lg bg-[--color-accent] px-4 text-sm font-medium text-white hover:brightness-110"
-                    >
+                    <Link href={`/projects/${id}/wishes/new`} className={primaryLink}>
                       + Nové přání
                     </Link>
                   }
@@ -220,7 +218,7 @@ export default async function ProjectMissionControl({
 
         <div className="space-y-6">
           <Card>
-            <CardHeader title="Zpráva projektu" description="Pošli instrukci (přání) nebo poznámku manažerovi — stejně jako z Telegramu." />
+            <CardHeader title="Zpráva projektu" description="Pošli instrukci (přání) nebo poznámku manažerovi." />
             <CardBody>
               <ProjectMessageBox projectId={id} initialNote={project.manager_note} />
             </CardBody>

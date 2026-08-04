@@ -13,12 +13,8 @@ import { RealtimeRefresh } from "@/components/RealtimeRefresh";
 import { WishComposer, type ComposerProject } from "@/components/home/WishComposer";
 import { SuggestionsPanel } from "@/components/home/SuggestionsPanel";
 import { LiveAgents, type AgentDisplay } from "@/components/agents/LiveAgents";
-import {
-  AttentionPanel,
-  type AttentionApproval,
-  type AttentionParked,
-} from "@/components/home/AttentionPanel";
-import type { AgentRow, ApprovalRow, ProjectRow, WishRow } from "@/lib/types";
+import { AttentionPanel, type AttentionParked } from "@/components/home/AttentionPanel";
+import type { AgentRow, ProjectRow, WishRow } from "@/lib/types";
 
 export const metadata = { title: "Velín — Perennial" };
 
@@ -36,7 +32,6 @@ export default async function CommandCenterPage() {
     { data: agentsData },
     { data: costRows },
     { data: eventRows },
-    { data: approvalsData },
     { data: connRows },
   ] = await Promise.all([
     supabase.from("projects").select("*").order("created_at", { ascending: false }),
@@ -45,7 +40,6 @@ export default async function CommandCenterPage() {
     supabase.from("agents").select("*").order("last_heartbeat", { ascending: false }),
     supabase.from("cost_ledger").select("project_id, cost_usd").gte("ts", startOfUtcDayIso()),
     supabase.from("events").select("project_id, message, ts").order("ts", { ascending: false }).limit(300),
-    supabase.from("approvals").select("id, project_id, type, created_at").eq("status", "pending"),
     supabase.from("connections").select("kind, status"),
   ]);
 
@@ -56,7 +50,6 @@ export default async function CommandCenterPage() {
       | { id: string; project_id: string; wish_id: string | null; status: string; title: string; updated_at: string }[]
       | null) ?? [];
   const agents = (agentsData as AgentRow[] | null) ?? [];
-  const approvals = (approvalsData as Pick<ApprovalRow, "id" | "project_id" | "type" | "created_at">[] | null) ?? [];
 
   const projectName = new Map(projects.map((p) => [p.id, p.name] as const));
 
@@ -152,25 +145,16 @@ export default async function CommandCenterPage() {
       ts: t.updated_at,
     }));
 
-  const attentionApprovals: AttentionApproval[] = approvals.map((a) => ({
-    id: a.id,
-    type: a.type,
-    projectId: a.project_id,
-    projectName: a.project_id ? projectName.get(a.project_id) ?? "Projekt" : "Farma",
-    ts: a.created_at,
-  }));
-
-  const attentionCount = parked.length + attentionApprovals.length;
+  const attentionCount = parked.length;
   const composerProjects: ComposerProject[] = projects.map((p) => ({ id: p.id, name: p.name }));
 
   const conns = (connRows as { kind: string; status: string }[] | null) ?? [];
   const hasGithub = conns.some((c) => c.kind === "github" && c.status === "active");
-  const hasTelegram = Boolean(user.profile?.telegram_chat_id);
   const hasCaps = (user.profile?.daily_cap_usd ?? 0) > 0;
 
   return (
     <>
-      <RealtimeRefresh tables={["projects", "wishes", "tasks", "agents", "events", "approvals", "suggestions"]} throttleMs={2000} />
+      <RealtimeRefresh tables={["projects", "wishes", "tasks", "agents", "events", "suggestions"]} throttleMs={2000} />
 
       {/* Hlavička velína — editorial: eyebrow + t-title + hero metriky */}
       <div className="mb-6 flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
@@ -208,7 +192,7 @@ export default async function CommandCenterPage() {
         <WishComposer projects={composerProjects} />
       </div>
 
-      <FirstRunChecklist hasGithub={hasGithub} hasTelegram={hasTelegram} hasCaps={hasCaps} />
+      <FirstRunChecklist hasGithub={hasGithub} hasCaps={hasCaps} />
 
       {projects.length === 0 ? (
         <div className="mt-6">
@@ -247,7 +231,7 @@ export default async function CommandCenterPage() {
                 description={attentionCount > 0 ? `${attentionCount} k vyřízení` : "Vše pod kontrolou"}
               />
               <CardBody>
-                <AttentionPanel parked={parked} approvals={attentionApprovals} />
+                <AttentionPanel parked={parked} />
               </CardBody>
             </Card>
           </div>

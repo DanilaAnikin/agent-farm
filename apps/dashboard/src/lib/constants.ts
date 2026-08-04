@@ -136,8 +136,6 @@ export const PROJECT_KIND_META: Record<ProjectKind, Meta> = {
 export const NAV_ITEMS = [
   { href: "/projects", label: "Projekty", icon: "▣" },
   { href: "/swarm", label: "Roj", icon: "✦" },
-  { href: "/approvals", label: "Schvalování", icon: "✓" },
-  { href: "/library", label: "Knihovna", icon: "▦" },
   { href: "/costs", label: "Náklady", icon: "$" },
   { href: "/settings", label: "Nastavení", icon: "⚙" },
 ] as const;
