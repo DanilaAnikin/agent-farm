@@ -128,7 +128,7 @@ export async function runSpendSyncOnce(): Promise<void> {
   const attemptRows = await db<
     { project_id: string; wish_id: string | null; started_at: Date; finished_at: Date | null }[]
   >`
-    SELECT a.project_id, t.wish_id, a.started_at, a.finished_at
+    SELECT t.project_id, t.wish_id, a.started_at, a.finished_at
     FROM attempts a JOIN tasks t ON t.id = a.task_id
     WHERE a.started_at <= ${maxT} AND (a.finished_at IS NULL OR a.finished_at >= ${minT})
   `;
