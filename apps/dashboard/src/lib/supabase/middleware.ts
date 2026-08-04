@@ -36,17 +36,14 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
+  // Solo self-host: veřejné je jen přihlášení + auth callback + interní cesty.
+  // Kořen "/" veřejný NENÍ → nepřihlášené middleware pošle na /login, přihlášené
+  // pustí na page.tsx, který přesměruje na /projects.
   const isPublic =
-    pathname === "/" ||
     pathname === "/login" ||
-    pathname === "/signup" ||
-    pathname === "/pricing" ||
-    pathname === "/features" ||
-    pathname.startsWith("/legal") ||
     pathname.startsWith("/auth") ||
     pathname.startsWith("/_next") ||
-    pathname.startsWith("/api/health") ||
-    pathname.startsWith("/api/stripe/webhook");
+    pathname.startsWith("/api/health");
 
   if (!user && !isPublic) {
     const loginUrl = request.nextUrl.clone();

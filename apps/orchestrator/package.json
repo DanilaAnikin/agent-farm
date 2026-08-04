@@ -18,6 +18,7 @@
     "@farm/billing": "workspace:*",
     "drizzle-orm": "^0.38.3",
     "dockerode": "^4.0.2",
+    "postgres": "^3.4.5",
     "simple-git": "^3.27.0",
     "@octokit/rest": "^21.0.2",
     "undici": "^6.21.0"

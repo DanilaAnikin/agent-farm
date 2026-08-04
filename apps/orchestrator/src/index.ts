@@ -16,6 +16,7 @@ import { runReconciliationOnce } from "./reconciliation.js";
 import { runBudgetHoldOnce } from "./budget-hold.js";
 import { runSttOnce } from "./stt.js";
 import { runLitellmSyncOnce } from "./litellm-sync.js";
+import { runSpendSyncOnce } from "./spend-sync.js";
 import { runSuggestionsOnce, runSelfRunOnce } from "./suggestions.js";
 import { runSupervisorOnce } from "./supervisor.js";
 import { runAutoDeliverOnce } from "./auto-deliver.js";
@@ -52,6 +53,8 @@ const LOOPS: LoopSpec[] = [
   { name: "budget-hold", everyMs: 60_000, fn: runBudgetHoldOnce },
   { name: "stt", everyMs: 5_000, fn: runSttOnce },
   { name: "litellm-sync", everyMs: 30_000, fn: runLitellmSyncOnce },
+  // Most reálného LiteLLM spendu → cost_ledger (US$ v dashboardu + vynucení stropu).
+  { name: "spend-sync", everyMs: 60_000, fn: runSpendSyncOnce },
   // Univerzální autonomie (kadence si každá smyčka hlídá sama).
   { name: "suggestions", everyMs: 5 * 60_000, fn: runSuggestionsOnce },
   { name: "self-run", everyMs: 60_000, fn: runSelfRunOnce },

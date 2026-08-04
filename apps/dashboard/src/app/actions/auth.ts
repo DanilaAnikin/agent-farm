@@ -106,7 +106,7 @@ export async function acceptInvite(_prev: AuthResult, formData: FormData): Promi
   if (signErr) {
     return { ok: false, message: "Účet vytvořen, ale automatické přihlášení selhalo — přihlas se ručně." };
   }
-  redirect("/onboarding");
+  redirect("/projects");
 }
 
 export async function signOut(): Promise<void> {

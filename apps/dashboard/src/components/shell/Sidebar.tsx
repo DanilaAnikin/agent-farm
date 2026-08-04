@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Images,
   Receipt,
-  CreditCard,
   Settings,
   ShieldCheck,
   type LucideIcon,
@@ -22,7 +21,6 @@ const ICONS: Record<string, LucideIcon> = {
   "/approvals": CheckCircle2,
   "/library": Images,
   "/costs": Receipt,
-  "/settings/billing": CreditCard,
   "/settings": Settings,
   "/admin": ShieldCheck,
 };

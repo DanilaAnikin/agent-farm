@@ -139,7 +139,6 @@ export const NAV_ITEMS = [
   { href: "/approvals", label: "Schvalování", icon: "✓" },
   { href: "/library", label: "Knihovna", icon: "▦" },
   { href: "/costs", label: "Náklady", icon: "$" },
-  { href: "/settings/billing", label: "Předplatné", icon: "◈" },
   { href: "/settings", label: "Nastavení", icon: "⚙" },
 ] as const;
 
