@@ -117,7 +117,34 @@ export async function runSpendSyncOnce(): Promise<void> {
     : [];
   const seen = new Set(existing.map((e) => e.ref_id));
 
+  // Atribuce na projekt/přání: spend log koreluj s pokusem, který v jeho čase běžel.
+  // (cap=1 → v daný okamžik běží ≤1 pokus → jednoznačná shoda.) Načti pokusy
+  // překrývající časové okno dávky JEDNÍM dotazem a matchuj v paměti.
+  const times = logs
+    .map((l) => new Date(`${l.startTime.replace(" ", "T")}Z`).getTime())
+    .filter((t) => !Number.isNaN(t));
+  const minT = times.length ? new Date(Math.min(...times)) : new Date(0);
+  const maxT = times.length ? new Date(Math.max(...times)) : new Date();
+  const attemptRows = await db<
+    { project_id: string; wish_id: string | null; started_at: Date; finished_at: Date | null }[]
+  >`
+    SELECT a.project_id, t.wish_id, a.started_at, a.finished_at
+    FROM attempts a JOIN tasks t ON t.id = a.task_id
+    WHERE a.started_at <= ${maxT} AND (a.finished_at IS NULL OR a.finished_at >= ${minT})
+  `;
+  const SLACK = 5000; // ms tolerance na okrajích pokusu
+  function attribute(tms: number): { projectId: string | null; wishId: string | null } {
+    for (const a of attemptRows) {
+      const s = new Date(a.started_at).getTime();
+      const f = a.finished_at ? new Date(a.finished_at).getTime() : Date.now();
+      if (tms >= s - SLACK && tms <= f + SLACK)
+        return { projectId: a.project_id, wishId: a.wish_id };
+    }
+    return { projectId: null, wishId: null };
+  }
+
   const toInsert: (typeof costLedger.$inferInsert)[] = [];
+  const wishDelta = new Map<string, number>();
   let maxTs = watermark;
   for (const l of logs) {
     // startTime je ::text "YYYY-MM-DD HH:MM:SS.mmm" v UTC → doplň T a Z.
@@ -129,10 +156,13 @@ export async function runSpendSyncOnce(): Promise<void> {
     if (refId && seen.has(refId)) continue;
     const ip = String(l.requester_ip_address ?? "");
     const scope: "attempt" | "system" = ip.startsWith(WORKERNET_PREFIX) ? "attempt" : "system";
+    const cost = Number(l.spend) || 0;
+    const attr = scope === "attempt" ? attribute(d.getTime()) : { projectId: null, wishId: null };
+    if (attr.wishId) wishDelta.set(attr.wishId, (wishDelta.get(attr.wishId) ?? 0) + cost);
     toInsert.push({
       ts: new Date(iso),
       userId: asUuid(l.user) ?? owner,
-      projectId: null,
+      projectId: attr.projectId,
       scope,
       refId,
       provider: l.custom_llm_provider ?? null,
@@ -140,13 +170,18 @@ export async function runSpendSyncOnce(): Promise<void> {
       tokensIn: l.prompt_tokens ?? 0,
       tokensOut: l.completion_tokens ?? 0,
       tokensCached: cachedTokens(l.metadata),
-      costUsd: Number(l.spend) || 0,
+      costUsd: cost,
       isShadow: false,
     });
   }
 
   if (toInsert.length > 0) {
     await getDb().insert(costLedger).values(toInsert);
+  }
+  // Propiš přírůstky útraty do přání (spentUsd). Idempotentní: každý spend log
+  // (refId) se započítá právě jednou (dedup výše).
+  for (const [wishId, delta] of wishDelta) {
+    await db`UPDATE wishes SET spent_usd = COALESCE(spent_usd, 0) + ${delta} WHERE id = ${wishId}::uuid`;
   }
 
   await db`
