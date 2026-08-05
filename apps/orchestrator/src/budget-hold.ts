@@ -51,4 +51,32 @@ export async function runBudgetHoldOnce(): Promise<void> {
       console.error(`[budget-hold] obnovení projektu ${project.id} selhalo:`, err);
     }
   }
+
+  // Circuit-breaker pauza (5 parked/den → paused) se stejně jako rozpočet resetuje
+  // s denním oknem — jinak by autonomní farma po pár parkech stála až do ručního
+  // zásahu. Obnovíme po resetu okna, ale JEN když je útrata pod stropem a kredity OK
+  // (denní $ strop tak zůstává jediná tvrdá brzda; při trvalém selhávání se projekt
+  // týž den zas zaparkuje — flapping je omezený denním capem).
+  const paused = await getDb().select().from(projects).where(eq(projects.status, "paused"));
+  for (const project of paused) {
+    try {
+      const pausedSince = project.updatedAt ?? project.createdAt ?? now;
+      if (!shouldAutoResume(pausedSince, now)) continue;
+      const caps = await getCaps(project.userId, project.id);
+      const spend = await spendSnapshot(project.userId, project.id);
+      if (checkBudget(spend, caps, cfg.perAttemptBudgetUsd) !== null) continue;
+      const credit = await creditBalance(project.userId);
+      if (!credit.ok) continue;
+
+      projectMachine.assert("paused", "active");
+      await getDb().update(projects).set({ status: "active" }).where(eq(projects.id, project.id));
+      await logEvent({
+        projectId: project.id,
+        type: "circuit_breaker_resumed",
+        message: "Circuit-breaker okno se resetovalo — projekt automaticky obnoven.",
+      });
+    } catch (err) {
+      console.error(`[budget-hold] obnovení pauznutého projektu ${project.id} selhalo:`, err);
+    }
+  }
 }
