@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { EventsFeed } from "@/components/EventsFeed";
 import { RealtimeRefresh } from "@/components/RealtimeRefresh";
 import { PauseResumeButton } from "@/components/projects/PauseResumeButton";
+import { PushToProductionButton } from "@/components/projects/PushToProductionButton";
 import { ProjectMessageBox } from "@/components/projects/ProjectMessageBox";
 import { ProjectBrain } from "@/components/projects/ProjectBrain";
 import { AutonomyControls } from "@/components/projects/AutonomyControls";
@@ -40,6 +41,15 @@ export default async function ProjectMissionControl({
     .maybeSingle<ProjectRow>();
   if (!projectData) notFound();
   const project = projectData;
+
+  // Stav posledního Push-to-Production (deploy_requests klíčuje na název projektu).
+  const { data: lastDeploy } = await supabase
+    .from("deploy_requests")
+    .select("status")
+    .eq("project", project.name)
+    .order("requested_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ status: string }>();
 
   const [{ data: wishesData }, { data: tasksData }, { data: agentsData }, { data: eventsData }, { data: costRows }] =
     await Promise.all([
@@ -128,6 +138,7 @@ export default async function ProjectMissionControl({
             <Link href={`/projects/${id}/wishes/new`} className={primaryLink}>
               + Nové přání
             </Link>
+            <PushToProductionButton projectId={id} lastStatus={lastDeploy?.status ?? null} />
             <PauseResumeButton projectId={id} status={project.status} />
           </div>
         }
