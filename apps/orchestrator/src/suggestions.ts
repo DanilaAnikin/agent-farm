@@ -98,13 +98,14 @@ async function existingTitles(projectId: string): Promise<string[]> {
 }
 
 /** Vygeneruje návrhy pro jeden projekt (pokud je čas a dává to smysl). */
-export async function generateSuggestionsForProject(project: Project): Promise<void> {
+export async function generateSuggestionsForProject(project: Project, force = false): Promise<void> {
   const a = autonomy(project);
   if (a.proactive === false) return; // opt-out (default zapnuto)
   if (project.status !== "active") return;
 
   const cadenceH = a.cadenceHours && a.cadenceHours > 0 ? a.cadenceHours : DEFAULT_CADENCE_H;
-  if (!(await cadenceElapsed(project.id, cadenceH))) return;
+  // force=true (idle refill z self-run) obejde kadenci — ať farma nikdy nezůstane bez práce.
+  if (!force && !(await cadenceElapsed(project.id, cadenceH))) return;
   if ((await openTaskCount(project.id)) >= DROWNING_OPEN_TASKS) return;
 
   // Kredity — návrhy stojí LLM volání; bez kreditu je negenerujeme.
@@ -249,7 +250,17 @@ export async function runSelfRunOnce(): Promise<void> {
       .orderBy(desc(suggestions.createdAt))
       .limit(1); // po jednom za kolo — ať se to nezasekne v jedné dávce
     const top = news[0];
-    if (!top) continue;
+    if (!top) {
+      // Žádný nevyřízený návrh a projekt je IDLE (0 rozdělané práce) → vygeneruj
+      // čerstvé návrhy HNED (bypass 12h kadence). Zaručí, že autopilot nikdy nestojí
+      // bez práce; příští kolo self-runu je převede na přání.
+      if ((await openTaskCount(p.id)) === 0) {
+        await generateSuggestionsForProject(p, true).catch((e) =>
+          console.error(`[self-run] idle-refill návrhů pro ${p.id} selhal:`, e),
+        );
+      }
+      continue;
+    }
 
     const wishId = await convertSuggestionToWish(top.id, "dashboard").catch(() => null);
     if (wishId) {
