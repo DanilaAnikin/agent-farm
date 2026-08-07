@@ -238,21 +238,55 @@ export async function removeWorktree(
     .catch((e) => console.error("[git] removeWorktree selhalo (best-effort):", e));
 }
 
-/** Commitne veškeré změny ve worktree (worker pracuje lokálně, bez remote přístupu). */
+export interface DiffStat {
+  files: number;
+  additions: number;
+  deletions: number;
+  // Index signatura → kompatibilní s jsonb sloupcem (Record<string, unknown>) v drizzle.
+  [key: string]: number;
+}
+
+/**
+ * Spočítá rozsah změn větve worktree vůči main (base…HEAD = co PR přidává).
+ * Best-effort observability — NIKDY nesmí shodit commit/attempt, proto vše v try.
+ */
+async function computeDiffStat(git: SimpleGit): Promise<DiffStat | null> {
+  try {
+    // Base branch: main (fallback master). V shared repu existuje jako ref i ve worktree.
+    const branches = await git.branch();
+    const base = branches.all.includes("main")
+      ? "main"
+      : branches.all.includes("master")
+        ? "master"
+        : null;
+    if (!base) return null;
+    const sum = await git.diffSummary([`${base}...HEAD`]);
+    return { files: sum.changed, additions: sum.insertions, deletions: sum.deletions };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Commitne veškeré změny ve worktree (worker pracuje lokálně, bez remote přístupu).
+ * Vrací i diffStat (rozsah vůči main) pro judge/dashboard — 0/N diffů byla observability díra.
+ */
 export async function commitWorktree(
   worktreePath: string,
   message: string,
-): Promise<{ committed: boolean }> {
+): Promise<{ committed: boolean; diffStat: DiffStat | null }> {
   const git = simpleGit(worktreePath);
   await git.add(["-A"]);
   const status = await git.status();
   if (status.files.length === 0 && status.staged.length === 0) {
-    return { committed: false };
+    // I bez nového commitu může větev nést změny vůči main (dřívější commit workera) —
+    // změř to, ať judge/dashboard vidí realitu.
+    return { committed: false, diffStat: await computeDiffStat(git) };
   }
   await git.addConfig("user.email", "farm@agent-farm.local");
   await git.addConfig("user.name", "Perennial Worker");
   await git.commit(message);
-  return { committed: true };
+  return { committed: true, diffStat: await computeDiffStat(git) };
 }
 
 export interface MergeResult {

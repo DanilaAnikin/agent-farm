@@ -34,25 +34,56 @@ export interface EphemeralKey {
   expires?: string;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Vytvoří ephemeral klíč. RETRY na connection chyby ("fetch failed"/ECONNREFUSED)
+ * a 5xx z LiteLLM — bez toho každý transient výpadek litellm shodil celý dispatch
+ * pokus → requeue (byla to hlavní příčina 4260× "dispatch_error: fetch failed" +
+ * 10k requeue churn). 4xx (např. špatný master key) je trvalé → nezkoušíme dokola.
+ */
 export async function mintEphemeralKey(opts: EphemeralKeyOptions): Promise<EphemeralKey> {
-  const res = await fetch(`${baseUrl()}/key/generate`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${masterKey()}`,
-    },
-    body: JSON.stringify({
-      max_budget: opts.maxBudgetUsd,
-      duration: opts.duration ?? "35m",
-      models: opts.models ?? WORKER_MODELS,
-      metadata: opts.metadata ?? {},
-    }),
+  const body = JSON.stringify({
+    max_budget: opts.maxBudgetUsd,
+    duration: opts.duration ?? "35m",
+    models: opts.models ?? WORKER_MODELS,
+    metadata: opts.metadata ?? {},
   });
-  if (!res.ok) {
-    throw new Error(`mintEphemeralKey failed: ${res.status} ${await res.text().catch(() => "")}`);
+  const MAX = 6;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < MAX; attempt++) {
+    try {
+      const res = await fetch(`${baseUrl()}/key/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${masterKey()}` },
+        body,
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        // 5xx = LiteLLM dočasně nezdravý → zkus znovu; 4xx = trvalá chyba.
+        if (res.status >= 500 && attempt < MAX - 1) {
+          await sleep(1000 * (attempt + 1));
+          continue;
+        }
+        throw new Error(`mintEphemeralKey failed: ${res.status} ${txt}`);
+      }
+      const json = (await res.json()) as { key: string; expires?: string };
+      return { key: json.key, expires: json.expires };
+    } catch (e) {
+      const msg = String((e as { message?: string })?.message ?? e);
+      const isConn =
+        msg.includes("fetch failed") ||
+        msg.includes("ECONNREFUSED") ||
+        msg.includes("ECONNRESET") ||
+        msg.includes("socket") ||
+        msg.includes("aborted") ||
+        msg.includes("timeout");
+      if (!isConn || attempt >= MAX - 1) throw e;
+      lastErr = e;
+      await sleep(1000 * (attempt + 1));
+    }
   }
-  const json = (await res.json()) as { key: string; expires?: string };
-  return { key: json.key, expires: json.expires };
+  throw lastErr instanceof Error ? lastErr : new Error("mintEphemeralKey: vyčerpány pokusy");
 }
 
 export async function revokeKey(key: string): Promise<void> {

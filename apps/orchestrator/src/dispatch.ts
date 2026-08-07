@@ -36,7 +36,7 @@ import { creditBalance } from "@farm/billing";
 import { logEvent } from "./events.js";
 import { spendSnapshot } from "./cost.js";
 import { isGlobalPaused, getCaps } from "./settings.js";
-import { ensureRepo, createWorktree, commitWorktree, removeWorktree } from "./git.js";
+import { ensureRepo, createWorktree, commitWorktree, removeWorktree, type DiffStat } from "./git.js";
 import { spawnWorker, killContainer, runJudgeContainer } from "./docker.js";
 import { scoreCandidate, JUDGE_CMD, exitCode } from "./judge.js";
 import { registerAgent, heartbeatAgent, releaseAgent } from "./agents-registry.js";
@@ -408,8 +408,10 @@ async function dispatchBestOfN(
         void getDb().update(attempts).set({ heartbeatAt: new Date() }).where(eq(attempts.id, attemptId)).catch(() => undefined);
       }, 30_000);
       let score: number;
+      let candDiffStat: DiffStat | null = null;
       try {
-        await commitWorktree(wt.worktreePath, `farm: ${task.title}\n\nTask ${task.id}\n${task.doneCondition}`);
+        const commitOut = await commitWorktree(wt.worktreePath, `farm: ${task.title}\n\nTask ${task.id}\n${task.doneCondition}`);
+        candDiffStat = commitOut.diffStat;
         // Mechanické prescore (build/test/lint) — deterministické, bez LLM.
         const run = await runJudgeContainer({ workspaceHostPath: wt.worktreePath, cmd: JUDGE_CMD });
         score = scoreCandidate({
@@ -423,7 +425,7 @@ async function dispatchBestOfN(
       // Pokus zůstává 'running' se score SET → recon ho NEreapuje (Patch 1) a čeká na výběr.
       await getDb()
         .update(attempts)
-        .set({ score, stepsUsed: outcome.steps, wallMs: Date.now() - startedAt, outputSummary: outcome.text.slice(0, 8000), heartbeatAt: new Date() })
+        .set({ score, stepsUsed: outcome.steps, wallMs: Date.now() - startedAt, outputSummary: outcome.text.slice(0, 8000), diffStat: candDiffStat ?? undefined, heartbeatAt: new Date() })
         .where(eq(attempts.id, attemptId));
       candidateOk = true;
       candidates.push({ attemptId, candidateIdx: idx, branch: wt.branch, worktreePath: wt.worktreePath, score });
@@ -722,6 +724,7 @@ async function dispatchTask(
         stepsUsed: outcome.steps,
         wallMs: Date.now() - startedAt,
         outputSummary: outcome.text.slice(0, 8000),
+        diffStat: commit.diffStat ?? undefined,
         heartbeatAt: new Date(),
       })
       .where(eq(attempts.id, attemptId));
