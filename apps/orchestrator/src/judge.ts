@@ -103,12 +103,40 @@ export async function runJudgeOnce(): Promise<void> {
     await ackDelete(QUEUES.judge, msgId);
   } catch (err) {
     console.error(`[judge] posouzení attempt ${message.attemptId} selhalo:`, err);
+
+    // 402 (vyčerpaný rozpočet) / 429 (rate limit) NENÍ chyba pokusu — pokus je
+    // hotový a ZAPLACENÝ. Původní kód ho i tak označil 'failed' a přehodil celý
+    // task zpátky do fronty, takže se zahazovala hotová práce a task se dělal
+    // znovu — jen aby narazil na tentýž strop (303× za jedno odpoledne, výsledek
+    // 3 úspěchy/den). Správně: nech stav být a zopakuj JEN judge s odstupem.
+    const errText = String(err);
+    const transient = /\b(402|429)\b|budget|rate.?limit|too many requests/i.test(errText);
+    const judgeRetries = (message.judgeRetries ?? 0) + 1;
+    const MAX_JUDGE_RETRIES = Number(process.env.MAX_JUDGE_RETRIES ?? 8);
+    if (transient && judgeRetries <= MAX_JUDGE_RETRIES) {
+      // Rozpočet se resetuje v denním okně → u 402 čekej dlouho, u 429 krátce.
+      const isBudget = /\b402\b|budget/i.test(errText);
+      const delaySec = isBudget
+        ? Math.min(3600, 900 * judgeRetries)
+        : Math.min(300, 15 * 2 ** judgeRetries);
+      await logEvent({
+        projectId: message.projectId,
+        taskId: message.taskId,
+        level: "warn",
+        type: "judge_retry_transient",
+        message: `Judge odložen o ${delaySec} s (${isBudget ? "rozpočet 402" : "rate limit 429"}, pokus ${judgeRetries}/${MAX_JUDGE_RETRIES}) — hotová práce zachována.`,
+      });
+      await enqueue(QUEUES.judge, { ...message, judgeRetries }, delaySec);
+      await ackDelete(QUEUES.judge, msgId);
+      return;
+    }
+
     await logEvent({
       projectId: message.projectId,
       taskId: message.taskId,
       level: "error",
       type: "judge_error",
-      message: `Judge selhal: ${String(err)}`,
+      message: `Judge selhal: ${errText}`,
     });
     // NEnech task uvíznout v 'judging' (jinak by přání nikdy nedokončilo a refill
     // by se zablokoval). Vrať task do fronty a znovu zařaď (infra chyba, ne verdikt).

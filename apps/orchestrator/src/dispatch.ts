@@ -935,7 +935,10 @@ async function requeueNoPenalty(
   // running → queued (infra kill; bez penalizace, viz taskMachine)
   await getDb().update(tasks).set({ status: "queued" }).where(eq(tasks.id, task.id));
   const requeued: TaskMessage = { ...message, note: reason, infraRetries };
-  await enqueue(QUEUES.tasks, requeued);
+  // Exponenciální backoff (2^n s, strop 5 min). Bez něj se zpráva vracela okamžitě
+  // viditelná a 4 dispatch smyčky po 2 s ji semlely tisíckrát za hodinu.
+  const delaySec = Math.min(300, 2 ** infraRetries);
+  await enqueue(QUEUES.tasks, requeued, delaySec);
   await ackDelete(QUEUES.tasks, msgId);
 }
 

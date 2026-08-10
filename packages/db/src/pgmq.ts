@@ -23,13 +23,23 @@ export interface QueueMessage<T = unknown> {
 
 const DEFAULT_VT = Number(process.env.PGMQ_VISIBILITY_TIMEOUT_SEC ?? 2400); // 40 min > 30 min wall-clock
 
-/** Vloží zprávu do fronty. Vrací msg_id. */
-export async function enqueue<T>(queue: QueueName, payload: T): Promise<string> {
+/**
+ * Vloží zprávu do fronty. Vrací msg_id.
+ *
+ * `delaySeconds` = za jak dlouho se zpráva stane viditelnou. Bez něj se selhavší
+ * task vracel do fronty okamžitě a 4 dispatch smyčky po 2 s ho zkoušely znovu
+ * tisíckrát za hodinu (naměřeno 2 664 pokusů/hod). Používej u requeue po chybě.
+ */
+export async function enqueue<T>(
+  queue: QueueName,
+  payload: T,
+  delaySeconds = 0,
+): Promise<string> {
   const sql = getSql();
   // JSON.stringify → text parametr → ::jsonb cast. Spolehlivé napříč postgres-js
   // verzemi (sql.json() se v pozici argumentu funkce s castem neserializuje správně).
   const rows = await sql<{ send: string }[]>`
-    SELECT pgmq.send(${queue}, ${JSON.stringify(payload)}::jsonb) AS send
+    SELECT pgmq.send(${queue}, ${JSON.stringify(payload)}::jsonb, ${Math.max(0, Math.trunc(delaySeconds))}) AS send
   `;
   return String(rows[0]?.send ?? "");
 }

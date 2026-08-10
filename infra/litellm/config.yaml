@@ -134,7 +134,14 @@ litellm_settings:
   drop_params: true
   success_callback: ["postgres"]
   failure_callback: ["postgres"]
-  max_budget: 5           # tvrdý denní strop CELÉ farmy (USD, dle sledované hodnoty)
+  # Runaway backstop, NE hlavní brzda. Primár je OpenCode Go = paušál $10/měsíc,
+  # takže "cena" sledovaná LiteLLM u něj neodpovídá reálným penězům; skutečné
+  # peníze utrácí až DeepSeek fallback a ten hlídá app-level denní strop
+  # (profiles.caps_override.dailyCapUsd = $10) + per-projekt daily_cap_usd.
+  # Původních $5 byla nejhorší možná brzda: po vyčerpání vracel LiteLLM 402 na
+  # VŠECHNO včetně judge, takže se zahazovaly už zaplacené dokončené pokusy
+  # (303× "Judge selhal: 402" za jediné odpoledne) a farma dala 3 úspěchy/den.
+  max_budget: 25
   budget_duration: 1d
 
 general_settings:

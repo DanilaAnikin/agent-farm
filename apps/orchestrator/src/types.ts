@@ -23,6 +23,8 @@ export interface JudgeMessage {
   wishId?: string | null;
   branch: string;
   worktreeRef: string;
+  /** Kolikrát už se judge opakoval kvůli dočasné chybě poskytovatele (402/429). */
+  judgeRetries?: number;
 }
 
 /**

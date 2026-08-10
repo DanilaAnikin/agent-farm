@@ -202,14 +202,38 @@ export async function createWorktree(
     const worktreePath = join(wsPath, "..", `${projectId}--${taskId}${suffix}`);
     const git = simpleGit(wsPath);
 
-    // Odstraň případný starý worktree se stejným jménem (crash recovery).
-    await git.raw(["worktree", "prune"]).catch(() => undefined);
+    // Crash recovery starého worktree. POŘADÍ JE ZÁSADNÍ — dřívější varianta
+    // (prune → remove → branch -D) neuměla vyhrabat dva stavy, které v praxi
+    // vznikají a jsou TRVALÉ: task pak selhal na `worktree add` tisíckrát za
+    // hodinu (21 tis. pokusů/den, 98 % všech selhání), dokud se nezaparkoval.
+    //   A) adresář existuje, ale `.git` v něm chybí → `worktree remove` řekne
+    //      "is not a working tree", spolkne se, a `add` narazí na plný adresář.
+    //   B) worker si uvnitř /workspace pustil `git init` → `.git` je adresář
+    //      místo souboru → `remove` selže na validaci, `branch -D` na "checked
+    //      out at ...", a `add -b` na existující větvi.
+    // Jediné, co obojí spolehlivě vyřeší, je TVRDÉ smazání adresáře; teprve pak
+    // má `prune` co odregistrovat a `branch -D` uspěje.
+    await git.raw(["worktree", "remove", "--force", worktreePath]).catch(() => undefined);
     if (await pathExists(worktreePath)) {
-      await git.raw(["worktree", "remove", "--force", worktreePath]).catch(() => undefined);
+      await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
     }
+    await git.raw(["worktree", "prune"]).catch(() => undefined);
     await git.branch(["-D", branch]).catch(() => undefined);
 
-    await git.raw(["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
+    // Pojistka: kdyby recovery přesto neuspěla, NEVYHAZUJ výjimku donekonečna —
+    // uhni na unikátní jméno. Task tak nikdy neuvázne v nekonečné smyčce.
+    try {
+      await git.raw(["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
+    } catch (err) {
+      const alt = `${branch}-r${Date.now().toString(36)}`;
+      const altPath = `${worktreePath}-r${Date.now().toString(36)}`;
+      console.warn(
+        `[git] worktree add selhal pro ${branch} (${String(err).slice(0, 120)}) → uhýbám na ${alt}`,
+      );
+      await git.raw(["worktree", "add", "-b", alt, altPath, "HEAD"]);
+      await execFileP("chown", ["-R", "1001:1001", altPath]).catch(() => undefined);
+      return { worktreePath: altPath, branch: alt };
+    }
       // Worker/judge opencode bezi jako UID 1001; orchestrator (root)
       // vytvoril soubory jako root -> bez chownu "permission denied" na
       // /workspace a agent nic nezmeni. Pres bind-mount se to promitne

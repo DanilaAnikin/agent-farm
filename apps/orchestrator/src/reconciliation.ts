@@ -22,7 +22,9 @@ import type { TaskMessage } from "./types.js";
 const STALE_MS = Number(process.env.ATTEMPT_STALE_HEARTBEAT_MS ?? 3 * 60_000);
 // 'queued' task bez zpracování déle než tohle = ztracená/chybějící zpráva (nebo
 // dashboard retry, který pgmq neumí) → znovu zařadit. Kratší než recon interval.
-const QUEUED_STALE_MS = Number(process.env.QUEUED_STALE_MS ?? 60_000);
+// 10 min, ne 60 s: při MAX_WORKERS_TOTAL se dispatch vrací BEZ doteku tasku, takže
+// legitimní čekání ve frontě je běžně delší než minuta a task se tvářil jako osiřelý.
+const QUEUED_STALE_MS = Number(process.env.QUEUED_STALE_MS ?? 10 * 60_000);
 // 'judging' task uvázlý (ztracená judge zpráva) — delší práh, judge build/test trvá.
 const JUDGING_STALE_MS = Number(process.env.JUDGING_STALE_MS ?? 15 * 60_000);
 
@@ -72,6 +74,15 @@ async function reconcileOrphanedTasks(): Promise<void> {
         -- membership), NE = ANY(...) (to vyzaduje pg pole a v runtime hazi chybu).
         SELECT 1 FROM tasks d
         WHERE t.depends_on ? (d.id::text) AND d.status <> 'done'
+      )
+      -- KRITICKÉ: "osiřelý" = queued a BEZ živé zprávy ve frontě. Bez téhle
+      -- podmínky (dřív chyběla, ačkoliv ji komentář sliboval) přidával každý
+      -- běh DALŠÍ zprávu pro tentýž task: fronta narostla na 103 zpráv pro
+      -- 4 tasky. A protože čítač infraRetries žije v payloadu zprávy, každý
+      -- duplikát resetoval počítadlo → task se místo po 10 pokusech parkoval
+      -- až po tisících (21 016 dispatch_error vs. 7 task_parked_infra).
+      AND NOT EXISTS (
+        SELECT 1 FROM pgmq.q_q_tasks q WHERE q.message->>'taskId' = t.id::text
       )
   `;
   for (const t of queued) {
