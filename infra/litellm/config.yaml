@@ -1,11 +1,68 @@
 # =============================================================================
-# LiteLLM proxy — DeepSeek-only varianta (homelab, jen DEEPSEEK_API_KEY).
-# Všechny role (manager/worker/judge/cheap) běží přes DeepSeek V4 (pro/flash).
-# Tvrdý denní strop celé farmy = $5.
+# LiteLLM proxy — PRIMÁR: OpenCode Go (flat $10/měs, 6× hodnota), FALLBACK: přímý DeepSeek.
+# Když OpenCode Go narazí na limit ($12/5h, $30/týd, $60/měs → 429/4xx), router
+# automaticky přepne na přímé DeepSeek/Kimi API (jako dosud). Tvrdý denní strop drží.
+# Model ID u OpenCode Go = holé (deepseek-v4-flash…), endpoint /zen/go/v1 (OpenAI-compat).
 # =============================================================================
 
 model_list:
+  # ---------- PRIMÁR: OpenCode Go ----------
   - model_name: manager
+    litellm_params:
+      model: openai/deepseek-v4-pro
+      api_key: os.environ/OPENCODE_GO_API_KEY
+      api_base: https://opencode.ai/zen/go/v1
+    model_info:
+      input_cost_per_token: 0.000000435
+      output_cost_per_token: 0.00000087
+
+  - model_name: worker
+    litellm_params:
+      model: openai/kimi-k3
+      api_key: os.environ/OPENCODE_GO_API_KEY
+      api_base: https://opencode.ai/zen/go/v1
+    model_info:
+      input_cost_per_token: 0.0000006
+      output_cost_per_token: 0.0000025
+
+  - model_name: worker-hard
+    litellm_params:
+      model: openai/kimi-k3
+      api_key: os.environ/OPENCODE_GO_API_KEY
+      api_base: https://opencode.ai/zen/go/v1
+    model_info:
+      input_cost_per_token: 0.0000006
+      output_cost_per_token: 0.0000025
+
+  - model_name: judge
+    litellm_params:
+      model: openai/deepseek-v4-pro
+      api_key: os.environ/OPENCODE_GO_API_KEY
+      api_base: https://opencode.ai/zen/go/v1
+    model_info:
+      input_cost_per_token: 0.000000435
+      output_cost_per_token: 0.00000087
+
+  - model_name: cheap
+    litellm_params:
+      model: openai/deepseek-v4-flash
+      api_key: os.environ/OPENCODE_GO_API_KEY
+      api_base: https://opencode.ai/zen/go/v1
+    model_info:
+      input_cost_per_token: 0.00000014
+      output_cost_per_token: 0.00000028
+
+  - model_name: media-vlm
+    litellm_params:
+      model: openai/deepseek-v4-flash
+      api_key: os.environ/OPENCODE_GO_API_KEY
+      api_base: https://opencode.ai/zen/go/v1
+    model_info:
+      input_cost_per_token: 0.00000014
+      output_cost_per_token: 0.00000028
+
+  # ---------- FALLBACK: přímé DeepSeek/Kimi API (přes limit OpenCode Go) ----------
+  - model_name: manager-fallback
     litellm_params:
       model: deepseek/deepseek-v4-pro
       api_key: os.environ/DEEPSEEK_API_KEY
@@ -13,24 +70,6 @@ model_list:
     model_info:
       input_cost_per_token: 0.000000435
       output_cost_per_token: 0.00000087
-
-  - model_name: worker
-    litellm_params:
-      model: moonshot/kimi-k3
-      api_key: os.environ/MOONSHOT_API_KEY
-      api_base: https://api.moonshot.ai/v1
-    model_info:
-      input_cost_per_token: 0.0000006
-      output_cost_per_token: 0.0000025
-
-  - model_name: worker-hard
-    litellm_params:
-      model: moonshot/kimi-k3
-      api_key: os.environ/MOONSHOT_API_KEY
-      api_base: https://api.moonshot.ai/v1
-    model_info:
-      input_cost_per_token: 0.0000006
-      output_cost_per_token: 0.0000025
 
   - model_name: worker-fallback
     litellm_params:
@@ -41,7 +80,7 @@ model_list:
       input_cost_per_token: 0.00000014
       output_cost_per_token: 0.00000028
 
-  - model_name: judge
+  - model_name: worker-hard-fallback
     litellm_params:
       model: deepseek/deepseek-v4-pro
       api_key: os.environ/DEEPSEEK_API_KEY
@@ -50,18 +89,16 @@ model_list:
       input_cost_per_token: 0.000000435
       output_cost_per_token: 0.00000087
 
-  - model_name: cheap
+  - model_name: judge-fallback
     litellm_params:
-      model: deepseek/deepseek-v4-flash
+      model: deepseek/deepseek-v4-pro
       api_key: os.environ/DEEPSEEK_API_KEY
       api_base: https://api.deepseek.com
     model_info:
-      input_cost_per_token: 0.00000014
-      output_cost_per_token: 0.00000028
+      input_cost_per_token: 0.000000435
+      output_cost_per_token: 0.00000087
 
-  # media-vlm role se v čistě-kódovacím režimu nepoužívá; namapováno na DeepSeek flash,
-  # aby proxy nevyžadovala ZAI/DASHSCOPE klíče.
-  - model_name: media-vlm
+  - model_name: cheap-fallback
     litellm_params:
       model: deepseek/deepseek-v4-flash
       api_key: os.environ/DEEPSEEK_API_KEY
@@ -82,8 +119,11 @@ model_list:
 router_settings:
   routing_strategy: simple-shuffle
   fallbacks:
+    - manager: ["manager-fallback"]
     - worker: ["worker-fallback"]
-    - worker-hard: ["worker", "worker-fallback"]
+    - worker-hard: ["worker-hard-fallback", "worker-fallback"]
+    - judge: ["judge-fallback"]
+    - cheap: ["cheap-fallback"]
     - media-vlm: ["media-vlm-fallback"]
   num_retries: 2
   request_timeout: 600
@@ -94,7 +134,7 @@ litellm_settings:
   drop_params: true
   success_callback: ["postgres"]
   failure_callback: ["postgres"]
-  max_budget: 5           # tvrdý denní strop CELÉ farmy (USD)
+  max_budget: 5           # tvrdý denní strop CELÉ farmy (USD, dle sledované hodnoty)
   budget_duration: 1d
 
 general_settings:
