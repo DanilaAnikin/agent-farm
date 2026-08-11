@@ -104,13 +104,21 @@ test("chyba nese entitu a směr přechodu", () => {
   }
 });
 
-test("terminální stavy nedovolí žádný přechod (stopped/done/…)", () => {
-  // project.stopped
-  assert.deepEqual(projectMachine.table.stopped, []);
-  for (const to of ["active", "paused", "budget_hold", "stopped"] as const) {
+test("project.stopped: jen znovuzapnutí, nic jiného", () => {
+  // 'stopped' NENÍ terminální — dashboard ho odjakživa nabízí znovu zapnout
+  // (PauseResumeButton bere stopped jako pauzu a cílí na 'active') a stejnou
+  // cestou jede postupný rollout projektů. Tabulka tuhle realitu jen dohnala.
+  assert.deepEqual(projectMachine.table.stopped, ["active"]);
+  assert.equal(projectMachine.can("stopped", "active"), true);
+  assert.doesNotThrow(() => projectMachine.assert("stopped", "active"));
+  // ...ale žádný jiný přechod ze 'stopped' legální není.
+  for (const to of ["paused", "budget_hold", "stopped"] as const) {
     assert.equal(projectMachine.can("stopped", to), false);
     assert.throws(() => projectMachine.assert("stopped", to), InvalidTransitionError);
   }
+});
+
+test("terminální stavy nedovolí žádný přechod (done/…)", () => {
   // wish.done
   assert.deepEqual(wishMachine.table.done, []);
   for (const to of ["active", "parked", "specifying", "done"] as const) {

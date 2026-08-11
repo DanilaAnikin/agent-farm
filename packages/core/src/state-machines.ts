@@ -15,7 +15,12 @@ const PROJECT: Record<ProjectStatus, ProjectStatus[]> = {
   active: ["paused", "budget_hold", "stopped"],
   paused: ["active", "stopped"],
   budget_hold: ["active", "paused", "stopped"], // auto-resume při resetu okna → active
-  stopped: [], // terminální
+  // 'stopped' NENÍ terminální: slouží i jako čekárna postupného rolloutu
+  // (farm-project-rollout.py zapíná projekty po jednom, když projdou zdravotní
+  // brány). Musí to být legální přechod, jinak by projectMachine.assert() na
+  // téhle cestě vyhodil výjimku. Pozn.: 'paused' se na čekárnu použít NEDÁ —
+  // budget-hold.ts každý 'paused' projekt sám probudí po denním resetu.
+  stopped: ["active"],
 };
 
 const WISH: Record<WishStatus, WishStatus[]> = {
