@@ -38,8 +38,11 @@ export async function enqueue<T>(
   const sql = getSql();
   // JSON.stringify → text parametr → ::jsonb cast. Spolehlivé napříč postgres-js
   // verzemi (sql.json() se v pozici argumentu funkce s castem neserializuje správně).
+  // Přetypování NENÍ kosmetika: pgmq.send má víc přetížení (delay jako integer
+  // i jako timestamptz), takže netypovaný parametr skončí na
+  // "function pgmq.send(unknown, jsonb, unknown) is not unique" a NIC se nezařadí.
   const rows = await sql<{ send: string }[]>`
-    SELECT pgmq.send(${queue}, ${JSON.stringify(payload)}::jsonb, ${Math.max(0, Math.trunc(delaySeconds))}) AS send
+    SELECT pgmq.send(${queue}::text, ${JSON.stringify(payload)}::jsonb, ${Math.max(0, Math.trunc(delaySeconds))}::integer) AS send
   `;
   return String(rows[0]?.send ?? "");
 }
