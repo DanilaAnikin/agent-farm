@@ -43,16 +43,21 @@ const GiB = 1024 ** 3;
 const WORKER_LIMITS = {
   Memory: Number(process.env.WORKER_MEM_BYTES ?? 3 * GiB),
   MemorySwap: Number(process.env.WORKER_MEM_BYTES ?? 3 * GiB),
-  NanoCpus: Number(process.env.WORKER_NANO_CPUS ?? 1_500_000_000), // 1,5 jádra
+  NanoCpus: Number(process.env.WORKER_NANO_CPUS ?? 1_000_000_000), // 1 jádro
   PidsLimit: 512,
 };
 // Judge dělá install+build+test — nejtěžší workload, dostane víc.
 const JUDGE_LIMITS = {
   Memory: Number(process.env.JUDGE_MEM_BYTES ?? 4 * GiB),
   MemorySwap: Number(process.env.JUDGE_MEM_BYTES ?? 4 * GiB),
-  NanoCpus: Number(process.env.JUDGE_NANO_CPUS ?? 2_000_000_000), // 2 jádra
+  NanoCpus: Number(process.env.JUDGE_NANO_CPUS ?? 1_500_000_000), // 1,5 jádra
   PidsLimit: 1024,
 };
+// CPU rozpočet farmy: homelab má 8 jader a běží na něm ~116 kontejnerů včetně
+// produkce (Freio, Postiz, Ripieno…). Při MAX_WORKERS_TOTAL=3 a 2 judge slotech
+// je strop 3×1 + 2×1,5 = 6 jader, takže 2 zůstanou zbytku. Původních 1,5/2 při
+// 4 workerech dávalo strop 10 jader na 8jádrovém stroji — naměřeno load 28,86
+// a 2 % idle, tzn. farma dusila i služby, které s ní nesouvisí.
 const FAKE_OPENCODE_URL = process.env.FAKE_OPENCODE_URL ?? "http://127.0.0.1:4020";
 
 /** Spustí shell příkaz na hostu (jen LOKÁLNÍ režim). */
