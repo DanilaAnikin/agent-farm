@@ -224,7 +224,81 @@ async function judgeWork(
   const lintOk = exitCode(run.stdout, "LINT_EXIT") === 0;
 
   // 2) Diff proti main
-  const { files, diffText } = await computeDiff(message.projectId, message.branch);
+  const { files, diffText, error: diffError } = await computeDiff(message.projectId, message.branch);
+
+  // 2a) Diff se NEPODAŘILO spočítat → je to infra chyba, ne chyba workera.
+  // Poslat judgeovi prázdný diff znamená jistý reject za něco, co worker možná
+  // udělal správně (a po 3 takových rejectech task navždy skončí v 'parked').
+  // Společný odchod: pokus uzavřít, task zpět do fronty BEZ penalizace.
+  const requeueWithoutPenalty = async (
+    attemptStatus: "aborted" | "rejected",
+    note: string,
+  ): Promise<void> => {
+    await getDb()
+      .update(attempts)
+      .set({ status: attemptStatus, finishedAt: new Date() })
+      .where(and(eq(attempts.id, message.attemptId), eq(attempts.status, "running")));
+    taskMachine.assert("judging", "queued");
+    await getDb().update(tasks).set({ status: "queued" }).where(eq(tasks.id, task.id));
+    await requeueTask(task, message, note, true);
+  };
+
+  if (diffError) {
+    await logEvent({
+      projectId: project.id,
+      taskId: task.id,
+      level: "warn",
+      type: "judge_diff_unavailable",
+      message: `Diff proti main nešel spočítat (${diffError}) — vracím do fronty BEZ penalizace, nehodnotím.`,
+    });
+    await requeueWithoutPenalty("aborted", "Diff se nepodařilo spočítat (infra) — zkus to znovu.");
+    return;
+  }
+
+  // 2b) Worker legitimně nic nezměnil. Taky se to NESMÍ hodnotit jako špatná
+  // práce: typicky znamená „done condition už v mainu platí" (worker to sám
+  // ověřil a napsal do output_summary). Reject by jen spálil pokus.
+  if (files.length === 0) {
+    // OHRANIČENÍ: requeue bez penalizace nesmí cyklit donekonečna. Když worker
+    // opakovaně nic nezmění, je zadání nejspíš vadné nebo už splněné → park
+    // s jasným důvodem (ne tichý reject za „chybějící diff").
+    const emptyRows = await getSql()<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM events
+      WHERE task_id = ${task.id} AND type = 'judge_empty_diff'
+    `;
+    const emptyCount = (emptyRows[0]?.n ?? 0) + 1;
+    const MAX_EMPTY_DIFF = Number(process.env.MAX_EMPTY_DIFF_RETRIES ?? 3);
+    if (emptyCount > MAX_EMPTY_DIFF) {
+      await getDb()
+        .update(attempts)
+        .set({ status: "rejected", finishedAt: new Date() })
+        .where(and(eq(attempts.id, message.attemptId), eq(attempts.status, "running")));
+      taskMachine.assert("judging", "parked");
+      await getDb().update(tasks).set({ status: "parked" }).where(eq(tasks.id, task.id));
+      await logEvent({
+        projectId: project.id,
+        taskId: task.id,
+        level: "warn",
+        type: "task_parked_empty_diff",
+        message: `Worker ${MAX_EMPTY_DIFF}× nic nezměnil — zadání je nejspíš už splněné nebo špatně formulované. Vyžaduje pohled člověka.`,
+      });
+      return;
+    }
+    await logEvent({
+      projectId: project.id,
+      taskId: task.id,
+      level: "info",
+      type: "judge_empty_diff",
+      message: "Worker neprovedl žádnou změnu — vracím do fronty s výzvou doložit, že cíl už platí.",
+    });
+    await requeueWithoutPenalty(
+      "rejected",
+      "Neprovedl jsi žádnou změnu. Buď úkol skutečně proveď, nebo — pokud done condition v mainu " +
+        "už platí — to DOLOŽ konkrétním odkazem na soubor a řádek ve shrnutí.",
+    );
+    return;
+  }
+
   const protectedTouched = protectedFilesTouched(files).map((f) => f.path);
   const deletedTests = deletedTestFiles(files).map((f) => f.path);
 
@@ -754,11 +828,19 @@ async function latestSpecMd(wishId: string | null): Promise<string | undefined> 
   return rows[0]?.md;
 }
 
-/** Diff branche proti main: seznam souborů (name-status) + plný text diffu. */
+/**
+ * Diff branche proti main: seznam souborů (name-status) + plný text diffu.
+ *
+ * `error` rozlišuje DVA stavy, které se dřív obě jevily jako prázdný string:
+ *   - diff se nepodařilo spočítat (infra chyba) → NESMÍ se posílat judgeovi
+ *   - worker skutečně nic nezměnil (legitimní výsledek)
+ * Splynutí těchto dvou stavů stálo 32 % všech zamítnutí („No diff content
+ * provided") a přes ně cestu do 'parked'.
+ */
 async function computeDiff(
   projectId: string,
   branch: string,
-): Promise<{ files: DiffFile[]; diffText: string }> {
+): Promise<{ files: DiffFile[]; diffText: string; error?: string }> {
   const wsPath = join(loadConfig().workspacesRoot, projectId);
   const git = simpleGit(wsPath);
   const base = "main";
@@ -771,8 +853,12 @@ async function computeDiff(
     diffText = await git.raw(["diff", range]);
   } catch {
     // Fallback: dvojtečkový rozsah nemusí jít (bez společného předka) → přímé srovnání.
-    nameStatus = await git.raw(["diff", "--name-status", base, branch]).catch(() => "");
-    diffText = await git.raw(["diff", base, branch]).catch(() => "");
+    try {
+      nameStatus = await git.raw(["diff", "--name-status", base, branch]);
+      diffText = await git.raw(["diff", base, branch]);
+    } catch (err) {
+      return { files: [], diffText: "", error: String(err).slice(0, 300) };
+    }
   }
 
   const files: DiffFile[] = [];

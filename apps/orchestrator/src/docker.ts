@@ -26,6 +26,33 @@ const JUDGE_IMAGE = process.env.JUDGE_IMAGE ?? "agent-farm-judge:latest";
 // LOKÁLNÍ režim (dev/e2e): žádný Docker/gVisor — worker = fake opencode server,
 // judge/tester běží přímo na hostu ve worktree. Zapíná LOCAL_RUNTIME=1.
 const LOCAL = process.env.LOCAL_RUNTIME === "1";
+
+/**
+ * Stropy zdrojů pro kontejnery agentů. Bez nich může jediný ujetý `pnpm install`
+ * sežrat RAM celého homelabu (naměřená špička workera 3,4 GB, typicky ~600 MB)
+ * a shodit i služby, které s farmou nesouvisí.
+ *
+ * `MemorySwap === Memory` je ZÁMĚR: vypne to swap pro kontejner. Bez toho by
+ * limit paměti jen přelil tlak do swapu a zopakoval load 27 z konsolidace 5. 8.
+ * S ním runaway kontejner OOM-killne a dispatch to férově vrátí do fronty.
+ *
+ * Strop 4×worker + 2×judge = 20 GiB je STROP, ne rezervace; reálná suma při
+ * naměřených ~600 MB/worker je ~3 GiB.
+ */
+const GiB = 1024 ** 3;
+const WORKER_LIMITS = {
+  Memory: Number(process.env.WORKER_MEM_BYTES ?? 3 * GiB),
+  MemorySwap: Number(process.env.WORKER_MEM_BYTES ?? 3 * GiB),
+  NanoCpus: Number(process.env.WORKER_NANO_CPUS ?? 1_500_000_000), // 1,5 jádra
+  PidsLimit: 512,
+};
+// Judge dělá install+build+test — nejtěžší workload, dostane víc.
+const JUDGE_LIMITS = {
+  Memory: Number(process.env.JUDGE_MEM_BYTES ?? 4 * GiB),
+  MemorySwap: Number(process.env.JUDGE_MEM_BYTES ?? 4 * GiB),
+  NanoCpus: Number(process.env.JUDGE_NANO_CPUS ?? 2_000_000_000), // 2 jádra
+  PidsLimit: 1024,
+};
 const FAKE_OPENCODE_URL = process.env.FAKE_OPENCODE_URL ?? "http://127.0.0.1:4020";
 
 /** Spustí shell příkaz na hostu (jen LOKÁLNÍ režim). */
@@ -90,6 +117,7 @@ export async function spawnWorker(input: SpawnWorkerInput): Promise<SpawnedWorke
       Binds: [`${input.workspaceHostPath}:/workspace`],
       NetworkMode: WORKER_NETWORK,
       AutoRemove: false,
+      ...WORKER_LIMITS,
     },
     WorkingDir: "/workspace",
   });
@@ -139,6 +167,7 @@ export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunR
       Binds: [`${input.workspaceHostPath}:/workspace`],
       NetworkMode: WORKER_NETWORK,
       AutoRemove: false,
+      ...JUDGE_LIMITS,
     },
     WorkingDir: "/workspace",
   });
@@ -195,7 +224,14 @@ export async function killContainer(containerId: string): Promise<void> {
     const c = getDocker().getContainer(containerId);
     await c.remove({ force: true });
   } catch (err) {
-    console.error(`[docker] killContainer ${containerId} selhalo:`, err);
+    // 404 (kontejner už zmizel) a 409 (mazání právě běží) jsou ŽÁDANÝ koncový
+    // stav, ne chyba — killContainer chce právě to, aby kontejner nebyl. Dřív
+    // se logovaly i se stack trace (~17 řádků každá) a tvořily ~9 % logu, takže
+    // v něm nebyly vidět skutečné chyby. Vzniká to souběhem úklidu v dispatch
+    // (finally) a v reconciliation.
+    const sc = (err as { statusCode?: number }).statusCode;
+    if (sc === 404 || sc === 409) return;
+    console.error(`[docker] killContainer ${containerId.slice(0, 12)} selhalo:`, err);
   }
 }
 
@@ -334,6 +370,7 @@ export async function runAppAndTest(input: RunAppAndTestInput): Promise<RunAppAn
       Binds: [`${input.workspaceHostPath}:/workspace`, `${input.outputHostPath}:/out`],
       NetworkMode: WORKER_NETWORK,
       AutoRemove: false,
+      ...JUDGE_LIMITS,
     },
     WorkingDir: "/workspace",
   });

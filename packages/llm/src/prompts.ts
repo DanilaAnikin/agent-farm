@@ -486,8 +486,18 @@ export function judgePrompt(input: {
         (input.incremental
           ? `- Build/test checks run against the WHOLE project, which is being built INCREMENTALLY and may legitimately not build or fully pass yet (earlier tasks in the plan). Treat build/test results as ADVISORY context, NOT an automatic reject. Judge whether THIS task's done_condition is met by the diff with real, honest logic. Only reject for build/test if the diff ITSELF introduces a syntax error or breaks something it touched.\n`
           : `- If build failed OR tests failed → reject.\n`) +
-        `- If any PROTECTED harness file was modified (package.json scripts, lockfiles, tsconfig, lint/test/CI config, ` +
-        `.farm/, .opencode/) → escalate. Never approve a harness change, even if it "looks reasonable".\n` +
+        // Pod autopilotem se 'escalate' převádí na 'reject' (judge.ts), takže tohle
+        // pravidlo dřív odsoudilo KAŽDÝ úkol typu „přidej závislost / nastav test
+        // runner" — 42 % všech zamítnutí. Mechanická ráčna na chráněné soubory je
+        // pod autopilotem záměrně vypnutá s tím, že to posoudí LLM jako běžný diff;
+        // do promptu se ten záměr nikdy nepromítl. Teď ano.
+        (input.incremental
+          ? `- PROTECTED harness files (package.json, lockfiles, tsconfig, lint/test/CI config, .farm/, .opencode/) MAY be ` +
+            `modified when the task's done_condition genuinely requires it (e.g. adding a dependency the task asks for, ` +
+            `wiring a test runner). Judge such a change on its merits like any other diff. Reject it ONLY if it weakens ` +
+            `tests/CI, loosens type checking, or is unrelated to this task.\n`
+          : `- If any PROTECTED harness file was modified (package.json scripts, lockfiles, tsconfig, lint/test/CI config, ` +
+            `.farm/, .opencode/) → escalate. Never approve a harness change, even if it "looks reasonable".\n`) +
         `- If a test file was deleted, or a test was weakened/skipped/commented-out/made trivially true (expect(true), ` +
         `assertion removed, snapshot deleted, timeout inflated to hide a hang) → reject and name the test.\n` +
         `- If the diff STUBS or FAKES the work — hardcoded return values that only satisfy the test, TODO/FIXME/"not ` +
@@ -497,7 +507,9 @@ export function judgePrompt(input: {
         `- Watch for obvious bugs: off-by-one, wrong operator, unhandled null/undefined, race, resource leak, injection, ` +
         `secrets committed. Flag them in reasons even if tests pass.\n` +
         `- Only "approve" when the diff genuinely and completely satisfies the done_condition with real, honest logic.\n` +
-        `- Use "escalate" for protected-file changes or when you genuinely cannot tell from the diff alone.`,
+        (input.incremental
+          ? `- Use "escalate" only when you genuinely cannot tell from the diff alone.`
+          : `- Use "escalate" for protected-file changes or when you genuinely cannot tell from the diff alone.`),
       ),
     },
     {
