@@ -224,6 +224,11 @@ export const tasks = pgTable(
     status: text("status").$type<TaskStatus>().notNull().default("queued"),
     priority: integer("priority").notNull().default(100),
     attemptsCount: integer("attempts_count").notNull().default(0),
+    // Počet infra requeue (worker se nerozjel, diff nešel spočítat…). ZÁMĚRNĚ
+    // v DB, ne v payloadu pgmq zprávy: tam ho resetovalo na 0 každé z 8 míst,
+    // která zprávu staví znovu, takže se task místo po 10 pokusech parkoval až
+    // po tisících (21 016 dispatch_error vs 7 task_parked_infra za den).
+    infraRetries: integer("infra_retries").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(3),
     // normalizovaný title+done_condition pro mechanický refill dedup
     dedupKey: text("dedup_key").notNull().default(""),

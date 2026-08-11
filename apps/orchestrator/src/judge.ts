@@ -386,6 +386,11 @@ async function judgeWork(
     .set({ score: scoreAttempt({ buildOk, testsOk, lintOk, verdict }) })
     .where(eq(attempts.id, message.attemptId));
 
+  // Infra prokazatelně fungovala (worker doběhl, diff se spočítal, judge vydal
+  // verdikt) → vynuluj čítač infra requeue. Jinak by se dřívější dočasné výpadky
+  // sčítaly přes celý život tasku a nakonec ho zaparkovaly uprostřed zdravé práce.
+  await getDb().update(tasks).set({ infraRetries: 0 }).where(eq(tasks.id, task.id));
+
   // 5) Rozhodnutí guardrail vrstvy (loop detection + attempts)
   const previousOutputs = await previousAttemptOutputs(task.id, message.attemptId);
   const currentAttempt = await getDb()

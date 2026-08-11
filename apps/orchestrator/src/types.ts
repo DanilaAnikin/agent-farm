@@ -11,8 +11,10 @@ export interface TaskMessage {
   isFix?: boolean;
   /** volitelná poznámka z retry-s-poznámkou (injektuje se do promptu). */
   note?: string;
-  /** kolikrát byl task znovu zařazen kvůli INFRA chybě (bez penalizace); bound proti spinu. */
-  infraRetries?: number;
+  // POZOR: čítač infra requeue tu ZÁMĚRNĚ NENÍ. Dřív žil právě tady a každé
+  // z 8 míst, která staví TaskMessage znovu (reconciliation, judge, dag,
+  // tester), ho tím resetovalo na 0 — bound proti spinu se nikdy nenaplnil.
+  // Bydlí v `tasks.infra_retries`; viz requeueNoPenalty v dispatch.ts.
 }
 
 /** Zpráva ve frontě q_judge — hotový pokus k posouzení. */

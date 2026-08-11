@@ -21,6 +21,7 @@ import {
   readOne,
   ackDelete,
   extendVt,
+  getSql,
 } from "@farm/db";
 import { and, eq, desc, sql, isNull } from "drizzle-orm";
 import { loadConfig, taskMachine, isWallClockExceeded, checkBudget } from "@farm/core";
@@ -919,7 +920,15 @@ async function requeueNoPenalty(
   // deterministicky selhávající infra (worker se pořád hroutí) by točila donekonečna.
   // Po MAX_INFRA_RETRIES task zaparkuj + alert místo nekonečného re-dispatche.
   const MAX_INFRA_RETRIES = Number(process.env.MAX_INFRA_RETRIES ?? 10);
-  const infraRetries = (message.infraRetries ?? 0) + 1;
+  // Čítač se čte a zvyšuje ATOMICKY v DB — ne z payloadu zprávy. V payloadu ho
+  // resetovalo na 0 každé z 8 míst, která TaskMessage staví znovu, takže se
+  // bound nikdy nenaplnil. Atomický UPDATE navíc řeší závod 4 dispatch smyček,
+  // které by jinak přečetly stejnou hodnotu a zvýšily ji na totéž číslo.
+  const bumped = await getSql()<{ infra_retries: number }[]>`
+    UPDATE tasks SET infra_retries = infra_retries + 1
+    WHERE id = ${task.id} RETURNING infra_retries
+  `;
+  const infraRetries = bumped[0]?.infra_retries ?? 1;
   if (infraRetries > MAX_INFRA_RETRIES) {
     await getDb().update(tasks).set({ status: "parked" }).where(eq(tasks.id, task.id));
     await ackDelete(QUEUES.tasks, msgId);
@@ -934,7 +943,7 @@ async function requeueNoPenalty(
   }
   // running → queued (infra kill; bez penalizace, viz taskMachine)
   await getDb().update(tasks).set({ status: "queued" }).where(eq(tasks.id, task.id));
-  const requeued: TaskMessage = { ...message, note: reason, infraRetries };
+  const requeued: TaskMessage = { ...message, note: reason };
   // Exponenciální backoff (2^n s, strop 5 min). Bez něj se zpráva vracela okamžitě
   // viditelná a 4 dispatch smyčky po 2 s ji semlely tisíckrát za hodinu.
   const delaySec = Math.min(300, 2 ** infraRetries);
