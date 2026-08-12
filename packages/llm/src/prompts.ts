@@ -300,6 +300,8 @@ export function refillPrompt(input: {
   repoState: string;
   managerNote?: string | null;
   parkedTasks: string[];
+  /** Už hotové tasky — sémantický guard proti duplikátům (viz níže). */
+  doneTasks?: string[];
   maxTasks: number;
   /** ADITIVNÍ (volitelné): nastřádané znalosti projektu (project_memory). */
   projectBrief?: string;
@@ -323,6 +325,9 @@ export function refillPrompt(input: {
         `- An EMPTY tasks array is the correct answer if nothing is genuinely worth doing right now. Do not pad.\n` +
         `- Do NOT churn: no cosmetic refactors, no renaming, no reformatting, no "improve code quality" with no observable effect.\n` +
         `- Do NOT recreate any parked task (listed below) — those are blocked on a human.\n` +
+        `- Do NOT recreate anything from ALREADY DONE (listed below), in ANY wording or language. ` +
+        `Key-based dedup cannot see that "Nastavit Jest s ts-jest" and "Set up Jest with ts-jest" are the same task, ` +
+        `so this is on you. If the done work is incomplete, propose the concrete MISSING piece, never a re-do.\n` +
         `- Every task needs an objectively verifiable done_condition and a concrete verify_method for the Tester.\n` +
         `- If the user gave a steering note, it OUTRANKS everything else — address it first.` +
         briefBlock(input.projectBrief),
@@ -334,8 +339,11 @@ export function refillPrompt(input: {
         (input.managerNote ? `USER STEERING NOTE (top priority, address first): ${input.managerNote}\n\n` : "") +
         `Project kind: ${input.projectKind}\n\nCurrent repo state / recent history:\n${input.repoState}\n\n` +
         (input.parkedTasks.length
-          ? `Parked tasks (do NOT recreate — blocked on a human):\n${input.parkedTasks.map((t) => `- ${t}`).join("\n")}`
-          : "No parked tasks."),
+          ? `Parked tasks (do NOT recreate — blocked on a human):\n${input.parkedTasks.map((t) => `- ${t}`).join("\n")}\n\n`
+          : "No parked tasks.\n\n") +
+        (input.doneTasks?.length
+          ? `ALREADY DONE (do NOT propose again, in any wording or language):\n${input.doneTasks.map((t) => `- ${t}`).join("\n")}`
+          : "Nothing done yet."),
     },
   ];
 }

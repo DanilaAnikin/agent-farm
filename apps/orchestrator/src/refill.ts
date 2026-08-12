@@ -4,7 +4,8 @@
  * manager vygeneruje další dávku vylepšení.
  *
  * MECHANICKÉ GUARDY (mimo prompt):
- *  (a) dedup nových tasků proti dedup_key parked/failed tasků (trigram ≥ threshold);
+ *  (a) dedup nových tasků proti dedup_key VŠECH tasků projektu (trigram ≥ threshold)
+ *      + seznam hotových jde do promptu (trigram neuvidí překlad téhož zadání);
  *  (b) max refill_max_rounds_per_day kol na projekt/den (počítáno z events);
  *  (c) parked task znovu otevře jen člověk (nikdy je neresuscitujeme).
  */
@@ -86,13 +87,23 @@ async function refillProject(
 ): Promise<void> {
   const cfg = loadConfig();
 
-  // Parked/failed tasky projektu — jejich dedup klíče (guard proti duplikátům).
+  // Dedup se dřív porovnával JEN proti parked/failed. Hotový úkol tím pádem nic
+  // nebránilo navrhnout znovu — ripieno tak vyrobilo čtyři varianty „Result type +
+  // AppError hierarchy" a čtyři varianty „nastav Jest", každou jako samostatný PR
+  // se svou paralelní strukturou. Guard proto bere VŠECHNY tasky projektu.
   const guardedTasks = await getDb()
     .select({ title: tasks.title, dedupKey: tasks.dedupKey, status: tasks.status })
     .from(tasks)
-    .where(and(eq(tasks.projectId, projectId), inArray(tasks.status, ["parked", "failed"])));
+    .where(eq(tasks.projectId, projectId));
   const existingKeys = guardedTasks.map((t) => t.dedupKey).filter((k) => k.length > 0);
   const parkedTitles = guardedTasks.filter((t) => t.status === "parked").map((t) => t.title);
+  // Trigramová podobnost neuvidí, že „Nastavit Jest s ts-jest" a „Set up Jest with
+  // ts-jest" je totéž — jsou to jiné znaky. Sémantickou vrstvu musí udělat model,
+  // takže mu dáme seznam už hotového.
+  const doneTitles = guardedTasks
+    .filter((t) => t.status === "done")
+    .map((t) => t.title)
+    .slice(-60);
 
   const repoState = await gatherRepoState(projectId);
   // Nastřádané znalosti projektu (architektura + konvence + poučení) → refill je čte,
@@ -106,6 +117,7 @@ async function refillProject(
       repoState,
       managerNote,
       parkedTasks: parkedTitles,
+      doneTasks: doneTitles,
       maxTasks: cfg.refillMaxTasksPerRound,
       projectBrief: brief || undefined,
     }),
@@ -130,7 +142,7 @@ async function refillProject(
       await logEvent({
         projectId,
         type: "refill_dedup",
-        message: `Task přeskočen (duplikát parked/failed): ${t.title}`,
+        message: `Task přeskočen (duplikát existujícího): ${t.title}`,
       });
       continue;
     }

@@ -5,7 +5,7 @@
  */
 import { getDb, getSql, wishes, specs, tasks, projects, approvals, QUEUES, enqueue } from "@farm/db";
 import { and, eq, desc } from "drizzle-orm";
-import { loadConfig, taskDedupKey, wishMachine } from "@farm/core";
+import { loadConfig, taskDedupKey, isDuplicate, wishMachine } from "@farm/core";
 import {
   MODELS,
   structured,
@@ -440,8 +440,37 @@ async function architectWish(
   // Vlož tasky (bez dependsOn), zapamatuj klíč → uuid.
   const keyToId = new Map<string, string>();
   const taskById = new Map<string, { kind: TaskMessage["kind"]; dependsOnKeys: string[] }>();
+
+  // Architekt dosud nededuplikoval vůbec — každé přání zakládalo tasky naslepo, takže
+  // se stejná práce dělala znovu z jiného přání (ripieno: 4× „Result type + AppError").
+  // Duplikát se nezakládá, ale MUSÍ se namapovat na už existující task, jinak by se
+  // rozpadly závislosti (depends_on odkazuje na klíč, který by v mapě chyběl).
+  const priorTasks = await getDb()
+    .select({ id: tasks.id, dedupKey: tasks.dedupKey })
+    .from(tasks)
+    .where(eq(tasks.projectId, project.id));
+  const priorKeys = priorTasks.map((t) => t.dedupKey).filter((k) => k.length > 0);
+  let archDeduped = 0;
+
   for (const t of arch.data.tasks) {
     const dedupKey = taskDedupKey(t.title, t.done_condition);
+    if (isDuplicate(dedupKey, priorKeys, cfg.dedupSimilarityThreshold)) {
+      const existing = priorTasks.find(
+        (p) => p.dedupKey.length > 0 && isDuplicate(dedupKey, [p.dedupKey], cfg.dedupSimilarityThreshold),
+      );
+      if (existing) {
+        keyToId.set(t.key, existing.id); // závislosti dál ukazují na tu původní práci
+        archDeduped++;
+        await logEvent({
+          projectId: project.id,
+          wishId: wish.id,
+          type: "architect_dedup",
+          message: `Task přeskočen (už existuje): ${t.title}`,
+        });
+        continue;
+      }
+    }
+    priorKeys.push(dedupKey); // dedup i uvnitř jedné dávky
     const description = t.verify_method
       ? `${t.description}\n\nVERIFY METHOD (jak Tester ověří konec-konce):\n${t.verify_method}`
       : t.description;
