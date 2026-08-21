@@ -364,6 +364,20 @@ async function dispatchBestOfN(
     let candWorktree = "";
     let candidateOk = false;
     const startedAt = Date.now();
+
+    // Heartbeat MUSÍ tikat už od téhle chvíle, ne až od runWithLimits.
+    // Mezi vložením řádku pokusu a spuštěním smyčky se stihne git worktree,
+    // start kontejneru a čekání, než opencode server naběhne — u větších rep to
+    // trvá minuty. Reconciliace přitom pokus bez heartbeatu starší 3 minut uzná
+    // za mrtvý, zabije mu kontejner a task znovu zařadí; čekající fetch pak spadne
+    // na "TypeError: fetch failed". Přesně tahle smyčka sežrala 202 z 204 selhání
+    // a naparkovala 104 úkolů, které pak zablokovaly všechno, co na nich viselo.
+    // Poznávací znak v datech: heartbeat_at == started_at a steps_used = 0.
+    const setupHeartbeat = setInterval(() => {
+      void touchHeartbeat(attemptId, 0).catch(() => undefined);
+      void heartbeatAgent(agentId).catch(() => undefined);
+    }, 30_000);
+
     try {
       const wt = await createWorktree(project.id, task.id, idx);
       candBranch = wt.branch;
@@ -375,6 +389,7 @@ async function dispatchBestOfN(
       const session = await createSession(worker.baseUrl);
       await getDb().update(attempts).set({ opencodeSessionId: session.id }).where(eq(attempts.id, attemptId));
       const promptText = await buildPromptText(project.id, task, isFix, message.note);
+      clearInterval(setupHeartbeat); // dál heartbeatuje runWithLimits
       const outcome = await runWithLimits({
         baseUrl: worker.baseUrl,
         sessionId: session.id,
@@ -441,6 +456,9 @@ async function dispatchBestOfN(
       await finalizeAttempt(attemptId, "failed", 0, startedAt, String(err)).catch(() => undefined);
       console.error(`[dispatch] best-of-N kandidát #${idx} selhal:`, err);
     } finally {
+      // Bezpodmínečně: když příprava spadne (worktree, spawn, session), do
+      // clearInterval na úspěšné cestě se nedojde a ticker by tikal navždy.
+      clearInterval(setupHeartbeat);
       // Uvolni kandidátova workera/klíč/kontejner.
       await releaseAgent(agentId);
       await revokeKey(key.key).catch(() => undefined);
@@ -636,6 +654,19 @@ async function dispatchTask(
   let worktreePath = "";
   const startedAt = Date.now();
 
+  // Heartbeat MUSÍ tikat od téhle chvíle, ne až od runWithLimits. Mezi vložením
+  // řádku pokusu a spuštěním smyčky se stihne ensureRepo (git fetch), createWorktree,
+  // start kontejneru a čekání, než naběhne opencode server — u větších rep minuty.
+  // Reconciliace přitom pokus bez heartbeatu starší 3 minut uzná za mrtvý, zabije mu
+  // kontejner a task znovu zařadí; čekající fetch pak spadne na "TypeError: fetch
+  // failed". Tahle smyčka stála 202 z 204 selhání za týden a naparkovala 104 úkolů,
+  // které zablokovaly všechno, co na nich viselo.
+  // Poznávací znak v datech: heartbeat_at == started_at a steps_used = 0.
+  const mainSetupHeartbeat = setInterval(() => {
+    void touchHeartbeat(attemptId, 0).catch(() => undefined);
+    void heartbeatAgent(agentId).catch(() => undefined);
+  }, 30_000);
+
   try {
     // Repo + worktree
     await ensureRepo(project);
@@ -669,6 +700,7 @@ async function dispatchTask(
       .where(eq(attempts.id, attemptId));
 
     const promptText = await buildPromptText(project.id, task, isFix, message.note);
+    clearInterval(mainSetupHeartbeat); // dál heartbeatuje runWithLimits
     const outcome = await runWithLimits({
       baseUrl: worker.baseUrl,
       sessionId: session.id,
@@ -764,6 +796,8 @@ async function dispatchTask(
       message: `Dispatch selhal: ${String(err)}`,
     });
   } finally {
+    // Bezpodmínečně: když příprava spadne, do clearInterval výš se nedojde.
+    clearInterval(mainSetupHeartbeat);
     // Worker skončil — uvolni ho z flotily (řádek smažeme, ať /agents ukazuje jen živé).
     await releaseAgent(agentId);
     await revokeKey(key.key).catch(() => undefined);
