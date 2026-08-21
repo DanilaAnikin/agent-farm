@@ -21,6 +21,26 @@ import { runSuggestionsOnce, runSelfRunOnce } from "./suggestions.js";
 import { runSupervisorOnce } from "./supervisor.js";
 import { runAutoDeliverOnce } from "./auto-deliver.js";
 
+import { Agent, setGlobalDispatcher } from "undici";
+
+// Node global fetch (undici) má defaultní headersTimeout i bodyTimeout 300 s.
+// Volání modelu delší než pět minut proto umřelo na "TypeError: fetch failed" —
+// a při DeepSeeku s desítkami tisíc tokenů v kontextu je pět minut běžně málo.
+// Tohle byla příčina 202 z 204 selhání za uplynulý týden: selhání se počítalo
+// jako infra, po deseti se úkol zaparkoval a všechno, co na něm viselo, se
+// zablokovalo (207 čekajících úkolů, 0 spustitelných).
+//
+// opencode.ts si vlastní dispatcher nastavil už dřív, ale kanál k modelům
+// (manager, judge, refill, architekt) v packages/llm zůstal na výchozím fetchi.
+// Nastavuje se proto GLOBÁLNĚ pro celý proces — ať to platí i pro volání, která
+// vzniknou později a na vlastní dispatcher se zapomene.
+// Skutečný strop drží AbortSignal volajícího, wall-clock guard a request_timeout
+// v LiteLLM, ne tenhle limit.
+setGlobalDispatcher(
+  new Agent({ headersTimeout: 0, bodyTimeout: 0, keepAliveTimeout: 60_000 }),
+);
+
+
 interface LoopSpec {
   name: string;
   everyMs: number;

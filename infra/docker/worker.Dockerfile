@@ -18,12 +18,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # pnpm + opencode CLI (headless server + SDK cíl)
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
-RUN npm install -g opencode-ai@latest
+RUN npm install -g opencode-ai@latest undici
 
 # Neroot uživatel — worker kód běží bez privilegií.
 RUN useradd -ms /bin/bash worker
 RUN mkdir -p /home/worker/.config/opencode
 COPY --chown=worker:worker infra/opencode/opencode.json /home/worker/.config/opencode/opencode.json
+COPY infra/docker/undici-no-timeout.mjs /opt/undici-no-timeout.mjs
+# --import platí pro KAŽDÝ node proces v kontejneru, tedy i pro opencode server.
+ENV NODE_OPTIONS="--import=file:///opt/undici-no-timeout.mjs"
+
 USER worker
 WORKDIR /home/worker/project
 
