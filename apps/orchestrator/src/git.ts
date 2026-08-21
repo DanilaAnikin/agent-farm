@@ -192,12 +192,23 @@ export async function createWorktree(
   projectId: string,
   taskId: string,
   candidateIdx?: number,
+  /**
+   * Id pokusu. Bez něj měly worktree i větev jméno JEN podle úkolu, takže každý
+   * retry na začátku smazal worktree A VĚTEV (`branch -D`) předchozího pokusu.
+   * Když ten předchozí ještě čekal na judge, jeho commit se stal nedosažitelným a
+   * judge spočítal diff proti čerstvé prázdné větvi → `judge_empty_diff` → zamítnuto.
+   * V praxi to znamenalo, že 25 kroků reálné práce skončilo verdiktem „žádná změna".
+   */
+  attemptId?: string,
 ): Promise<WorktreeInfo> {
   // Per-repo zámek: souběžné `git worktree add` na tomtéž repu závodí o index.lock.
   // Zámek drží jen po dobu (rychlé) manipulace s worktree, ne po dobu běhu workera.
   return repoLock.run(projectId, async () => {
     const wsPath = workspacePath(projectId);
-    const suffix = candidateIdx === undefined ? "" : `-c${candidateIdx}`;
+    // Suffix drží symetrii, na které stojí mergeToMain: cestu si skládá ze stejného
+    // úseku za "farm/task-", takže jakákoli přípona funguje, když je v obojím.
+    const attemptToken = attemptId ? `-a${attemptId.replace(/-/g, "").slice(0, 8)}` : "";
+    const suffix = `${candidateIdx === undefined ? "" : `-c${candidateIdx}`}${attemptToken}`;
     const branch = `farm/task-${taskId}${suffix}`;
     const worktreePath = join(wsPath, "..", `${projectId}--${taskId}${suffix}`);
     const git = simpleGit(wsPath);

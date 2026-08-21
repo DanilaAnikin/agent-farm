@@ -379,7 +379,7 @@ async function dispatchBestOfN(
     }, 30_000);
 
     try {
-      const wt = await createWorktree(project.id, task.id, idx);
+      const wt = await createWorktree(project.id, task.id, idx, attemptId);
       candBranch = wt.branch;
       candWorktree = wt.worktreePath;
       await getDb().update(attempts).set({ branch: wt.branch, worktreeRef: wt.worktreePath }).where(eq(attempts.id, attemptId));
@@ -670,7 +670,7 @@ async function dispatchTask(
   try {
     // Repo + worktree
     await ensureRepo(project);
-    const wt = await createWorktree(project.id, task.id);
+    const wt = await createWorktree(project.id, task.id, undefined, attemptId);
     branch = wt.branch;
     worktreePath = wt.worktreePath;
 
