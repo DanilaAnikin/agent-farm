@@ -47,6 +47,21 @@ import { areDepsMet } from "./dag.js";
 import type { OpencodeEvent } from "./opencode.js";
 import type { TaskMessage, JudgeMessage } from "./types.js";
 
+/**
+ * Jak dlouho smí heartbeat krýt PŘÍPRAVU pokusu (git fetch, worktree, start
+ * kontejneru, čekání na opencode server).
+ *
+ * Musí existovat horní mez. Bez ní se stalo přesně tohle: příprava se zasekla,
+ * ticker ji dál hlásil jako živou, reconciliace ji proto nikdy neuklidila a dva
+ * takové pokusy držely obě místa workerů 15 hodin — farma stála úplně.
+ * Wall-clock strážce v runWithLimits nepomůže, ten se do hry dostane až potom.
+ *
+ * Po vypršení se ticker zastaví, heartbeat zestárne a reconciliace pokus uklidí
+ * standardní cestou (requeue bez penalizace).
+ */
+const SETUP_HEARTBEAT_MAX_MS = Number(process.env.SETUP_HEARTBEAT_MAX_MS ?? 10 * 60_000);
+
+
 /** Jedna iterace dispatch loopu — vezme nejvýše jeden task z fronty. */
 export async function runDispatchOnce(): Promise<void> {
   // Globální pauza: nečteme frontu vůbec (zprávy zůstanou netknuté).
@@ -373,7 +388,12 @@ async function dispatchBestOfN(
     // na "TypeError: fetch failed". Přesně tahle smyčka sežrala 202 z 204 selhání
     // a naparkovala 104 úkolů, které pak zablokovaly všechno, co na nich viselo.
     // Poznávací znak v datech: heartbeat_at == started_at a steps_used = 0.
+    const setupHeartbeatStart = Date.now();
     const setupHeartbeat = setInterval(() => {
+      if (Date.now() - setupHeartbeatStart > SETUP_HEARTBEAT_MAX_MS) {
+        clearInterval(setupHeartbeat); // dál už ať se o zaseknutou přípravu postará reconciliace
+        return;
+      }
       void touchHeartbeat(attemptId, 0).catch(() => undefined);
       void heartbeatAgent(agentId).catch(() => undefined);
     }, 30_000);
@@ -662,7 +682,12 @@ async function dispatchTask(
   // failed". Tahle smyčka stála 202 z 204 selhání za týden a naparkovala 104 úkolů,
   // které zablokovaly všechno, co na nich viselo.
   // Poznávací znak v datech: heartbeat_at == started_at a steps_used = 0.
+  const mainSetupHeartbeatStart = Date.now();
   const mainSetupHeartbeat = setInterval(() => {
+    if (Date.now() - mainSetupHeartbeatStart > SETUP_HEARTBEAT_MAX_MS) {
+      clearInterval(mainSetupHeartbeat); // dál už ať se o zaseknutou přípravu postará reconciliace
+      return;
+    }
     void touchHeartbeat(attemptId, 0).catch(() => undefined);
     void heartbeatAgent(agentId).catch(() => undefined);
   }, 30_000);
