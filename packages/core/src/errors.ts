@@ -1,6 +1,6 @@
 /** Chyba znamenající, že byl vyčerpán rozpočet (429 / budget). NENÍ selhání úkolu. */
 export class BudgetExceededError extends Error {
-  readonly scope: "farm" | "user" | "project" | "wish" | "attempt";
+  readonly scope: "farm_month" | "farm" | "user" | "project" | "wish" | "attempt";
   constructor(scope: BudgetExceededError["scope"], message?: string) {
     super(message ?? `Budget exceeded at scope: ${scope}`);
     this.name = "BudgetExceededError";

@@ -48,6 +48,9 @@ export async function getCaps(
 ): Promise<CapSet> {
   const cfg = loadConfig();
   const farmDailyCapUsd = await getSetting<number>("farm_daily_cap_usd", cfg.farmDailyCapUsd);
+  // Výchozích 20 USD je limit, který si stanovil vlastník farmy. Změnit jde bez
+  // zásahu do kódu přes farm_settings.farm_monthly_cap_usd.
+  const farmMonthlyCapUsd = await getSetting<number>("farm_monthly_cap_usd", 20);
 
   // Uživatelský denní strop se řídí PLÁNEM (billing); admin může přepsat přes caps_override.
   // EFEKTIVNÍ plán: při selhané platbě (past_due/unpaid) degradace na free — konzistentní
@@ -78,5 +81,5 @@ export async function getCaps(
     wishBudgetUsd = wishRows[0]?.budget;
   }
 
-  return { farmDailyCapUsd, userDailyCapUsd, projectDailyCapUsd, wishBudgetUsd };
+  return { farmMonthlyCapUsd, farmDailyCapUsd, userDailyCapUsd, projectDailyCapUsd, wishBudgetUsd };
 }

@@ -101,3 +101,22 @@ test("shouldAutoResume je true až po přetočení okna", () => {
   // Po resetu → true
   assert.equal(shouldAutoResume(heldSince, new Date("2026-07-04T09:00:00.000Z")), true);
 });
+
+test("checkBudget: měsíční strop farmy se testuje před denním", () => {
+  const monthly = { ...caps, farmMonthlyCapUsd: 20 };
+  // Dnešní okno prázdné, ale měsíc vyčerpaný — projít nesmí.
+  assert.equal(checkBudget({ ...zero, farmMonthUsd: 20.01 }, monthly), "farm_month");
+  assert.equal(checkBudget({ ...zero, farmMonthUsd: 19.99 }, monthly, 0.05), "farm_month");
+  assert.equal(checkBudget({ ...zero, farmMonthUsd: 19.9 }, monthly, 0.05), null);
+});
+
+test("checkBudget: měsíční strop má přednost před farm vrstvou", () => {
+  const monthly = { ...caps, farmMonthlyCapUsd: 20 };
+  assert.equal(checkBudget({ ...zero, farmMonthUsd: 999, farmTodayUsd: 999 }, monthly), "farm_month");
+});
+
+test("checkBudget: měsíční strop se ignoruje, když cap nebo spend chybí", () => {
+  // Bez stropu (starší konfigurace) se chování nesmí změnit.
+  assert.equal(checkBudget({ ...zero, farmMonthUsd: 9999 }, caps), null);
+  assert.equal(checkBudget(zero, { ...caps, farmMonthlyCapUsd: 20 }), null);
+});

@@ -51,6 +51,22 @@ async function sumFarmToday(): Promise<number> {
   return rows[0]?.sum ?? 0;
 }
 
+/**
+ * Útrata celé farmy za probíhající kalendářní měsíc.
+ *
+ * Vlastníkův limit je měsíční, takže se musí sčítat měsíc — z denních součtů ho
+ * odvodit nejde. `date_trunc('month')` je záměrně v UTC stejně jako denní okno,
+ * ať obě vrstvy měří proti témuž času.
+ */
+async function sumFarmMonth(): Promise<number> {
+  const rows = await getSql()<{ sum: number }[]>`
+    SELECT COALESCE(SUM(cost_usd), 0)::float8 AS sum
+    FROM cost_ledger
+    WHERE ts >= date_trunc('month', now())
+  `;
+  return rows[0]?.sum ?? 0;
+}
+
 async function sumUserToday(userId: string): Promise<number> {
   const rows = await getSql()<{ sum: number }[]>`
     SELECT COALESCE(SUM(cost_usd), 0)::float8 AS sum
@@ -78,6 +94,7 @@ export async function spendSnapshot(
   projectId: string,
   wishId?: string | null,
 ): Promise<SpendSnapshot> {
+  const farmMonthUsd = await sumFarmMonth();
   const farmTodayUsd = await sumFarmToday();
   const userTodayUsd = await sumUserToday(userId);
   const projectTodayUsd = await sumProjectToday(projectId);
@@ -92,5 +109,5 @@ export async function spendSnapshot(
     wishTotalUsd = rows[0]?.spent ?? 0;
   }
 
-  return { farmTodayUsd, userTodayUsd, projectTodayUsd, wishTotalUsd };
+  return { farmMonthUsd, farmTodayUsd, userTodayUsd, projectTodayUsd, wishTotalUsd };
 }

@@ -22,6 +22,7 @@ import { runSupervisorOnce } from "./supervisor.js";
 import { runAutoDeliverOnce } from "./auto-deliver.js";
 
 import { Agent, setGlobalDispatcher } from "undici";
+import { isGlobalPaused } from "./settings.js";
 
 // Node global fetch (undici) má defaultní headersTimeout i bodyTimeout 300 s.
 // Volání modelu delší než pět minut proto umřelo na "TypeError: fetch failed" —
@@ -53,22 +54,41 @@ interface LoopSpec {
 // merge (rebase-onto-main v mergeToMain). Řízeno MAX_WORKERS_TOTAL.
 const WORKER_SLOTS = Math.max(1, loadConfig().maxWorkersTotal);
 
+/**
+ * Obalí smyčku globálním vypínačem.
+ *
+ * `global_pause` byl dosud jen ADMISSION gate uvnitř dispatche: zabránil vpuštění
+ * dalšího tasku do fronty, ale smyčky, které volají placené modely mimo dispatch
+ * (manager, refill, suggestions, self-run, supervisor, auto-deliver), běžely dál
+ * a utrácely i s vypnutou farmou. Telegram bot přitom uživateli tvrdil, že /kill
+ * zastaví všechno.
+ *
+ * Kontroluje se na začátku KAŽDÉ iterace, ne jednou při startu — pauza se zapíná
+ * za běhu a musí zabrat bez restartu orchestrátoru.
+ */
+const pausable = (fn: () => Promise<void>): (() => Promise<void>) => {
+  return async () => {
+    if (await isGlobalPaused()) return;
+    await fn();
+  };
+};
+
 const LOOPS: LoopSpec[] = [
-  { name: "manager", everyMs: 5_000, fn: runManagerOnce },
-  { name: "refill", everyMs: 30_000, fn: runRefillOnce },
+  { name: "manager", everyMs: 5_000, fn: pausable(runManagerOnce) },
+  { name: "refill", everyMs: 30_000, fn: pausable(runRefillOnce) },
   // N paralelních dispatch slotů (swarm).
   ...Array.from({ length: WORKER_SLOTS }, (_, i) => ({
     name: `dispatch-${i + 1}`,
     everyMs: 2_000,
-    fn: runDispatchOnce,
+    fn: pausable(runDispatchOnce),
   })),
   // Víc judge slotů — judge (build/test v kontejneru) je taky paralelizovatelný.
   ...Array.from({ length: Math.max(2, Math.ceil(WORKER_SLOTS / 2)) }, (_, i) => ({
     name: `judge-${i + 1}`,
     everyMs: 3_000,
-    fn: runJudgeOnce,
+    fn: pausable(runJudgeOnce),
   })),
-  { name: "tester", everyMs: 4_000, fn: runQaLoop },
+  { name: "tester", everyMs: 4_000, fn: pausable(runQaLoop) },
   { name: "reconciliation", everyMs: 5 * 60_000, fn: runReconciliationOnce },
   { name: "budget-hold", everyMs: 60_000, fn: runBudgetHoldOnce },
   { name: "stt", everyMs: 5_000, fn: runSttOnce },
@@ -76,10 +96,10 @@ const LOOPS: LoopSpec[] = [
   // Most reálného LiteLLM spendu → cost_ledger (US$ v dashboardu + vynucení stropu).
   { name: "spend-sync", everyMs: 60_000, fn: runSpendSyncOnce },
   // Univerzální autonomie (kadence si každá smyčka hlídá sama).
-  { name: "suggestions", everyMs: 5 * 60_000, fn: runSuggestionsOnce },
-  { name: "self-run", everyMs: 60_000, fn: runSelfRunOnce },
-  { name: "supervisor", everyMs: 30 * 60_000, fn: runSupervisorOnce },
-  { name: "auto-deliver", everyMs: 45_000, fn: runAutoDeliverOnce },
+  { name: "suggestions", everyMs: 5 * 60_000, fn: pausable(runSuggestionsOnce) },
+  { name: "self-run", everyMs: 60_000, fn: pausable(runSelfRunOnce) },
+  { name: "supervisor", everyMs: 30 * 60_000, fn: pausable(runSupervisorOnce) },
+  { name: "auto-deliver", everyMs: 45_000, fn: pausable(runAutoDeliverOnce) },
 ];
 
 /** Supervisor: drží smyčku běžící; když spadne (runLoop by neměl, ale pro jistotu), restartuje. */

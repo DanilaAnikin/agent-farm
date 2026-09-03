@@ -5,6 +5,8 @@
 import { BudgetExceededError } from "./errors.js";
 
 export interface SpendSnapshot {
+  /** Útrata celé farmy za probíhající kalendářní měsíc. */
+  farmMonthUsd?: number;
   farmTodayUsd: number;
   userTodayUsd: number;
   projectTodayUsd: number;
@@ -12,6 +14,15 @@ export interface SpendSnapshot {
 }
 
 export interface CapSet {
+  /**
+   * Měsíční strop celé farmy. Nejtvrdší hranice, jakou farma má.
+   *
+   * Denní strop sám o sobě nestačí: 0,60 USD/den je přes 18 USD za měsíc a při
+   * jakémkoli přestřelení (a to se dělo, viz `pendingUsd` níž) se přes měsíc
+   * nasčítá výrazně víc. Vlastník má limit, který je měsíční, ne denní — tak ho
+   * kontroluj přímo, ne oklikou přes denní.
+   */
+  farmMonthlyCapUsd?: number;
   farmDailyCapUsd: number;
   userDailyCapUsd: number;
   projectDailyCapUsd: number;
@@ -27,6 +38,15 @@ export function checkBudget(
   caps: CapSet,
   pendingUsd = 0,
 ): BudgetExceededError["scope"] | null {
+  // Měsíční strop se testuje jako první: je nejtvrdší a jeho překročení nemá
+  // smysl přebíjet tím, že dnešní denní okno je zrovna prázdné.
+  if (
+    caps.farmMonthlyCapUsd !== undefined &&
+    spend.farmMonthUsd !== undefined &&
+    spend.farmMonthUsd + pendingUsd > caps.farmMonthlyCapUsd
+  ) {
+    return "farm_month";
+  }
   if (spend.farmTodayUsd + pendingUsd > caps.farmDailyCapUsd) return "farm";
   if (spend.userTodayUsd + pendingUsd > caps.userDailyCapUsd) return "user";
   if (spend.projectTodayUsd + pendingUsd > caps.projectDailyCapUsd) return "project";

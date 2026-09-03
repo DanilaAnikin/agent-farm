@@ -93,6 +93,16 @@ export interface SpawnWorkerInput {
   projectId: string;
   /** Host cesta k workspace projektu (mountuje se do /workspace). */
   workspaceHostPath: string;
+  /**
+   * Efemérní LiteLLM klíč tohohle pokusu, se stropem `PER_ATTEMPT_BUDGET_USD`.
+   *
+   * Povinný schválně. Dřív se sem klíč nepředával vůbec a kontejner dostával
+   * master klíč — worker tedy volal modely úplně bez rozpočtu a celý per-pokusový
+   * strop byl mrtvý kód: razil se, ale nikdo pod ním nevolal. Jediná vrstva, která
+   * umí zastavit UŽ BĚŽÍCÍ pokus, tím byla vyřazená a přes 20 dní šla veškerá
+   * útrata na master klíč.
+   */
+  litellmKey: string;
 }
 
 export interface SpawnedWorker {
@@ -114,7 +124,7 @@ export async function spawnWorker(input: SpawnWorkerInput): Promise<SpawnedWorke
   const container = await docker.createContainer({
     Image: cfg.workerImage,
     Labels: { [WORKER_LABEL]: input.projectId },
-    Env: [`FARM_PROJECT_ID=${input.projectId}`, `OPENCODE_PORT=${OPENCODE_PORT}`, `LITELLM_BASE_URL=${process.env.LITELLM_BASE_URL ?? "http://litellm:4000"}`, `LITELLM_API_KEY=${process.env.LITELLM_MASTER_KEY ?? ""}`],
+    Env: [`FARM_PROJECT_ID=${input.projectId}`, `OPENCODE_PORT=${OPENCODE_PORT}`, `LITELLM_BASE_URL=${process.env.LITELLM_BASE_URL ?? "http://litellm:4000"}`, `LITELLM_API_KEY=${input.litellmKey}`],
     HostConfig: {
       // gVisor (runsc) na produkci; lokálně "runc" (WORKER_DOCKER_RUNTIME).
       Runtime: cfg.workerDockerRuntime,

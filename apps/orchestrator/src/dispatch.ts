@@ -403,7 +403,7 @@ async function dispatchBestOfN(
       candBranch = wt.branch;
       candWorktree = wt.worktreePath;
       await getDb().update(attempts).set({ branch: wt.branch, worktreeRef: wt.worktreePath }).where(eq(attempts.id, attemptId));
-      const worker = await spawnWorker({ projectId: project.id, workspaceHostPath: wt.worktreePath });
+      const worker = await spawnWorker({ projectId: project.id, workspaceHostPath: wt.worktreePath, litellmKey: key.key });
       containerId = worker.containerId;
       await heartbeatAgent(agentId, { containerId });
       const session = await createSession(worker.baseUrl);
@@ -700,7 +700,7 @@ async function dispatchTask(
     worktreePath = wt.worktreePath;
 
     // Worker kontejner s mountnutým worktree jako /workspace
-    const worker = await spawnWorker({ projectId: project.id, workspaceHostPath: worktreePath });
+    const worker = await spawnWorker({ projectId: project.id, workspaceHostPath: worktreePath, litellmKey: key.key });
     containerId = worker.containerId;
     await heartbeatAgent(agentId, { containerId });
 

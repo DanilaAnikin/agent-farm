@@ -10,10 +10,14 @@ import { projectMachine, shouldAutoResume, checkBudget, loadConfig } from "@farm
 import { creditBalance } from "@farm/billing";
 import { logEvent } from "./events.js";
 import { spendSnapshot } from "./cost.js";
-import { getCaps } from "./settings.js";
+import { getCaps, isGlobalPaused } from "./settings.js";
 
 /** Jedna iterace budget-hold loopu. */
 export async function runBudgetHoldOnce(): Promise<void> {
+  // Ruční pauza musí vydržet. Tahle smyčka jinak každou půlnoc vrátí do 'active'
+  // i projekty, které pozastavil člověk — nerozlišuje totiž pauzu od
+  // circuit-breakeru. Dokud je farma vypnutá vypínačem, neobnovuje se nic.
+  if (await isGlobalPaused()) return;
   const now = new Date();
   const cfg = loadConfig();
   const held = await getDb().select().from(projects).where(eq(projects.status, "budget_hold"));
