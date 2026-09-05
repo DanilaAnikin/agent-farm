@@ -61,7 +61,7 @@ let lastSpendLogAt = 0;
 // Sentinel místo `null`: `null` je platný stav („nic neblokuje") a kdyby s ním
 // paměť startovala, první vyhodnocení po startu by se rovnalo výchozímu stavu
 // a nic by se nezapsalo — v tabulce by zůstal viset marker z MINULÉHO běhu.
-let lastMarkerState: string | null | undefined = undefined;
+let lastMarkerState: string | false | undefined = undefined;
 
 /** Jen pro testy a ruční zásah — vynutí čerstvé přečtení stavu útraty. */
 export function resetSpendCache(): void {
@@ -80,16 +80,21 @@ function capFrom(raw: unknown, fallback: number): number {
  * dashboard tak umí odlišit „stojí to na stropu" od „poskytovatel je dole".
  * Zapisuje se jen při ZMĚNĚ stavu, ne při každé iteraci.
  */
-async function markBudgetBlock(state: string | null): Promise<void> {
+async function markBudgetBlock(state: string | false): Promise<void> {
   if (state === lastMarkerState) return;
   lastMarkerState = state;
   try {
+    // `false`, ne `null`: sloupec je NOT NULL a drizzle překládá JS `null` na SQL
+    // NULL, ne na jsonb `null`. První verze to dělala, zápis padal na constraint
+    // a `catch` to tiše spolkl — marker se nikdy neobjevil a nikdo se to nedozvěděl.
     await getDb()
       .insert(farmSettings)
       .values({ key: "budget_block", value: state })
       .onConflictDoUpdate({ target: farmSettings.key, set: { value: state, updatedAt: new Date() } });
-  } catch {
-    // Neviditelnost je nepříjemná, ale nesmí zastavit rozhodování o penězích.
+  } catch (err) {
+    // Neviditelnost nesmí zastavit rozhodování o penězích — ale nesmí být ani
+    // tichá. Zapisuje se jen při změně stavu, takže tohle nezaplaví log.
+    console.warn("[rozpočet] zápis budget_block selhal:", String(err).slice(0, 200));
   }
 }
 
@@ -111,7 +116,7 @@ async function markBudgetBlock(state: string | null): Promise<void> {
 export async function shouldFarmRun(): Promise<boolean> {
   // Pauza první: je to nejlevnější dotaz a nejčastější důvod, proč se nepracuje.
   if (await isGlobalPaused()) {
-    await markBudgetBlock(null);
+    await markBudgetBlock(false);
     return false;
   }
 
@@ -138,7 +143,7 @@ export async function shouldFarmRun(): Promise<boolean> {
 
   const blocked = spendCache.blocked;
   if (!blocked) {
-    await markBudgetBlock(null);
+    await markBudgetBlock(false);
     return true;
   }
 
