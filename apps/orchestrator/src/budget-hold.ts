@@ -4,8 +4,8 @@
  * Farma se tak nikdy trvale nezastaví — jen ji zdrží strop, který si uživatel nastavil.
  * Telegram notifikace jde přes zapsaný event.
  */
-import { getDb, projects } from "@farm/db";
-import { eq } from "drizzle-orm";
+import { getDb, projects, events } from "@farm/db";
+import { and, eq, gte } from "drizzle-orm";
 import { projectMachine, shouldAutoResume, checkBudget, loadConfig } from "@farm/core";
 import { creditBalance } from "@farm/billing";
 import { logEvent } from "./events.js";
@@ -66,6 +66,32 @@ export async function runBudgetHoldOnce(): Promise<void> {
     try {
       const pausedSince = project.updatedAt ?? project.createdAt ?? now;
       if (!shouldAutoResume(pausedSince, now)) continue;
+
+      /*
+        Obnovovat se smí JEN to, co pozastavil stroj.
+
+        Stav `paused` znamená dvě různé věci: circuit breaker (judge.ts) a člověk,
+        který projekt vypnul přes dashboard, Telegram nebo SQL. Tahle smyčka to
+        dřív nerozlišovala a každou půlnoc pustila obojí — ruční pauza tedy do
+        rána nevydržela a majitel to nemohl nijak poznat.
+
+        Rozlišit to jde bez zásahu do schématu: circuit breaker po sobě nechává
+        událost `project_paused_auto` zapsanou ve stejném okamžiku, kdy mění
+        status. Když u pauzy taková událost není, pauzu udělal člověk — a ta
+        skončí, až ji zruší člověk.
+      */
+      const autoPause = await getDb()
+        .select({ id: events.id })
+        .from(events)
+        .where(
+          and(
+            eq(events.projectId, project.id),
+            eq(events.type, "project_paused_auto"),
+            gte(events.ts, new Date(pausedSince.getTime() - 2 * 60_000)),
+          ),
+        )
+        .limit(1);
+      if (autoPause.length === 0) continue;
       const caps = await getCaps(project.userId, project.id);
       const spend = await spendSnapshot(project.userId, project.id);
       if (checkBudget(spend, caps, cfg.perAttemptBudgetUsd) !== null) continue;

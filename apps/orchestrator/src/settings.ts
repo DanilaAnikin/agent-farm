@@ -48,9 +48,20 @@ export async function getCaps(
 ): Promise<CapSet> {
   const cfg = loadConfig();
   const farmDailyCapUsd = await getSetting<number>("farm_daily_cap_usd", cfg.farmDailyCapUsd);
-  // Výchozích 20 USD je limit, který si stanovil vlastník farmy. Změnit jde bez
-  // zásahu do kódu přes farm_settings.farm_monthly_cap_usd.
-  const farmMonthlyCapUsd = await getSetting<number>("farm_monthly_cap_usd", 20);
+  /*
+    Výchozích 20 USD je limit, který si stanovil vlastník farmy. Změnit jde bez
+    zásahu do kódu přes farm_settings.farm_monthly_cap_usd.
+
+    Hodnota se OVĚŘUJE, protože `getSetting` vrací syrové jsonb bez kontroly typu.
+    Kdyby tam někdo uložil řetězec `"20"` nebo objekt, porovnání v `checkBudget`
+    by dalo NaN, podmínka by nikdy neplatila a strop by tiše zmizel — tedy
+    fail-open přesně u té vrstvy, která má chránit peníze. Při nesmyslné hodnotě
+    se proto vrací výchozích 20, ne nic.
+  */
+  const rawMonthlyCap = await getSetting<unknown>("farm_monthly_cap_usd", 20);
+  const parsedMonthlyCap = Number(rawMonthlyCap);
+  const farmMonthlyCapUsd =
+    Number.isFinite(parsedMonthlyCap) && parsedMonthlyCap > 0 ? parsedMonthlyCap : 20;
 
   // Uživatelský denní strop se řídí PLÁNEM (billing); admin může přepsat přes caps_override.
   // EFEKTIVNÍ plán: při selhané platbě (past_due/unpaid) degradace na free — konzistentní

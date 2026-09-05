@@ -41,7 +41,23 @@ export async function readMediaSpendToday(
       AND ts >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
   `;
   const r = rows[0];
+
+  /*
+    Měsíční strop farmy platí i pro média.
+
+    Denní čísla výš jsou schválně filtrovaná na `scope = 'media'` — media pipeline
+    má vlastní denní strop. Měsíční limit majitele je ale limit na CELOU farmu:
+    kdyby se počítal jen z media řádků, dala by se přes obrázky a hlasy utratit
+    další dvacetidolarovka vedle té, kterou už vyčerpal orchestrátor.
+  */
+  const monthRows = await sql<{ farm_month: number }[]>`
+    SELECT COALESCE(SUM(cost_usd) FILTER (WHERE is_shadow = false), 0)::float8 AS farm_month
+    FROM cost_ledger
+    WHERE ts >= date_trunc('month', now())
+  `;
+
   return {
+    farmMonthUsd: monthRows[0]?.farm_month ?? 0,
     farmTodayUsd: r?.farm ?? 0,
     userTodayUsd: r?.usr ?? 0,
     projectTodayUsd: r?.proj ?? 0,
@@ -66,6 +82,19 @@ export async function loadMediaCaps(ctx: MediaBudgetContext): Promise<CapSet> {
     farmCap = Number(rawFarm);
   }
 
+  /*
+    Měsíční strop celé farmy. Čte se stejným opatrným způsobem jako denní —
+    jsonb může obsahovat cokoli a nečíselná hodnota by tady znamenala fail-open
+    přesně u vrstvy, která hlídá peníze.
+  */
+  let monthlyCap = 20;
+  const monthlyRows = await db
+    .select()
+    .from(farmSettings)
+    .where(eq(farmSettings.key, "farm_monthly_cap_usd"));
+  const rawMonthly = Number(monthlyRows[0]?.value);
+  if (Number.isFinite(rawMonthly) && rawMonthly > 0) monthlyCap = rawMonthly;
+
   // Uživatel: denní media strop se řídí PLÁNEM (billing), stejně jako LLM strop v
   // settings.getCaps — NE surovým sloupcem profiles.daily_media_cap_usd (ten se z plánu
   // nikdy nesynchronizuje: free by dostal default $5 místo $0, Pro $5 místo $10 atd.).
@@ -87,6 +116,7 @@ export async function loadMediaCaps(ctx: MediaBudgetContext): Promise<CapSet> {
   const projectCap = projRows[0]?.cap ?? cfg.defaultProjectDailyCapUsd;
 
   return {
+    farmMonthlyCapUsd: monthlyCap,
     farmDailyCapUsd: farmCap,
     userDailyCapUsd: userCap,
     projectDailyCapUsd: projectCap,

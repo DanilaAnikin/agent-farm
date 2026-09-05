@@ -91,7 +91,7 @@ const LOOPS: LoopSpec[] = [
   { name: "tester", everyMs: 4_000, fn: pausable(runQaLoop) },
   { name: "reconciliation", everyMs: 5 * 60_000, fn: runReconciliationOnce },
   { name: "budget-hold", everyMs: 60_000, fn: runBudgetHoldOnce },
-  { name: "stt", everyMs: 5_000, fn: runSttOnce },
+  { name: "stt", everyMs: 5_000, fn: pausable(runSttOnce) },
   { name: "litellm-sync", everyMs: 30_000, fn: runLitellmSyncOnce },
   // Most reálného LiteLLM spendu → cost_ledger (US$ v dashboardu + vynucení stropu).
   { name: "spend-sync", everyMs: 60_000, fn: runSpendSyncOnce },
