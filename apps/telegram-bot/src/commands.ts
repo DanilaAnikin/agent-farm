@@ -87,9 +87,12 @@ export function registerCommands(bot: Bot<BotContext>): void {
       await ctx.reply("⛔ Tento příkaz může použít jen admin.");
       return;
     }
+    // `owner_pause`, ne `global_pause`: druhý klíč patří automatickým hlídačům,
+    // které si ho podle `pause_source` samy vypínají — kill switch od člověka by
+    // jim tak padl za oběť. Orchestrátor bere oba stejně vážně (isGlobalPaused).
     await getDb()
       .insert(farmSettings)
-      .values({ key: "global_pause", value: true })
+      .values({ key: "owner_pause", value: true })
       .onConflictDoUpdate({
         target: farmSettings.key,
         set: { value: true, updatedAt: new Date() },

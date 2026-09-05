@@ -47,11 +47,29 @@ export async function setGlobalPause(paused: boolean): Promise<ActionResult> {
   if (!admin.ok) return { ok: false, message: admin.message };
 
   const supabase = await createClient();
+  /*
+    Zapisuje se `owner_pause`, ne `global_pause`.
+
+    `global_pause` patří automatickým hlídačům na hostiteli a ty si ho podle
+    `pause_source` zase samy vypínají. Kdyby sem admin psal týž klíč, jeho pauza
+    by se dala zrušit cizím hlídačem — a to se dělo. `owner_pause` je jen jeho
+    a orchestrátor ho bere stejně vážně (viz isGlobalPaused).
+  */
+  const now = new Date().toISOString();
   const { error } = await supabase.from("farm_settings").upsert(
-    { key: "global_pause", value: paused, updated_at: new Date().toISOString() },
+    { key: "owner_pause", value: paused, updated_at: now },
     { onConflict: "key" },
   );
   if (error) return { ok: false, message: error.message };
+
+  // Puštění musí uvolnit i provozní pauzu, jinak by farma zůstala stát na
+  // zapomenuté značce hlídače a admin by nevěděl proč.
+  if (!paused) {
+    await supabase.from("farm_settings").upsert(
+      { key: "global_pause", value: false, updated_at: now },
+      { onConflict: "key" },
+    );
+  }
 
   revalidatePath("/admin");
   return { ok: true };

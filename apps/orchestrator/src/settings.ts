@@ -20,9 +20,29 @@ export async function getSetting<T = unknown>(key: string, fallback: T): Promise
   return row.value as T;
 }
 
-/** Je celá farma pozastavena uživatelem/adminem? (global_pause / /kill) */
+/**
+ * Je celá farma pozastavena?
+ *
+ * Dva klíče schválně, protože pauzy mají dva různé majitele s různou životností:
+ *
+ *   `global_pause` — provozní. Zapínají a vypínají ji automatické hlídače
+ *                    (offpeak, credit_guard, budget_month) a poznají svou vlastní
+ *                    podle `pause_source`.
+ *   `owner_pause`  — člověk. Hlídače se jí NIKDY nedotknou.
+ *
+ * Dřív existoval jen `global_pause` a rozlišovat se to mělo podle `pause_source`.
+ * Jenže ten nezapisoval ani jeden aplikační zapisovatel — dashboard ani /kill —
+ * takže vznikl tenhle deterministický scénář: farma stojí kvůli špičce
+ * (`pause_source='offpeak'`), člověk zmáčkne kill, `global_pause` už je true
+ * (zápis je no-op), značka zůstane `offpeak` — a ve 4:00 UTC ji offpeak jako svou
+ * vlastní zase pustí. Vlastníkova pauza tedy tiše vyprchala.
+ */
 export async function isGlobalPaused(): Promise<boolean> {
-  return getSetting<boolean>("global_pause", false);
+  const [global_, owner] = await Promise.all([
+    getSetting<boolean>("global_pause", false),
+    getSetting<boolean>("owner_pause", false),
+  ]);
+  return Boolean(global_) || Boolean(owner);
 }
 
 /**
