@@ -22,7 +22,7 @@ import { runSupervisorOnce } from "./supervisor.js";
 import { runAutoDeliverOnce } from "./auto-deliver.js";
 
 import { Agent, setGlobalDispatcher } from "undici";
-import { isGlobalPaused } from "./settings.js";
+import { shouldFarmRun } from "./settings.js";
 
 // Node global fetch (undici) má defaultní headersTimeout i bodyTimeout 300 s.
 // Volání modelu delší než pět minut proto umřelo na "TypeError: fetch failed" —
@@ -65,10 +65,17 @@ const WORKER_SLOTS = Math.max(1, loadConfig().maxWorkersTotal);
  *
  * Kontroluje se na začátku KAŽDÉ iterace, ne jednou při startu — pauza se zapíná
  * za běhu a musí zabrat bez restartu orchestrátoru.
+ *
+ * Od `shouldFarmRun` se ptáme i na vyčerpaný měsíční strop. Dřív ho hlídal jen
+ * dispatch, takže dvanáct dalších míst volajících placený model (manager, judge,
+ * refill, suggestions, supervisor, tester, memory) utrácelo bez jakékoli brány.
+ * Rozhodnout se MUSÍ tady, před zahájením práce — výjimka vyhozená uprostřed
+ * placeného volání se u volajících tváří jako selhání úkolu a zahodila by hotovou
+ * práci, za kterou už se zaplatilo.
  */
 const pausable = (fn: () => Promise<void>): (() => Promise<void>) => {
   return async () => {
-    if (await isGlobalPaused()) return;
+    if (!(await shouldFarmRun())) return;
     await fn();
   };
 };

@@ -7,6 +7,7 @@ import { getPlan, planCaps, effectivePlanKey } from "@farm/billing";
 import { eq } from "drizzle-orm";
 import { loadConfig } from "@farm/core";
 import type { CapSet } from "@farm/core";
+import { sumFarmMonth, sumFarmToday } from "./cost.js";
 
 /** Vrátí hodnotu nastavení z farm_settings (nebo fallback, když chybí). */
 export async function getSetting<T = unknown>(key: string, fallback: T): Promise<T> {
@@ -43,6 +44,110 @@ export async function isGlobalPaused(): Promise<boolean> {
     getSetting<boolean>("owner_pause", false),
   ]);
   return Boolean(global_) || Boolean(owner);
+}
+
+/**
+ * Útrata se mění po centech, ne skokem, a `SUM` přes ledger není zadarmo; smyčky
+ * se ptají každé dvě vteřiny, takže se odpověď dvacet vteřin drží. U denního
+ * stropu je to znát nejvíc: ten se reálně trhá (0,58–0,79 USD proti 0,60), takže
+ * okno, ve kterém se ještě pracuje po překročení, má být krátké.
+ */
+const SPEND_TTL_MS = 20_000;
+let spendCache: {
+  at: number;
+  blocked: null | { scope: "den" | "měsíc"; spent: number; cap: number };
+} | null = null;
+let lastSpendLogAt = 0;
+let lastMarkerState: string | null = null;
+
+/** Jen pro testy a ruční zásah — vynutí čerstvé přečtení stavu útraty. */
+export function resetSpendCache(): void {
+  spendCache = null;
+}
+
+/** Nezáporné číslo z jsonb, jinak výchozí hodnota. Nula je platný příkaz „neutrácej nic". */
+function capFrom(raw: unknown, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/**
+ * Zapíše do `farm_settings`, proč se nepracuje — jinak vypadá zavřená brána
+ * zvenčí jako zdravá farma, která jen nic nedělá. Hlídače na hostiteli i
+ * dashboard tak umí odlišit „stojí to na stropu" od „poskytovatel je dole".
+ * Zapisuje se jen při ZMĚNĚ stavu, ne při každé iteraci.
+ */
+async function markBudgetBlock(state: string | null): Promise<void> {
+  if (state === lastMarkerState) return;
+  lastMarkerState = state;
+  try {
+    await getDb()
+      .insert(farmSettings)
+      .values({ key: "budget_block", value: state })
+      .onConflictDoUpdate({ target: farmSettings.key, set: { value: state, updatedAt: new Date() } });
+  } catch {
+    // Neviditelnost je nepříjemná, ale nesmí zastavit rozhodování o penězích.
+  }
+}
+
+/**
+ * Smí farma právě teď dělat placenou práci?
+ *
+ * Sloučeny dvě podmínky, protože obě znamenají totéž: „teď ne".
+ *   1. Vypínač — `global_pause` (hlídači) nebo `owner_pause` (člověk).
+ *   2. Vyčerpaný měsíční strop.
+ *
+ * Proč se to ptá NA ÚROVNI SMYČKY a ne před každým voláním modelu: brána zevnitř
+ * `chat()` by sice pokryla všech dvanáct míst, která volají model mimo dispatch,
+ * jenže vyhozená výjimka se u volajících tváří jako SELHÁNÍ ÚKOLU. Manager by
+ * přání natrvalo zaparkoval, judge by zahodil hotovou a už zaplacenou práci,
+ * media-pipeline by označil vygenerované assety za vadné. Ochrana peněz by tak
+ * vyrobila horší škodu, než jaké měla bránit. Smyčka se rozhodne dřív, než
+ * jakoukoli práci začne — a nic se nezahodí.
+ */
+export async function shouldFarmRun(): Promise<boolean> {
+  // Pauza první: je to nejlevnější dotaz a nejčastější důvod, proč se nepracuje.
+  if (await isGlobalPaused()) {
+    await markBudgetBlock(null);
+    return false;
+  }
+
+  const now = Date.now();
+  if (!spendCache || now - spendCache.at >= SPEND_TTL_MS) {
+    const cfg = loadConfig();
+    const [rawMonthCap, rawDayCap, month, day] = await Promise.all([
+      getSetting<unknown>("farm_monthly_cap_usd", 20),
+      getSetting<unknown>("farm_daily_cap_usd", cfg.farmDailyCapUsd),
+      sumFarmMonth(),
+      sumFarmToday(),
+    ]);
+    const monthCap = capFrom(rawMonthCap, 20);
+    const dayCap = capFrom(rawDayCap, cfg.farmDailyCapUsd);
+
+    // Měsíční strop se testuje první: je to nejtvrdší hranice a vyčerpaný měsíc
+    // nemá smysl přebíjet tím, že dnešní okno je zrovna prázdné.
+    let blocked: { scope: "den" | "měsíc"; spent: number; cap: number } | null = null;
+    if (month >= monthCap) blocked = { scope: "měsíc", spent: month, cap: monthCap };
+    else if (day >= dayCap) blocked = { scope: "den", spent: day, cap: dayCap };
+
+    spendCache = { at: now, blocked };
+  }
+
+  const blocked = spendCache.blocked;
+  if (!blocked) {
+    await markBudgetBlock(null);
+    return true;
+  }
+
+  await markBudgetBlock(`${blocked.scope}: ${blocked.spent.toFixed(2)}/${blocked.cap.toFixed(2)} USD`);
+  if (now - lastSpendLogAt > 60 * 60_000) {
+    lastSpendLogAt = now;
+    console.warn(
+      `[rozpočet] Vyčerpaný strop na ${blocked.scope} ` +
+        `(${blocked.spent.toFixed(2)} / ${blocked.cap.toFixed(2)} USD) — farma nepracuje.`,
+    );
+  }
+  return false;
 }
 
 /**

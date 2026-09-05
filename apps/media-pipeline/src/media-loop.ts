@@ -16,6 +16,7 @@ import {
   QUEUES,
   readOne,
   type QueueMessage,
+  isFarmPaused,
 } from "@farm/db";
 import { and, eq } from "drizzle-orm";
 import { failJobAsset, handleMediaJob } from "./jobs.js";
@@ -91,6 +92,13 @@ export async function runMediaLoop(signal: { stopped: boolean }): Promise<void> 
   while (!signal.stopped) {
     let did = false;
     try {
+      // Zastavená farma = zastavená i výroba médií. Ptá se PŘED vyzvednutím
+      // zprávy z fronty, ne uprostřed jobu: odmítnutí uprostřed by se tvářilo
+      // jako selhání assetu a job by se po pěti pokusech nenávratně zahodil.
+      if (await isFarmPaused()) {
+        await new Promise((r) => setTimeout(r, POLL_IDLE_MS));
+        continue;
+      }
       did = await processOne();
     } catch (err) {
       // Neočekávaná chyba infrastruktury (např. DB výpadek) — chvíli počkej.

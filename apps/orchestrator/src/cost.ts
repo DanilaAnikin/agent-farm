@@ -42,7 +42,7 @@ export async function recordCost(input: RecordCostInput): Promise<void> {
 }
 
 // date_trunc('day', now()) = začátek dnešního UTC okna (BUDGET_HOLD_RESET_TZ=UTC).
-async function sumFarmToday(): Promise<number> {
+export async function sumFarmToday(): Promise<number> {
   const rows = await getSql()<{ sum: number }[]>`
     SELECT COALESCE(SUM(cost_usd), 0)::float8 AS sum
     FROM cost_ledger
@@ -58,9 +58,9 @@ async function sumFarmToday(): Promise<number> {
  * odvodit nejde. `date_trunc('month')` je záměrně v UTC stejně jako denní okno,
  * ať obě vrstvy měří proti témuž času.
  */
-async function sumFarmMonth(): Promise<number> {
+export async function sumFarmMonth(): Promise<number> {
   const rows = await getSql()<{ sum: number }[]>`
-    SELECT COALESCE(SUM(cost_usd), 0)::float8 AS sum
+    SELECT COALESCE(SUM(cost_usd) FILTER (WHERE is_shadow = false), 0)::float8 AS sum
     FROM cost_ledger
     WHERE ts >= date_trunc('month', now())
   `;

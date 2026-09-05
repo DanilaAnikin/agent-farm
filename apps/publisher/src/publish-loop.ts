@@ -12,6 +12,7 @@ import {
   readOne,
   ackDelete,
   extendVt,
+  isFarmPaused,
 } from "@farm/db";
 import type { PreferenceProfile } from "@farm/db";
 import { createStorage } from "@farm/storage";
@@ -340,6 +341,13 @@ export async function runPublishLoop(isRunning: () => boolean): Promise<void> {
   while (isRunning()) {
     let worked = false;
     try {
+      // Zastavená farma = i publikace počká. Caption jde přes placený model
+      // a hlavně: `/kill` má znamenat „nic se neděje", ne „orchestrátor stojí,
+      // zbytek jede". Zpráva zůstane ve frontě, po odpauzování se zpracuje.
+      if (await isFarmPaused()) {
+        await sleep(IDLE_SLEEP_MS);
+        continue;
+      }
       worked = await pollPublishOnce();
     } catch (err) {
       console.error("[publisher] publish loop error:", err);
