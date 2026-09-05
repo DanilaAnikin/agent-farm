@@ -58,7 +58,10 @@ let spendCache: {
   blocked: null | { scope: "den" | "měsíc"; spent: number; cap: number };
 } | null = null;
 let lastSpendLogAt = 0;
-let lastMarkerState: string | null = null;
+// Sentinel místo `null`: `null` je platný stav („nic neblokuje") a kdyby s ním
+// paměť startovala, první vyhodnocení po startu by se rovnalo výchozímu stavu
+// a nic by se nezapsalo — v tabulce by zůstal viset marker z MINULÉHO běhu.
+let lastMarkerState: string | null | undefined = undefined;
 
 /** Jen pro testy a ruční zásah — vynutí čerstvé přečtení stavu útraty. */
 export function resetSpendCache(): void {
