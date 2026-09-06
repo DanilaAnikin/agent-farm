@@ -17,6 +17,24 @@ export async function deployProject(projectId: string): Promise<ActionResult> {
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, message: "Nepřihlášeno." };
 
+  /*
+    Zastavená farma znamená, že se nenasazuje.
+
+    Push to Production sloučí VŠECHNY otevřené farm/* PR a nasadí je. To je přesně
+    ten druh autonomního zásahu, který vypínač zakazuje — a hostitelský watcher
+    požadavek vyzvedne sám do 30 s, takže by se dal odpálit i požadavek zařazený
+    ještě před zastavením. Kontroluje se tady i v farm-deploy.sh na hostiteli:
+    tohle dá člověku srozumitelnou odpověď, ta druhá kontrola drží i pro požadavky,
+    které už ve frontě leží.
+  */
+  const { data: pauseRows } = await supabase
+    .from("farm_settings")
+    .select("key, value")
+    .in("key", ["global_pause", "owner_pause"]);
+  if (pauseRows?.some((r) => Boolean(r.value))) {
+    return { ok: false, message: "Farma je zastavená — nejdřív ji pusť, pak nasazuj." };
+  }
+
   const { data: proj } = await supabase
     .from("projects")
     .select("name")

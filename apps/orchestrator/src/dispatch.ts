@@ -43,7 +43,7 @@ import { scoreCandidate, JUDGE_CMD, exitCode } from "./judge.js";
 import { registerAgent, heartbeatAgent, releaseAgent } from "./agents-registry.js";
 import { createSession, prompt, subscribeEvents, abortSession } from "./opencode.js";
 import { assembleBrief } from "./memory.js";
-import { areDepsMet } from "./dag.js";
+import { areDepsMet, parkBlockedDependents } from "./dag.js";
 import type { OpencodeEvent } from "./opencode.js";
 import type { TaskMessage, JudgeMessage } from "./types.js";
 
@@ -391,7 +391,26 @@ async function dispatchBestOfN(
     const setupHeartbeatStart = Date.now();
     const setupHeartbeat = setInterval(() => {
       if (Date.now() - setupHeartbeatStart > SETUP_HEARTBEAT_MAX_MS) {
-        clearInterval(setupHeartbeat); // dál už ať se o zaseknutou přípravu postará reconciliace
+        clearInterval(setupHeartbeat);
+        /*
+          Příprava přetáhla svůj limit. Dřív se tady jen přestalo tepat a zbytek se
+          nechal na reconciliaci — jenže ta pokus po třech minutách bez tepu zabila
+          zvenčí, takže probíhající volání spadlo na „TypeError: fetch failed" a
+          v datech zůstala chyba, která o skutečné příčině neříkala nic. 31 selhání
+          za týden vypadalo jako síťový problém, ačkoliv šlo o vypršenou přípravu.
+      
+          Kontejner se proto ukončí tady a hned: čekající volání spadne okamžitě,
+          důvod je zapsaný a slot se uvolní bez tříminutového čekání na reaper.
+        */
+        void logEvent({
+          projectId: project.id,
+          taskId: task.id,
+          level: "warn",
+          type: "attempt_setup_timeout",
+          message: `Příprava pokusu překročila ${Math.round(SETUP_HEARTBEAT_MAX_MS / 60_000)} min — ukončuji.`,
+          data: { attemptId, containerId },
+        }).catch(() => undefined);
+        if (containerId) void killContainer(containerId).catch(() => undefined);
         return;
       }
       void touchHeartbeat(attemptId, 0).catch(() => undefined);
@@ -685,7 +704,26 @@ async function dispatchTask(
   const mainSetupHeartbeatStart = Date.now();
   const mainSetupHeartbeat = setInterval(() => {
     if (Date.now() - mainSetupHeartbeatStart > SETUP_HEARTBEAT_MAX_MS) {
-      clearInterval(mainSetupHeartbeat); // dál už ať se o zaseknutou přípravu postará reconciliace
+      clearInterval(mainSetupHeartbeat);
+      /*
+        Příprava přetáhla svůj limit. Dřív se tady jen přestalo tepat a zbytek se
+        nechal na reconciliaci — jenže ta pokus po třech minutách bez tepu zabila
+        zvenčí, takže probíhající volání spadlo na „TypeError: fetch failed" a
+        v datech zůstala chyba, která o skutečné příčině neříkala nic. 31 selhání
+        za týden vypadalo jako síťový problém, ačkoliv šlo o vypršenou přípravu.
+    
+        Kontejner se proto ukončí tady a hned: čekající volání spadne okamžitě,
+        důvod je zapsaný a slot se uvolní bez tříminutového čekání na reaper.
+      */
+      void logEvent({
+        projectId: project.id,
+        taskId: task.id,
+        level: "warn",
+        type: "attempt_setup_timeout",
+        message: `Příprava pokusu překročila ${Math.round(SETUP_HEARTBEAT_MAX_MS / 60_000)} min — ukončuji.`,
+        data: { attemptId, containerId },
+      }).catch(() => undefined);
+      if (containerId) void killContainer(containerId).catch(() => undefined);
       return;
     }
     void touchHeartbeat(attemptId, 0).catch(() => undefined);
@@ -998,6 +1036,13 @@ async function requeueNoPenalty(
       type: "task_parked_infra",
       message: `Task zaparkován po ${MAX_INFRA_RETRIES} infra selháních (${reason}) — vyžaduje zásah.`,
     });
+    /*
+      Kaskádu si dosud volal jen judge (judge.ts). Task zaparkovaný tudy — z infra
+      důvodů — nechával své závislé v 'queued' navždy: reconciliace je přeskakuje,
+      protože blokující předchůdce není 'done', a 'parked' se na 'done' nikdy
+      nezmění. V DB takhle uvázlo 8 tasků za blokujícími 5 parky, nejstarší z 13. 8.
+    */
+    await parkBlockedDependents(task.id, task.wishId, `infra:${reason}`);
     return;
   }
   // running → queued (infra kill; bez penalizace, viz taskMachine)
