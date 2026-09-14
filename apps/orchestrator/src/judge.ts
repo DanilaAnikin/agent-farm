@@ -35,7 +35,7 @@ import {
   deletedTestFiles,
 } from "@farm/core";
 import type { DiffFile } from "@farm/core";
-import { MODELS, structured, judgePrompt, validateJudge } from "@farm/llm";
+import { MODELS, structured, judgePrompt, validateJudge, isLlmBudgetError } from "@farm/llm";
 import type { JudgeOutput } from "@farm/llm";
 import type { JudgeVerdict } from "@farm/db";
 import { runJudgeContainer } from "./docker.js";
@@ -103,6 +103,19 @@ export async function runJudgeOnce(): Promise<void> {
     await ackDelete(QUEUES.judge, msgId);
   } catch (err) {
     console.error(`[judge] posouzení attempt ${message.attemptId} selhalo:`, err);
+
+    // A daily/monthly pause may outlast every retry. Keep the completed artifact
+    // and the same judge message, without consuming the infrastructure retry limit.
+    if (isLlmBudgetError(err)) {
+      await enqueue(QUEUES.judge, message, 3600);
+      await ackDelete(QUEUES.judge, msgId);
+      await logEvent({
+        projectId: message.projectId, taskId: message.taskId,
+        type: "judge_budget_deferred", level: "info",
+        message: "Posouzení čeká na rozpočet; hotový pracovní výsledek je zachován.",
+      });
+      return;
+    }
 
     // 402 (vyčerpaný rozpočet) / 429 (rate limit) NENÍ chyba pokusu — pokus je
     // hotový a ZAPLACENÝ. Původní kód ho i tak označil 'failed' a přehodil celý

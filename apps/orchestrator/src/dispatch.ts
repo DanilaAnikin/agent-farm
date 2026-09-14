@@ -10,6 +10,7 @@
  */
 import { promises as fs } from "node:fs";
 import { join, dirname } from "node:path";
+import { simpleGit } from "simple-git";
 import {
   getDb,
   tasks,
@@ -32,6 +33,7 @@ import {
   mintEphemeralKey,
   revokeKey,
   routeWorkerModel,
+  isLlmBudgetError,
 } from "@farm/llm";
 import { creditBalance } from "@farm/billing";
 import { logEvent } from "./events.js";
@@ -258,6 +260,9 @@ async function projectPrefersStrongModel(projectId: string): Promise<boolean> {
         and(
           eq(tasks.projectId, projectId),
           eq(attempts.model, MODELS.worker),
+          // Network/setup failures say nothing about model quality.
+          sql`${attempts.status} IN ('succeeded', 'rejected')`,
+          sql`EXISTS (SELECT 1 FROM reviews r WHERE r.attempt_id = ${attempts.id})`,
           // JEN single-path pokusy (best-of-N kandidáti mají msgId `...#c<idx>` a
           // slabý kandidát #0 strukturálně prohrává výběr — nesmí kazit metriku).
           sql`${attempts.msgId} NOT LIKE '%#c%'`,
@@ -733,7 +738,7 @@ async function dispatchTask(
   try {
     // Repo + worktree
     await ensureRepo(project);
-    const wt = await createWorktree(project.id, task.id, undefined, attemptId);
+    const wt = await createWorktree(project.id, task.id, undefined, attemptId, message.resumeRef);
     branch = wt.branch;
     worktreePath = wt.worktreePath;
 
@@ -791,6 +796,21 @@ async function dispatchTask(
     }
 
     if (outcome.kind === "error") {
+      if (isLlmBudgetError(outcome.error)) {
+        // Never discard paid edits or count a normal budget wait as a broken task.
+        await commitWorktree(worktreePath, `farm checkpoint: ${task.title}`);
+        const resumeRef = (await simpleGit(worktreePath).revparse(["HEAD"])).trim();
+        await finalizeAttempt(attemptId, "aborted", outcome.steps, startedAt,
+          `Budget wait; checkpoint ${resumeRef}`);
+        await getDb().update(tasks).set({ status: "queued" }).where(eq(tasks.id, task.id));
+        await enqueue(QUEUES.tasks, { ...message, resumeRef,
+          note: "Continue the saved partial implementation; verify it before further edits." }, 3600);
+        await ackDelete(QUEUES.tasks, msgId);
+        await logEvent({ projectId: project.id, taskId: task.id, type: "attempt_budget_deferred",
+          message: "Práce čeká na rozpočet; rozpracované změny jsou uložené pro pokračování.",
+          data: { attemptId, resumeRef } });
+        return;
+      }
       // Chyba workera/infry → requeue bez penalizace (není to selhání tasku).
       await finalizeAttempt(attemptId, "failed", outcome.steps, startedAt, String(outcome.error));
       await requeueNoPenalty(task, message, msgId, "worker_error");
@@ -1102,11 +1122,11 @@ async function buildPromptText(
     const reasons = lastReview[0]?.reasons;
     if (reasons) parts.push(`PREVIOUS REVIEW FEEDBACK (fix these):\n${reasons}`);
     parts.push(
-      "This is a FIX attempt. Address the feedback above without weakening or deleting tests, and without touching build/CI/harness config.",
+      "This is a FIX attempt. Address the feedback above without weakening, skipping or deleting tests. Minimal build scripts, dependencies, lockfile, TypeScript, lint/test or CI configuration changes are allowed only when this task genuinely requires them; explain why in your summary. Never loosen existing checks to obtain a pass. Do not edit .farm/ or .opencode/.",
     );
   } else {
     parts.push(
-      "Implement the task fully. Do not modify build scripts, lockfiles, tsconfig, lint/test config or CI. Keep changes focused.",
+      "Implement the task fully and keep changes focused. Minimal build scripts, dependencies, lockfile, TypeScript, lint/test or CI configuration changes are allowed only when this task genuinely requires them; explain why in your summary. Never weaken, skip or delete tests, or loosen existing checks to obtain a pass. Do not edit .farm/ or .opencode/.",
     );
   }
   return parts.join("\n\n");

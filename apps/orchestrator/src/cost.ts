@@ -8,6 +8,21 @@ import { eq } from "drizzle-orm";
 import type { CostScope } from "@farm/db";
 import type { SpendSnapshot } from "@farm/core";
 
+/** Includes money reserved by in-flight proxy requests. Missing guard data fails closed. */
+async function guardedSpend(window: "day" | "month", ledger: number): Promise<number> {
+  if (process.env.FARM_BUDGET_GUARD_REQUIRED !== "true") return ledger;
+  const rows = await getSql()<{ day_usd: number; month_usd: number; ready: boolean }[]>`
+    SELECT t.day_usd::float8, t.month_usd::float8, m.ready
+    FROM public.farm_budget_totals t CROSS JOIN public.farm_budget_guard_meta m
+    WHERE m.singleton = true
+  `;
+  const row = rows[0];
+  if (!row?.ready) throw new Error("Farm budget guard unavailable: initialization required");
+  const amount = window === "day" ? row.day_usd : row.month_usd;
+  if (!Number.isFinite(amount) || amount < 0) throw new Error("Farm budget guard returned invalid totals");
+  return Math.max(ledger, amount);
+}
+
 export interface RecordCostInput {
   userId?: string | null;
   projectId?: string | null;
@@ -46,9 +61,9 @@ export async function sumFarmToday(): Promise<number> {
   const rows = await getSql()<{ sum: number }[]>`
     SELECT COALESCE(SUM(cost_usd), 0)::float8 AS sum
     FROM cost_ledger
-    WHERE ts >= date_trunc('day', now())
+    WHERE ts >= date_trunc('day', now()) AND is_shadow = false
   `;
-  return rows[0]?.sum ?? 0;
+  return guardedSpend("day", rows[0]?.sum ?? 0);
 }
 
 /**
@@ -64,7 +79,7 @@ export async function sumFarmMonth(): Promise<number> {
     FROM cost_ledger
     WHERE ts >= date_trunc('month', now())
   `;
-  return rows[0]?.sum ?? 0;
+  return guardedSpend("month", rows[0]?.sum ?? 0);
 }
 
 async function sumUserToday(userId: string): Promise<number> {

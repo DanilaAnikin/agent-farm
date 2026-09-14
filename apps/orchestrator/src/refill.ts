@@ -9,9 +9,6 @@
  *  (b) max refill_max_rounds_per_day kol na projekt/den (počítáno z events);
  *  (c) parked task znovu otevře jen člověk (nikdy je neresuscitujeme).
  */
-import { promises as fs } from "node:fs";
-import { join } from "node:path";
-import { simpleGit } from "simple-git";
 import { getSql, getDb, projects, tasks, wishes, QUEUES, enqueue } from "@farm/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { loadConfig, taskDedupKey, isDuplicate } from "@farm/core";
@@ -21,6 +18,8 @@ import { logEvent } from "./events.js";
 import { isGlobalPaused } from "./settings.js";
 import { assembleBrief } from "./memory.js";
 import type { TaskMessage } from "./types.js";
+import { gatherRepoState } from "./repo-state.js";
+import { ensureRepo } from "./git.js";
 
 const REFILL_ROUND_EVENT = "refill_round";
 
@@ -38,6 +37,7 @@ export async function runRefillOnce(): Promise<void> {
     try {
       if (await hasOpenWork(project.id)) continue;
       if ((await refillRoundsToday(project.id)) >= cfg.refillMaxRoundsPerDay) continue;
+      await ensureRepo(project);
       await refillProject(project.id, project.userId, project.kind, project.managerNote);
     } catch (err) {
       console.error(`[refill] projekt ${project.id} selhal:`, err);
@@ -176,34 +176,4 @@ async function refillProject(
     message: `Refill: vytvořeno ${created}, deduplikováno ${deduped}.`,
     data: { created, deduped },
   });
-}
-
-/** Posbírá stav repa pro refill prompt: README, strom souborů, poslední commity. */
-async function gatherRepoState(projectId: string): Promise<string> {
-  const wsPath = join(loadConfig().workspacesRoot, projectId);
-  const parts: string[] = [];
-
-  // README (zkráceně)
-  for (const name of ["README.md", "readme.md"]) {
-    try {
-      const readme = await fs.readFile(join(wsPath, name), "utf8");
-      parts.push(`README:\n${readme.slice(0, 2000)}`);
-      break;
-    } catch {
-      /* není README */
-    }
-  }
-
-  // Strom souborů (git ls-files) + poslední commity
-  try {
-    const git = simpleGit(wsPath);
-    const files = await git.raw(["ls-files"]);
-    parts.push(`File tree:\n${files.split("\n").slice(0, 200).join("\n")}`);
-    const log = await git.raw(["log", "--oneline", "-n", "15"]);
-    parts.push(`Recent commits:\n${log}`);
-  } catch {
-    parts.push("Repo zatím bez historie (nové/prázdné).");
-  }
-
-  return parts.join("\n\n");
 }

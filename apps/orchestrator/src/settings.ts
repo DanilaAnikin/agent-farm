@@ -52,7 +52,7 @@ export async function isGlobalPaused(): Promise<boolean> {
  * stropu je to znát nejvíc: ten se reálně trhá (0,58–0,79 USD proti 0,60), takže
  * okno, ve kterém se ještě pracuje po překročení, má být krátké.
  */
-const SPEND_TTL_MS = 20_000;
+const SPEND_TTL_MS = 5_000;
 let spendCache: {
   at: number;
   blocked: null | { scope: "den" | "měsíc"; spent: number; cap: number };
@@ -180,7 +180,10 @@ export async function getCaps(
   wishId?: string | null,
 ): Promise<CapSet> {
   const cfg = loadConfig();
-  const farmDailyCapUsd = await getSetting<number>("farm_daily_cap_usd", cfg.farmDailyCapUsd);
+  const farmDailyCapUsd = capFrom(
+    await getSetting<unknown>("farm_daily_cap_usd", cfg.farmDailyCapUsd),
+    cfg.farmDailyCapUsd,
+  );
   /*
     Výchozích 20 USD je limit, který si stanovil vlastník farmy. Změnit jde bez
     zásahu do kódu přes farm_settings.farm_monthly_cap_usd.
@@ -192,9 +195,7 @@ export async function getCaps(
     se proto vrací výchozích 20, ne nic.
   */
   const rawMonthlyCap = await getSetting<unknown>("farm_monthly_cap_usd", 20);
-  const parsedMonthlyCap = Number(rawMonthlyCap);
-  const farmMonthlyCapUsd =
-    Number.isFinite(parsedMonthlyCap) && parsedMonthlyCap > 0 ? parsedMonthlyCap : 20;
+  const farmMonthlyCapUsd = capFrom(rawMonthlyCap, 20);
 
   // Uživatelský denní strop se řídí PLÁNEM (billing); admin může přepsat přes caps_override.
   // EFEKTIVNÍ plán: při selhané platbě (past_due/unpaid) degradace na free — konzistentní

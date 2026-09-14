@@ -23,6 +23,7 @@ import { Octokit } from "@octokit/rest";
 import { getDb, connections, projects } from "@farm/db";
 import { and, eq } from "drizzle-orm";
 import { loadConfig, decryptCredentials, assertSafeRepoUrl } from "@farm/core";
+import { syncExistingRepository } from "./git-sync.js";
 
 /** Jednoduchý in-process mutex klíčovaný per projectId (merge lock per repo). */
 class KeyedMutex {
@@ -172,6 +173,7 @@ export async function ensureRepo(project: ProjectRow): Promise<{ workspacePath: 
     }
   }
 
+  if (project.repoMode === "existing") await syncExistingRepository(wsPath);
   return { workspacePath: wsPath, repoUrl };
   });
 }
@@ -200,7 +202,11 @@ export async function createWorktree(
    * V praxi to znamenalo, že 25 kroků reálné práce skončilo verdiktem „žádná změna".
    */
   attemptId?: string,
+  resumeRef?: string,
 ): Promise<WorktreeInfo> {
+  if (resumeRef && !/^[a-f0-9]{40}$/.test(resumeRef)) {
+    throw new Error("Invalid checkpoint commit");
+  }
   // Per-repo zámek: souběžné `git worktree add` na tomtéž repu závodí o index.lock.
   // Zámek drží jen po dobu (rychlé) manipulace s worktree, ne po dobu běhu workera.
   return repoLock.run(projectId, async () => {
@@ -234,14 +240,14 @@ export async function createWorktree(
     // Pojistka: kdyby recovery přesto neuspěla, NEVYHAZUJ výjimku donekonečna —
     // uhni na unikátní jméno. Task tak nikdy neuvázne v nekonečné smyčce.
     try {
-      await git.raw(["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
+      await git.raw(["worktree", "add", "-b", branch, worktreePath, resumeRef ?? "HEAD"]);
     } catch (err) {
       const alt = `${branch}-r${Date.now().toString(36)}`;
       const altPath = `${worktreePath}-r${Date.now().toString(36)}`;
       console.warn(
         `[git] worktree add selhal pro ${branch} (${String(err).slice(0, 120)}) → uhýbám na ${alt}`,
       );
-      await git.raw(["worktree", "add", "-b", alt, altPath, "HEAD"]);
+      await git.raw(["worktree", "add", "-b", alt, altPath, resumeRef ?? "HEAD"]);
       await execFileP("chown", ["-R", "1001:1001", altPath]).catch(() => undefined);
       return { worktreePath: altPath, branch: alt };
     }

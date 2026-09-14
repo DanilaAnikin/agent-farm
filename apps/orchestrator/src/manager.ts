@@ -17,6 +17,7 @@ import {
   validateArchitect,
   uncoveredCriteria,
   estimateTaskDifficulty,
+  isLlmBudgetError,
 } from "@farm/llm";
 import type { SpecOutput, PlanOutput, ArchitectOutput, ChatMessage } from "@farm/llm";
 import type { PreferenceProfile, AcceptanceCriterion } from "@farm/db";
@@ -26,6 +27,8 @@ import { isAutopilot } from "./settings.js";
 import { registerAgent, releaseAgent } from "./agents-registry.js";
 import { assembleBrief, addMemory } from "./memory.js";
 import type { TaskMessage } from "./types.js";
+import { gatherRepoState } from "./repo-state.js";
+import { ensureRepo } from "./git.js";
 
 /**
  * Concierge naváděcí zpráva pro spec: manager NIKDY neblokuje na člověku,
@@ -41,6 +44,7 @@ function conciergeSpecGuidance(managerNote: string | null): ChatMessage {
     'ADD an extra JSON field "assumptions": an array of SHORT Czech strings, one per non-trivial',
     "assumption you had to make (empty array if the wish was already fully specified). This is IN",
     "ADDITION to summary, content_md and acceptance_criteria — do not remove those.",
+    "Current repository facts override stale AI-generated memory/specs about existing code. Preserve the user's wish and existing product; use its observed paths, package manager, configured test runner and TypeScript settings.",
   ];
   if (managerNote && managerNote.trim().length > 0) {
     lines.push(
@@ -55,6 +59,7 @@ function conciergePlanGuidance(managerNote: string | null): ChatMessage {
   const lines = [
     "Proceed autonomously with sensible defaults; never leave a task blocked on human input.",
     "Prefer small, verifiable tasks that move the wish to a working, shippable result.",
+    "Current repository facts override stale AI-generated memory/specs about existing code. Preserve the user's wish and existing product; use its observed paths, package manager, configured test runner and TypeScript settings.",
   ];
   if (managerNote && managerNote.trim().length > 0) {
     lines.push(`TOP-PRIORITY STEERING NOTE from the user (honor it): "${managerNote.trim()}"`);
@@ -102,7 +107,9 @@ async function specifyNewWishes(): Promise<void> {
         .where(eq(projects.id, wish.projectId))
         .limit(1);
       const project = projRows[0];
-      if (!project || project.status === "stopped") continue;
+      if (!project || project.status !== "active") continue;
+
+      await ensureRepo(project);
 
       // new → specifying
       wishMachine.assert("new", "specifying");
@@ -116,6 +123,7 @@ async function specifyNewWishes(): Promise<void> {
           wishDescription: wish.description,
           projectKind: project.kind,
           profile,
+          repoContext: await gatherRepoState(project.id),
         }),
         conciergeSpecGuidance(project.managerNote),
       ];
@@ -202,6 +210,11 @@ async function specifyNewWishes(): Promise<void> {
         });
       }
     } catch (err) {
+      if (isLlmBudgetError(err)) {
+        await getDb().update(wishes).set({ status: "new" })
+          .where(and(eq(wishes.id, wish.id), eq(wishes.status, "specifying")));
+        continue;
+      }
       console.error(`[manager] specifikace wish ${wish.id} selhala:`, err);
       await logEvent({
         wishId: wish.id,
@@ -283,6 +296,7 @@ async function planApprovedSpecs(): Promise<void> {
         message: `Spec schválena, přání aktivováno: ${wish.title}`,
       });
     } catch (err) {
+      if (isLlmBudgetError(err)) continue;
       console.error(`[manager] plánování wish ${wishId} selhalo:`, err);
       await logEvent({
         wishId,
@@ -316,12 +330,14 @@ async function planWish(wishId: string): Promise<void> {
     .limit(1);
   const spec = specRows[0];
   if (!spec) throw new Error("Chybí spec k naplánování.");
+  await ensureRepo(project);
 
   // 1) Zkus architekta (design + DAG). Když selže, spadni na plochý plán.
   try {
     const ok = await architectWish(wish, project, spec);
     if (ok) return;
   } catch (err) {
+    if (isLlmBudgetError(err)) throw err;
     console.error(`[manager] architekt pro wish ${wishId} selhal, fallback na plán:`, err);
     await logEvent({
       projectId: project.id,
@@ -362,6 +378,7 @@ async function architectWish(
       projectBrief: brief || undefined,
       maxTasks: cfg.refillMaxTasksPerRound,
     }),
+    { role: "user" as const, content: await gatherRepoState(project.id) },
     conciergePlanGuidance(project.managerNote),
   ];
   let arch = await structured<ArchitectOutput>({
@@ -607,6 +624,7 @@ async function planWishFallback(
       maxTasks: cfg.refillMaxTasksPerRound,
       projectKind: project.kind,
     }),
+    { role: "user" as const, content: await gatherRepoState(project.id) },
     conciergePlanGuidance(project.managerNote),
   ];
   const plan = await structured<PlanOutput>({

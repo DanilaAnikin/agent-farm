@@ -55,6 +55,8 @@ export interface ChatOptions {
   /** Vynutit JSON objekt na výstupu. */
   jsonMode?: boolean;
   signal?: AbortSignal;
+  /** Whole-request deadline, including response-body keepalives; at most 3 minutes. */
+  requestTimeoutMs?: number;
 }
 
 export interface Usage {
@@ -90,14 +92,26 @@ export class LlmError extends Error {
   }
 }
 
+/** A spending limit defers work; it is not evidence that the task failed. */
+export function isLlmBudgetError(error: unknown): boolean {
+  const value = error as { status?: number; message?: string; body?: string } | null;
+  if (value?.status === 402) return true;
+  const text = `${value?.message ?? String(error)} ${value?.body ?? ""}`;
+  return /\b402\b|budget.{0,40}(exceed|exhaust|limit|unavailable|pause)|budget_exceeded/i.test(text);
+}
+
 /** Jedno volání chat completions přes LiteLLM proxy. */
 export async function chat(opts: ChatOptions): Promise<ChatResult> {
+  const timeoutMs = Math.min(opts.requestTimeoutMs ?? 180_000, 180_000);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new RangeError("Invalid LLM request deadline");
+  const deadline = AbortSignal.timeout(Math.ceil(timeoutMs));
+  const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
     temperature: opts.temperature ?? 0.2,
   };
-  if (opts.maxTokens) body.max_tokens = opts.maxTokens;
+  body.max_tokens = opts.maxTokens ?? 4096;
   if (opts.jsonMode) body.response_format = { type: "json_object" };
   if (opts.metadata) {
     body.metadata = {
@@ -115,7 +129,9 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
       Authorization: `Bearer ${opts.apiKey ?? masterKey()}`,
     },
     body: JSON.stringify(body),
-    signal: opts.signal,
+    // Providers can send whitespace while waiting for inference. An inactivity
+    // timeout restarts on every keepalive; this deadline also covers res.json().
+    signal,
   });
 
   if (!res.ok) {

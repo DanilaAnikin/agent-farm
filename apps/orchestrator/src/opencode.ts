@@ -10,6 +10,7 @@
  */
 
 import { Agent } from "undici";
+import { setTimeout as delay } from "node:timers/promises";
 
 const ENDPOINTS = {
   createSession: (base: string) => `${base}/session`,
@@ -51,6 +52,48 @@ export interface PromptResult {
   raw: unknown;
 }
 
+/** Provider failures can be embedded in a successful opencode HTTP response. */
+export class OpencodePromptError extends Error {
+  constructor(readonly errorType: string, readonly status?: number, budgetExceeded = false) {
+    // Never copy provider response bodies: they can contain the request or credentials.
+    super(`opencode prompt failed: ${errorType}${status ? ` (provider status ${status})` : ""}${budgetExceeded ? ": budget exceeded" : ""}`);
+    this.name = "OpencodePromptError";
+  }
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/** Validate completion before dispatch treats it as work ready for judging. */
+export function parsePromptResponse(value: unknown): PromptResult {
+  const raw = record(value);
+  if (!raw) throw new OpencodePromptError("InvalidResponse");
+  const info = record(raw.info);
+  const error = info?.error ?? raw.error;
+  if (error !== undefined && error !== null) {
+    const details = record(error);
+    const data = record(details?.data);
+    const code = data?.statusCode ?? details?.statusCode ?? details?.status;
+    const status = typeof code === "number" && Number.isInteger(code) && code >= 400 && code <= 599
+      ? code : undefined;
+    const name = typeof details?.name === "string" && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(details.name)
+      ? details.name : "ProviderError";
+    const diagnostic = [typeof error === "string" ? error : "", details?.message, data?.message, data?.responseBody]
+      .filter((part): part is string => typeof part === "string")
+      .map((part) => part.slice(0, 16_384)).join(" ");
+    const budgetExceeded = status === 402 || /budget.{0,40}(exceed|exhaust|limit|unavailable|pause)|budget_exceeded/i.test(diagnostic);
+    throw new OpencodePromptError(name, status, budgetExceeded);
+  }
+  if (!info && !Array.isArray(raw.parts) && typeof raw.text !== "string"
+      && typeof record(raw.message)?.content !== "string") {
+    throw new OpencodePromptError("InvalidResponse");
+  }
+  return { text: extractText(raw), raw };
+}
+
 /** Obecná SSE událost z opencode /event streamu. */
 export interface OpencodeEvent {
   type?: string;
@@ -72,30 +115,52 @@ async function postJson<T>(url: string, body: unknown, signal?: AbortSignal): Pr
   return (await res.json().catch(() => ({}))) as T;
 }
 
-/** Vytvoří novou session (fresh kontext na jeden pokus). */
-export async function createSession(baseUrl: string, signal?: AbortSignal): Promise<OpencodeSession> {
-  // Worker opencode server startuje ~8s; orchestrátor se může připojit dřív.
-  // Retry na connection chyby (fetch failed / ECONNREFUSED) až ~60s, než to vzdáme.
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 30; attempt++) {
+export interface SessionStartupLimits {
+  requestMs?: number;
+  totalMs?: number;
+  retryDelayMs?: number;
+}
+
+/** Session startup has its own deadline; long-running prompts use separate limits. */
+export async function createSession(
+  baseUrl: string,
+  signal?: AbortSignal,
+  limits: SessionStartupLimits = {},
+): Promise<OpencodeSession> {
+  const overall = AbortSignal.timeout(limits.totalMs ?? 90_000);
+  const startup = signal ? AbortSignal.any([signal, overall]) : overall;
+  let ready = process.env.LOCAL_RUNTIME === "1";
+  for (;;) {
+    startup.throwIfAborted();
+    const request = AbortSignal.timeout(limits.requestMs ?? 20_000);
     try {
+      const requestSignal = AbortSignal.any([startup, request]);
+      if (!ready) {
+        // Cold 1.18.x servers can hang their first session request during initialization.
+        // Warm configuration only after the server is listening; neither GET calls a model.
+        for (const endpoint of ["/global/health", "/config"]) {
+          const res = await fetch(`${baseUrl}${endpoint}`, { signal: requestSignal, dispatcher: workerDispatcher } as FetchInit);
+          if (!res.ok) throw new Error(`opencode startup readiness failed: HTTP ${res.status}`);
+          await res.json();
+        }
+        ready = true;
+      }
       const json = await postJson<{ id?: string; sessionID?: string }>(
-        ENDPOINTS.createSession(baseUrl),
-        {},
-        signal,
+        ENDPOINTS.createSession(baseUrl), {}, requestSignal,
       );
+      startup.throwIfAborted();
       const id = json.id ?? json.sessionID;
       if (!id) throw new Error("opencode createSession nevrátil id session.");
       return { id };
     } catch (err) {
-      lastErr = err;
+      // Never retry past cancellation/deadline, including cancellation during backoff.
+      startup.throwIfAborted();
       const msg = String((err as { message?: string })?.message ?? err);
-      const isConn = msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ECONNRESET") || msg.includes("socket");
-      if (!isConn || attempt === 29) throw err;
-      await new Promise((r) => setTimeout(r, 2000));
+      const isConn = /fetch failed|ECONNREFUSED|ECONNRESET|socket/.test(msg);
+      if (!request.aborted && !isConn) throw err;
+      await delay(limits.retryDelayMs ?? 2_000, undefined, { signal: startup });
     }
   }
-  throw lastErr;
 }
 
 /**
@@ -129,10 +194,14 @@ export async function prompt(
   } as FetchInit);
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(`opencode prompt selhalo: ${res.status} ${t}`);
+    return parsePromptResponse({ info: { error: {
+      name: "HTTPError", data: { statusCode: res.status, responseBody: t },
+    } } });
   }
-  const raw = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  return { text: extractText(raw), raw };
+  const raw: unknown = await res.json().catch(() => {
+    throw new OpencodePromptError("InvalidJSON");
+  });
+  return parsePromptResponse(raw);
 }
 
 /** Přeruší běžící session (překročen limit kroků / wall-clock). Best-effort. */

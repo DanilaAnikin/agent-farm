@@ -11,6 +11,8 @@ export interface TaskMessage {
   isFix?: boolean;
   /** volitelná poznámka z retry-s-poznámkou (injektuje se do promptu). */
   note?: string;
+  /** Committed partial result preserved when the spending window closed. */
+  resumeRef?: string;
   // POZOR: čítač infra requeue tu ZÁMĚRNĚ NENÍ. Dřív žil právě tady a každé
   // z 8 míst, která staví TaskMessage znovu (reconciliation, judge, dag,
   // tester), ho tím resetovalo na 0 — bound proti spinu se nikdy nenaplnil.

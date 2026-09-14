@@ -15,10 +15,12 @@ import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
 import Docker from "dockerode";
 import { loadConfig } from "@farm/core";
+import { prepareWorkerGitView, removeWorkerGitView } from "./worker-git-view.js";
 
 const exec = promisify(execCb);
 
 const WORKER_LABEL = "farm.project";
+const GIT_VIEW_LABEL = "farm.git-view";
 const WORKER_NETWORK = process.env.WORKER_NETWORK ?? "workernet";
 const OPENCODE_PORT = Number(process.env.WORKER_OPENCODE_PORT ?? 4096);
 const JUDGE_IMAGE = process.env.JUDGE_IMAGE ?? "agent-farm-judge:latest";
@@ -121,32 +123,40 @@ export async function spawnWorker(input: SpawnWorkerInput): Promise<SpawnedWorke
   const cfg = loadConfig();
   const docker = getDocker();
 
-  const container = await docker.createContainer({
-    Image: cfg.workerImage,
-    Labels: { [WORKER_LABEL]: input.projectId },
-    Env: [`FARM_PROJECT_ID=${input.projectId}`, `OPENCODE_PORT=${OPENCODE_PORT}`, `LITELLM_BASE_URL=${process.env.LITELLM_BASE_URL ?? "http://litellm:4000"}`, `LITELLM_API_KEY=${input.litellmKey}`],
-    HostConfig: {
-      // gVisor (runsc) na produkci; lokálně "runc" (WORKER_DOCKER_RUNTIME).
-      Runtime: cfg.workerDockerRuntime,
-      // Mount POUZE workspace tohoto projektu — izolace mezi projekty.
-      Binds: [`${input.workspaceHostPath}:/workspace`],
-      NetworkMode: WORKER_NETWORK,
-      AutoRemove: false,
-      ...WORKER_LIMITS,
-    },
-    WorkingDir: "/workspace",
-  });
+  const gitView = await prepareWorkerGitView(cfg.workspacesRoot, input.projectId, input.workspaceHostPath);
+  let container: Docker.Container | undefined;
+  try {
+    container = await docker.createContainer({
+      Image: cfg.workerImage,
+      Labels: { [WORKER_LABEL]: input.projectId, [GIT_VIEW_LABEL]: gitView.directory },
+      Env: [`FARM_PROJECT_ID=${input.projectId}`, `OPENCODE_PORT=${OPENCODE_PORT}`, `LITELLM_BASE_URL=${process.env.LITELLM_BASE_URL ?? "http://litellm:4000"}`, `LITELLM_API_KEY=${input.litellmKey}`, "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/workspace", "OPENCODE_PURE=1", "OPENCODE_DISABLE_DEFAULT_PLUGINS=1", "OPENCODE_DISABLE_MODELS_FETCH=1"],
+      HostConfig: {
+        // gVisor (runsc) na produkci; lokálně "runc" (WORKER_DOCKER_RUNTIME).
+        Runtime: cfg.workerDockerRuntime,
+        // One worktree plus credential-free Git metadata and this project's objects.
+        Binds: [`${input.workspaceHostPath}:/workspace`, ...gitView.binds],
+        NetworkMode: WORKER_NETWORK,
+        AutoRemove: false,
+        ...WORKER_LIMITS,
+      },
+      WorkingDir: "/workspace",
+    });
 
-  await container.start();
+    await container.start();
 
-  // Zjisti IP kontejneru na workernet síti → adresa opencode serveru.
-  const info = await container.inspect();
-  const net = info.NetworkSettings?.Networks?.[WORKER_NETWORK];
-  const ip = net?.IPAddress || info.NetworkSettings?.IPAddress;
-  if (!ip) {
-    throw new Error(`Worker kontejner ${container.id} nemá IP na síti ${WORKER_NETWORK}.`);
+    // Zjisti IP kontejneru na workernet síti → adresa opencode serveru.
+    const info = await container.inspect();
+    const net = info.NetworkSettings?.Networks?.[WORKER_NETWORK];
+    const ip = net?.IPAddress || info.NetworkSettings?.IPAddress;
+    if (!ip) {
+      throw new Error(`Worker kontejner ${container.id} nemá IP na síti ${WORKER_NETWORK}.`);
+    }
+    return { containerId: container.id, baseUrl: `http://${ip}:${OPENCODE_PORT}` };
+  } catch (error) {
+    if (container) await container.remove({ force: true }).catch(() => undefined);
+    await removeWorkerGitView(cfg.workspacesRoot, gitView.directory).catch(() => undefined);
+    throw error;
   }
-  return { containerId: container.id, baseUrl: `http://${ip}:${OPENCODE_PORT}` };
 }
 
 export interface JudgeRunInput {
@@ -159,6 +169,11 @@ export interface JudgeRunResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+}
+
+/** Override the image's shell entrypoint; the script must remain one argument. */
+export function judgeContainerCommand(cmd: string): { Entrypoint: string[]; Cmd: string[] } {
+  return { Entrypoint: ["/bin/bash", "-lc"], Cmd: [cmd] };
 }
 
 /**
@@ -175,7 +190,7 @@ export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunR
 
   const container = await docker.createContainer({
     Image: JUDGE_IMAGE,
-    Cmd: ["sh", "-lc", input.cmd],
+    ...judgeContainerCommand(input.cmd),
     Tty: false,
     HostConfig: {
       Runtime: cfg.workerDockerRuntime,
@@ -237,7 +252,9 @@ export async function killContainer(containerId: string): Promise<void> {
   if (LOCAL || containerId.startsWith("local-")) return; // v LOKÁLNÍM režimu žádný kontejner není
   try {
     const c = getDocker().getContainer(containerId);
+    const gitView = (await c.inspect()).Config?.Labels?.[GIT_VIEW_LABEL];
     await c.remove({ force: true });
+    await removeWorkerGitView(loadConfig().workspacesRoot, gitView).catch(() => undefined);
   } catch (err) {
     // 404 (kontejner už zmizel) a 409 (mazání právě běží) jsou ŽÁDANÝ koncový
     // stav, ne chyba — killContainer chce právě to, aby kontejner nebyl. Dřív

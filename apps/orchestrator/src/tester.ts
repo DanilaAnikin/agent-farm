@@ -50,6 +50,7 @@ import {
   validateTesterPlan,
   visionCheckPrompt,
   validateVisionCheck,
+  isLlmBudgetError,
 } from "@farm/llm";
 import type { TesterPlanOutput, VisionCheckOutput, ChatMessage } from "@farm/llm";
 import { createStorage, assetPath } from "@farm/storage";
@@ -85,6 +86,11 @@ export async function runQaLoop(): Promise<void> {
     await runQa(message);
     await ackDelete(QUEUES.qa, msgId);
   } catch (err) {
+    if (isLlmBudgetError(err)) {
+      await enqueue(QUEUES.qa, message, 3600);
+      await ackDelete(QUEUES.qa, msgId);
+      return;
+    }
     console.error(`[tester] QA přání ${message.wishId} selhalo:`, err);
     await logEvent({
       projectId: message.projectId,
@@ -193,6 +199,10 @@ async function executeQa(ctx: QaContext): Promise<void> {
     });
     planScenarios = plan.data.scenarios.slice(0, MAX_SCENARIOS);
   } catch (err) {
+    if (isLlmBudgetError(err)) {
+      await failRunAsError(ctx, "QA odloženo do obnovení rozpočtu.");
+      throw err;
+    }
     // Nepodařilo se naplánovat scénáře → infra/model chyba, ne selhání appky.
     await failRunAsError(ctx, `Nepodařilo se vygenerovat testovací scénáře: ${String(err)}`);
     return;
@@ -532,6 +542,7 @@ async function visionCheck(
     });
     return res.data;
   } catch (err) {
+    if (isLlmBudgetError(err)) throw err;
     console.error("[tester] vizuální kontrola selhala (pokračuji bez ní):", err);
     return null;
   }
