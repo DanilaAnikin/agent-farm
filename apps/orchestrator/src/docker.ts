@@ -304,8 +304,10 @@ export interface AppTestScenarioResult {
 }
 
 export interface RunAppAndTestInput {
-  /** Host cesta k merged repu projektu (mountuje se do /workspace). */
+  /** Disposable QA worktree containing the reviewed artifact(s). */
   workspaceHostPath: string;
+  /** Enables the credential-free Git view for this project. */
+  projectId?: string;
   /** Host cesta k výstupnímu adresáři (mountuje se do /out); musí existovat. */
   outputHostPath: string;
   scenarios: AppTestScenario[];
@@ -390,81 +392,88 @@ export async function runAppAndTest(input: RunAppAndTestInput): Promise<RunAppAn
   await fs.writeFile(join(input.outputHostPath, "qa-runner.mjs"), QA_RUNNER_MJS, "utf8");
   await fs.writeFile(join(input.outputHostPath, "run-qa.sh"), RUN_QA_SH, "utf8");
 
-  const container = await docker.createContainer({
-    Image: JUDGE_IMAGE,
-    // Přebij ENTRYPOINT, ať se skript spustí deterministicky (bez konkatenace CMD).
-    Entrypoint: ["/bin/bash", "-lc"],
-    Cmd: ["bash /out/run-qa.sh"],
-    Tty: false,
-    Env: ["CI=1", "NEXT_TELEMETRY_DISABLED=1", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"],
-    HostConfig: {
-      Runtime: cfg.workerDockerRuntime,
-      Binds: [`${input.workspaceHostPath}:/workspace`, `${input.outputHostPath}:/out`],
-      NetworkMode: WORKER_NETWORK,
-      AutoRemove: false,
-      ...JUDGE_LIMITS,
-    },
-    WorkingDir: "/workspace",
-  });
-
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    container.kill().catch(() => undefined);
-  }, input.timeoutMs);
-
+  const gitView = input.projectId
+    ? await prepareWorkerGitView(cfg.workspacesRoot, input.projectId, input.workspaceHostPath) : undefined;
+  let container: Docker.Container | undefined;
   try {
-    await container.start();
-    await container.wait().catch(() => ({ StatusCode: -1 }));
+    container = await docker.createContainer({
+      Image: JUDGE_IMAGE,
+      // Přebij ENTRYPOINT, ať se skript spustí deterministicky (bez konkatenace CMD).
+      Entrypoint: ["/bin/bash", "-lc"],
+      Cmd: ["bash /out/run-qa.sh"],
+      Tty: false,
+      Env: ["CI=1", "NEXT_TELEMETRY_DISABLED=1", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/workspace"],
+      HostConfig: {
+        Runtime: cfg.workerDockerRuntime,
+        Binds: [`${input.workspaceHostPath}:/workspace`, `${input.outputHostPath}:/out`, ...(gitView?.binds ?? [])],
+        NetworkMode: WORKER_NETWORK,
+        AutoRemove: false,
+        ...JUDGE_LIMITS,
+      },
+      WorkingDir: "/workspace",
+    });
+
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      container?.kill().catch(() => undefined);
+    }, input.timeoutMs);
+
+    try {
+      await container.start();
+      await container.wait().catch(() => ({ StatusCode: -1 }));
+    } finally {
+      clearTimeout(timer);
+    }
+
+    // Log (debug) + úklid.
+    let log = "";
+    try {
+      const logBuf = (await container.logs({
+        follow: false,
+        stdout: true,
+        stderr: true,
+        timestamps: false,
+      })) as unknown as Buffer;
+      const demux = demuxDockerLogs(logBuf);
+      log = `${demux.stdout}\n${demux.stderr}`.slice(-8000);
+    } catch {
+      /* ignore */
+    }
+
+    // Vytáhni results.json z host-mountnutého /out.
+    try {
+      const raw = await fs.readFile(join(input.outputHostPath, "results.json"), "utf8");
+      const parsed = JSON.parse(raw) as {
+        appStarted?: boolean;
+        appUrl?: string;
+        installOk?: boolean;
+        buildOk?: boolean;
+        results?: AppTestScenarioResult[];
+      };
+      return {
+        ok: true,
+        appStarted: parsed.appStarted === true,
+        appUrl: parsed.appUrl || undefined,
+        installOk: parsed.installOk === true,
+        buildOk: parsed.buildOk !== false,
+        results: Array.isArray(parsed.results) ? parsed.results : [],
+        log,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        appStarted: false,
+        installOk: false,
+        buildOk: false,
+        results: [],
+        log,
+        error: timedOut ? "qa_timeout" : `no_results: ${String(err)}`,
+      };
+    }
   } finally {
-    clearTimeout(timer);
-  }
-
-  // Log (debug) + úklid.
-  let log = "";
-  try {
-    const logBuf = (await container.logs({
-      follow: false,
-      stdout: true,
-      stderr: true,
-      timestamps: false,
-    })) as unknown as Buffer;
-    const demux = demuxDockerLogs(logBuf);
-    log = `${demux.stdout}\n${demux.stderr}`.slice(-8000);
-  } catch {
-    /* ignore */
-  }
-  await container.remove({ force: true }).catch(() => undefined);
-
-  // Vytáhni results.json z host-mountnutého /out.
-  try {
-    const raw = await fs.readFile(join(input.outputHostPath, "results.json"), "utf8");
-    const parsed = JSON.parse(raw) as {
-      appStarted?: boolean;
-      appUrl?: string;
-      installOk?: boolean;
-      buildOk?: boolean;
-      results?: AppTestScenarioResult[];
-    };
-    return {
-      ok: true,
-      appStarted: parsed.appStarted === true,
-      appUrl: parsed.appUrl || undefined,
-      installOk: parsed.installOk === true,
-      buildOk: parsed.buildOk !== false,
-      results: Array.isArray(parsed.results) ? parsed.results : [],
-      log,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      appStarted: false,
-      installOk: false,
-      buildOk: false,
-      results: [],
-      log,
-      error: timedOut ? "qa_timeout" : `no_results: ${String(err)}`,
-    };
+    if (container) await container.remove({ force: true }).catch(() => undefined);
+    if (gitView) await removeWorkerGitView(cfg.workspacesRoot, gitView.directory).catch(() => undefined);
   }
 }
 

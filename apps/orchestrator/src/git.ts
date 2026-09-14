@@ -48,6 +48,12 @@ class KeyedMutex {
 
 const repoLock = new KeyedMutex();
 
+/** Serialize disposable QA worktree changes with worker/merge Git operations. */
+export function withProjectRepoLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+  return repoLock.run(projectId, fn);
+}
+
+
 export interface ProjectRow {
   id: string;
   userId: string;

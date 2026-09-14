@@ -114,10 +114,23 @@ credentials. The orchestrator retains responsibility for committing changes.
 Direct orchestrator model calls have a 180-second absolute deadline, including
 response-body keepalives, and retain caller cancellation.
 
+QA verifies the approved commits in a disposable worktree. For existing
+repositories it composes reviewed task branches there without merging or
+pushing main, records the task/attempt/commit provenance, and uses the same
+sanitized Git view. Missing artifacts, composition conflicts and dependency
+installation failures are QA infrastructure errors; they must not create
+application repair tasks. Explicit verification commands from approved task
+contracts are checked against that worktree's package manifests and test paths.
+Existing repositories finish with reviewed PRs; QA does not deploy an unrelated
+main checkout as their preview.
+
 Host guards share `farm_guard_common.py` and the same accounting/advisory lock.
 Credit checks use free balance/model endpoints. PR reviews use the budgeted
 proxy. Guard-owned pauses can be resumed only by their owning guard, after a
 fresh budget/owner check. A user's pause remains authoritative.
+The separate Telegram bot's routine reporter and digest require explicit
+`TELEGRAM_AUTOMATIC_REPORTS_ENABLED=true`; interactive commands and approval
+requests remain available when that bot is running.
 
 Deploy compose services with the explicit production `--env-file` and `-f`
 paths. Back up settings, source/configuration and actual PGMQ rows before a

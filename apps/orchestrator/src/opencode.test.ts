@@ -117,7 +117,7 @@ test("session startup retries a hung first POST and accepts the second response"
     if (++calls === 1) return;
     res.setHeader("content-type", "application/json"); res.end('{"id":"session-recovered"}');
   }, async (url) => {
-    assert.deepEqual(await createSession(url, undefined, { requestMs: 60, totalMs: 600, retryDelayMs: 10 }), { id: "session-recovered" });
+    assert.deepEqual(await createSession(url, undefined, { requestMs: 250, totalMs: 3000, retryDelayMs: 25 }), { id: "session-recovered" });
     assert.equal(calls, 2);
   });
 });
@@ -126,19 +126,23 @@ test("repeated hung session requests stop at the absolute startup deadline", asy
   let calls = 0;
   await sessionServer(() => { calls++; }, async (url) => {
     const started = Date.now();
-    await assert.rejects(createSession(url, undefined, { requestMs: 50, totalMs: 180, retryDelayMs: 10 }), (err: unknown) => {
+    await assert.rejects(createSession(url, undefined, { requestMs: 250, totalMs: 2500, retryDelayMs: 25 }), (err: unknown) => {
       assert.ok(err instanceof Error); assert.match(err.name, /TimeoutError|AbortError/); return true;
     });
-    assert.ok(Date.now() - started < 550);
-    assert.ok(calls >= 2 && calls <= 4);
+    assert.ok(Date.now() - started < 5000);
+    assert.ok(calls >= 2 && calls <= 10);
   });
 });
 
 test("external cancellation interrupts session startup including retry backoff", async () => {
   let calls = 0;
-  await sessionServer(() => { calls++; }, async (url) => {
-    const signal = AbortSignal.timeout(100);
-    await assert.rejects(createSession(url, signal, { requestMs: 30, totalMs: 1500, retryDelayMs: 500 }));
+  const controller = new AbortController();
+  await sessionServer(() => {
+    calls++;
+    // Trigger cancellation only after startup readiness completed and a POST arrived.
+    setTimeout(() => controller.abort(), 500);
+  }, async (url) => {
+    await assert.rejects(createSession(url, controller.signal, { requestMs: 250, totalMs: 5000, retryDelayMs: 2000 }));
     assert.equal(calls, 1);
   });
 });

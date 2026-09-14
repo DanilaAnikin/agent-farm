@@ -4,7 +4,7 @@
  * q_qa consumer: pro každé přání, které judge označil za hotové (všechny tasky
  * done), spustí REÁLNOU end-to-end + vizuální verifikaci toho, co ostatní agenti
  * postavili:
- *   1) z merged mainu detekuje, jak se aplikace pouští (web server / cli / lib);
+ *   1) ze schválených artifactů v izolovaném QA worktree detekuje, jak se aplikace pouští (web server / cli / lib);
  *   2) z spec + acceptance criteria vygeneruje konkrétní testovací scénáře
  *      (testerPlanPrompt, MODELS.manager) — cílem je POKRÝT VŠECHNA kritéria;
  *   3) v izolovaném gVisor kontejneru appku nastartuje a projede scénáře:
@@ -32,6 +32,8 @@ import {
   qaRuns,
   mediaAssets,
   tasks,
+  attempts,
+  reviews,
   wishes,
   projects,
   specs,
@@ -41,7 +43,7 @@ import {
   ackDelete,
 } from "@farm/db";
 import type { QaScenario, AcceptanceCriterion } from "@farm/db";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, inArray } from "drizzle-orm";
 import { loadConfig, wishMachine } from "@farm/core";
 import {
   MODELS,
@@ -60,6 +62,10 @@ import { logEvent } from "./events.js";
 import { registerAgent, releaseAgent } from "./agents-registry.js";
 import { reflectOnFailure } from "./memory.js";
 import type { QaMessage } from "./types.js";
+import { prepareQaWorkspace, QaArtifactError, qaInfrastructureFailure } from "./qa-artifact.js";
+import type { QaWorkspace, ReviewedQaArtifact } from "./qa-artifact.js";
+import { withProjectRepoLock } from "./git.js";
+import { groundQaCommands, applyGroundedQaCommands } from "./qa-command-grounding.js";
 
 /** Kolik scénářů maximálně vykonáme (strop nákladů a času). */
 const MAX_SCENARIOS = 14;
@@ -162,7 +168,48 @@ interface QaContext {
 async function executeQa(ctx: QaContext): Promise<void> {
   const { project, wish, qaRunId } = ctx;
   const cfg = loadConfig();
-  const workspacePath = join(cfg.workspacesRoot, project.id);
+  let workspace: QaWorkspace | undefined;
+  try {
+    const wishTasks = await getDb().select().from(tasks).where(eq(tasks.wishId, wish.id));
+    if (wishTasks.length === 0 || wishTasks.some(t => t.status !== "done")) throw new QaArtifactError("wish_tasks_not_complete");
+    const artifacts: ReviewedQaArtifact[] = [];
+    if (project.repoMode === "existing") {
+      const codeTasks = wishTasks.filter(t => t.kind === "code");
+      if (!codeTasks.length) throw new QaArtifactError("missing_code_artifacts");
+      const approved = await getDb().select({ taskId: attempts.taskId, attemptId: attempts.id, branch: attempts.branch })
+        .from(attempts).innerJoin(reviews, eq(reviews.attemptId, attempts.id))
+        .where(and(inArray(attempts.taskId, codeTasks.map(t => t.id)), eq(attempts.status, "succeeded"),
+          eq(attempts.isWinner, true), eq(reviews.verdict, "approve")))
+        .orderBy(desc(attempts.finishedAt));
+      for (const task of codeTasks) {
+        const row = approved.find(a => a.taskId === task.id);
+        if (!row?.branch) throw new QaArtifactError("task_missing_approved_artifact");
+        artifacts.push({ taskId: task.id, attemptId: row.attemptId, branch: row.branch });
+      }
+    }
+    workspace = await withProjectRepoLock(project.id, () => prepareQaWorkspace({
+      workspacesRoot: cfg.workspacesRoot, projectId: project.id, qaRunId,
+      existing: project.repoMode === "existing", artifacts,
+      owner: process.env.LOCAL_RUNTIME === "1" ? undefined : { uid: 1001, gid: 1001 },
+    }));
+    const output = join(cfg.workspacesRoot, `${project.id}--qa`, qaRunId);
+    await fs.mkdir(output, { recursive: true });
+    const provenance = { qaRunId, commit: workspace.commit, artifacts: workspace.artifacts };
+    await fs.writeFile(join(output, "artifact.json"), JSON.stringify(provenance, null, 2) + "\n");
+    await logEvent({ projectId: project.id, wishId: wish.id, type: "qa_artifact_selected",
+      message: "QA ověřuje izolovaný snapshot schválené práce.", data: provenance });
+    await executeQaWorkspace(ctx, workspace.path, wishTasks);
+  } catch (error) {
+    if (isLlmBudgetError(error)) throw error;
+    await failRunAsError(ctx, error instanceof QaArtifactError ? error.message : "QA infrastructure failed; reviewed artifacts were preserved.");
+  } finally {
+    if (workspace) await withProjectRepoLock(project.id, () => workspace!.cleanup()).catch(() => undefined);
+  }
+}
+
+async function executeQaWorkspace(ctx: QaContext, workspacePath: string, wishTasks: (typeof tasks.$inferSelect)[]): Promise<void> {
+  const { project, wish, qaRunId } = ctx;
+  const cfg = loadConfig();
 
   // 1) Načti spec + acceptance criteria + strom souborů.
   const spec = await latestSpec(wish.id);
@@ -172,6 +219,7 @@ async function executeQa(ctx: QaContext): Promise<void> {
       ? spec.acceptanceCriteria
       : [{ id: "c1", description: wish.title }];
   const fileTree = await buildFileTree(workspacePath);
+  const grounding = await groundQaCommands({ workspacePath, criteria: acceptanceCriteria, tasks: wishTasks, hasSpec: !!spec });
 
   // 2) Detekuj, jak appku spustit.
   const runCfg = await detectRunConfig(workspacePath);
@@ -179,25 +227,30 @@ async function executeQa(ctx: QaContext): Promise<void> {
   // 3) Vygeneruj testovací scénáře (Tester plan).
   let planScenarios: TesterPlanOutput["scenarios"];
   try {
-    const plan = await structured<TesterPlanOutput>({
-      model: MODELS.manager,
-      messages: testerPlanPrompt({
-        wishTitle: wish.title,
-        specMd,
-        acceptanceCriteria: acceptanceCriteria.map((c) => ({
-          id: c.id,
-          description: c.description,
-          check: c.check,
-        })),
-        projectKind: project.kind,
-        startCommand: runCfg.startCommand,
-        fileTree,
-      }),
-      validate: validateTesterPlan,
-      temperature: 0.2,
-      metadata: { userId: project.userId, projectId: project.id, scope: "system" },
-    });
-    planScenarios = plan.data.scenarios.slice(0, MAX_SCENARIOS);
+    if (grounding.complete) {
+      if (grounding.scenarios.length > MAX_SCENARIOS) throw new Error("QA verification exceeds the scenario limit.");
+      planScenarios = grounding.scenarios;
+    } else {
+      const plan = await structured<TesterPlanOutput>({
+        model: MODELS.manager,
+        messages: testerPlanPrompt({
+          wishTitle: wish.title,
+          specMd,
+          acceptanceCriteria: acceptanceCriteria.map((c) => ({
+            id: c.id,
+            description: c.description,
+            check: c.check,
+          })),
+          projectKind: project.kind,
+          startCommand: runCfg.startCommand,
+          fileTree: `${fileTree}\n\n${grounding.promptContext}`,
+        }),
+        validate: validateTesterPlan,
+        temperature: 0.2,
+        metadata: { userId: project.userId, projectId: project.id, scope: "system" },
+      });
+      planScenarios = applyGroundedQaCommands(plan.data.scenarios, grounding, MAX_SCENARIOS);
+    }
   } catch (err) {
     if (isLlmBudgetError(err)) {
       await failRunAsError(ctx, "QA odloženo do obnovení rozpočtu.");
@@ -221,6 +274,7 @@ async function executeQa(ctx: QaContext): Promise<void> {
   const outputHostPath = join(cfg.workspacesRoot, `${project.id}--qa`, qaRunId);
   const run = await runAppAndTest({
     workspaceHostPath: workspacePath,
+    projectId: project.id,
     outputHostPath,
     scenarios: dockerScenarios,
     startCommand: hasWeb ? runCfg.startCommand : undefined,
@@ -229,9 +283,9 @@ async function executeQa(ctx: QaContext): Promise<void> {
     timeoutMs: QA_WALL_CLOCK_MS,
   });
 
-  // Runner vůbec nedoběhl (kontejner spadl / timeout / žádné výsledky) → qa_error.
-  if (!run.ok) {
-    await failRunAsError(ctx, `Test-runner nedoběhl (${run.error ?? "neznámá chyba"}).`);
+  const infrastructureFailure = qaInfrastructureFailure(run);
+  if (infrastructureFailure) {
+    await failRunAsError(ctx, infrastructureFailure);
     return;
   }
 
@@ -384,9 +438,10 @@ async function completeWish(ctx: QaContext): Promise<void> {
     message: `Přání splněno a ověřeno Testerem: ${wish.title}`,
   });
 
-  // Preview deploy pro code/mixed projekty s repem (přes q_deploy — publisher
+  // Existing repositories were verified on PR artifacts; their main is not this result.
+  // Preview deploy pro nová code/mixed repa (přes q_deploy — publisher
   // jako jediný drží Dokploy tokeny; žádný cross-app import).
-  if (project.repoMode !== "none" && project.kind !== "content") {
+  if (project.repoMode === "new" && project.kind !== "content") {
     await enqueue(QUEUES.deploy, { projectId: project.id, wishId: wish.id, kind: "preview" });
     await logEvent({
       projectId: project.id,
