@@ -33,7 +33,7 @@ export function UserMenu({ email, role }: { email: string | null; role: string }
         >
           <div className="mb-2 truncate text-sm">{email ?? "—"}</div>
           <div className="mb-3 text-xs text-[--color-muted]">
-            Role: {role === "admin" ? "administrátor" : "člen"}
+            Role: {role === "admin" ? "Administrátor" : "Člen"}
           </div>
           <Button
             variant="secondary"
