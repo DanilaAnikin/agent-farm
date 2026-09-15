@@ -1,4 +1,8 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
+import { formatRelative } from "@/lib/format";
 
 /**
  * SIGNATURE „living telemetry" prvky — jedna vlastnitelná mechanika putujícího
@@ -42,5 +46,49 @@ export function StatusPulse({
       aria-hidden
       className={cn("inline-block h-2 w-2 shrink-0 rounded-full", color, pulse && "status-pulse", className)}
     />
+  );
+}
+
+/**
+ * Pravdivý štítek živosti. „živě" (s dýchající tečkou) JEN když je realtime kanál
+ * opravdu přihlášený; jinak „obnoveno před X s" podle posledního obnovení.
+ * Relativní čas se počítá až v prohlížeči (před mountem nic), aby se serverový
+ * a klientský render nerozešly.
+ */
+export function LiveIndicator({
+  connected,
+  lastRefreshAt,
+  className,
+}: {
+  connected: boolean;
+  lastRefreshAt: number | null;
+  className?: string;
+}) {
+  const [now, setNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (connected) return;
+    const t = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, [connected, lastRefreshAt]);
+
+  if (connected) {
+    return (
+      <span className={cn("inline-flex items-center gap-1.5 text-xs text-[--color-muted]", className)}>
+        <StatusPulse className="h-1.5 w-1.5" />
+        živě
+      </span>
+    );
+  }
+  if (now === null || lastRefreshAt === null) return null;
+  return (
+    <span
+      className={cn("inline-flex items-center gap-1.5 text-xs text-[--color-faint]", className)}
+      title="Živé změny teď nechodí — stránka se obnovuje pravidelně."
+    >
+      <StatusPulse tone="muted" pulse={false} className="h-1.5 w-1.5" />
+      obnoveno {formatRelative(new Date(lastRefreshAt), new Date(Math.max(now, lastRefreshAt)))}
+    </span>
   );
 }
