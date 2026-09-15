@@ -26,7 +26,7 @@ services:
     volumes:
     - ../litellm/config.yaml:/app/config.yaml:ro
     environment:
-      DATABASE_URL: postgresql://supabase_admin:afe4162c061d3de4134bd45d6ca1a9fa160c9af5912ac855@agentfarm-supabase-db-1:5432/litellm
+      DATABASE_URL: ${LITELLM_DATABASE_URL:?LITELLM_DATABASE_URL chybí v .env}
     ports:
     - 127.0.0.1:4000:4000
     build:
