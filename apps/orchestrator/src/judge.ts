@@ -653,8 +653,8 @@ async function applyDecision(
 export async function maybeReplanStuckWish(
   wishId: string | null,
   project: typeof projects.$inferSelect,
-): Promise<void> {
-  if (!wishId) return;
+): Promise<"replanned" | "parked" | "skipped" | "waiting" | "none"> {
+  if (!wishId) return "none";
   const replanAt = await lastReplanAt(wishId);
   const rows = await getSql()<{ runnable: number; blocked: number }[]>`
     SELECT
@@ -668,9 +668,10 @@ export async function maybeReplanStuckWish(
   `;
   const runnable = rows[0]?.runnable ?? 0;
   const blocked = rows[0]?.blocked ?? 0;
-  if (runnable > 0 || blocked === 0) return;
+  if (blocked === 0) return "none";
+  if (runnable > 0) return "waiting";
 
-  await replanWishOrPark({
+  return replanWishOrPark({
     wishId,
     project,
     cause: "tasks_blocked",
@@ -898,7 +899,16 @@ export async function maybeCompleteWish(
     .select({ status: tasks.status, parkReason: tasks.parkReason, parkedAt: tasks.parkedAt, updatedAt: tasks.updatedAt })
     .from(tasks)
     .where(eq(tasks.wishId, wishId));
-  if (wishTasks.some((t) => t.status !== "done" && !isSupersededTask(t, replanAt))) return;
+  if (wishTasks.some((t) => t.status !== "done" && !isSupersededTask(t, replanAt))) {
+    // Nedokončený úkol zbývá. Když je to jen uvázlá práce (zaparkovaná/selhaná po
+    // posledním přeplánování) a nic dalšího už v přání neběží, musí se přeplánovat
+    // TEĎ. Parkovací cesty volají maybeReplanStuckWish jen v okamžiku parkování —
+    // když tehdy v přání běžela jiná práce, po jejím dokončení to už nikdo nezkusil
+    // a přání viselo v 'active' bez práce navždy. Podmínky (nic spustitelného,
+    // aspoň jeden uvázlý úkol) hlídá maybeReplanStuckWish sám.
+    await maybeReplanStuckWish(wishId, project);
+    return;
+  }
   const wishRows = await getDb().select().from(wishes).where(eq(wishes.id, wishId)).limit(1);
   const wish = wishRows[0];
   if (!wish || wish.status !== "active") return;

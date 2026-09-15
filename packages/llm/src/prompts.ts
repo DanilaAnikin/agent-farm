@@ -320,6 +320,12 @@ export function refillPrompt(input: {
   repoState: string;
   managerNote?: string | null;
   parkedTasks: string[];
+  /**
+   * Zaparkované úkoly bez přání, které se nevešly do rozpočtu jednoho pokusu. Žádný
+   * plánovač je nerozdělí, takže jediná autonomní cesta je navrhnout je znovu po
+   * menších krocích (jinak by „čekaly na člověka" navždy).
+   */
+  oversizedTasks?: string[];
   /** Už hotové tasky — sémantický guard proti duplikátům (viz níže). */
   doneTasks?: string[];
   maxTasks: number;
@@ -362,6 +368,9 @@ export function refillPrompt(input: {
         `- An EMPTY tasks array is the correct answer if nothing is genuinely worth doing right now. Do not pad.\n` +
         `- Do NOT churn: no cosmetic refactors, no renaming, no reformatting, no "improve code quality" with no observable effect.\n` +
         `- Do NOT recreate any parked task (listed below) — those are blocked on a human.\n` +
+        `- The only exception are tasks listed as TOO LARGE FOR ONE ATTEMPT: if the goal is still worth it, ` +
+        `propose it again ONLY split into smaller tasks, each independently verifiable and small enough ` +
+        `not to require reading the whole repository at once — never as the same task in one piece.\n` +
         `- Do NOT recreate anything from ALREADY DONE (listed below), in ANY wording or language. ` +
         `Key-based dedup cannot see that "Nastavit Jest s ts-jest" and "Set up Jest with ts-jest" are the same task, ` +
         `so this is on you. If the done work is incomplete, propose the concrete MISSING piece, never a re-do.\n` +
@@ -386,6 +395,10 @@ export function refillPrompt(input: {
         (input.parkedTasks.length
           ? `Parked tasks (do NOT recreate — blocked on a human):\n${input.parkedTasks.map((t) => `- ${t}`).join("\n")}\n\n`
           : "No parked tasks.\n\n") +
+        (input.oversizedTasks?.length
+          ? `TOO LARGE FOR ONE ATTEMPT (the farm stopped retrying these; split into smaller steps or leave out):\n` +
+            `${input.oversizedTasks.map((t) => `- ${t}`).join("\n")}\n\n`
+          : "") +
         (input.doneTasks?.length
           ? `ALREADY DONE (do NOT propose again, in any wording or language):\n${input.doneTasks.map((t) => `- ${t}`).join("\n")}`
           : "Nothing done yet."),

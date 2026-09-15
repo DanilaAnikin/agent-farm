@@ -63,11 +63,28 @@ export function classifyBudgetText(text: string): BudgetDeferralClass | null {
  *    `farm_window` by pro chybu, která s oknem nesouvisí, odkládal denně navždy.
  *  - Omyl opačným směrem (skutečný strop farmy vyložený jako příděl) stojí nejvýš
  *    zaparkovaný úkol, který farma sama přeplánuje — žádné peníze navíc.
+ * Výjimku (402 hned na prvním požadavku) řeší refineBudgetClass.
  */
 export const UNRECOGNIZED_BUDGET_CLASS: BudgetDeferralClass = Object.freeze({
   kind: "attempt_allowance",
   recognized: false,
 });
+
+/**
+ * Upřesnění podle průběhu pokusu. Nepoznaný 402, když pokus nestihl ani jeden krok,
+ * příděl pokusu vyčerpat nemohl: per-pokus klíč se vyčerpá až útratou a LiteLLM
+ * kontroluje jeho rozpočet před požadavkem. Typicky jde o poskytovatele (DeepSeek
+ * hlásí „Insufficient Balance" jako 402 a LiteLLM status propouští). Takový odklad
+ * se vede jako `farm_blocked`: hodinové čekání, které nic nestojí a úkol
+ * nezaparkuje. Bez toho by několikahodinový výpadek kreditu u poskytovatele
+ * zaparkoval úkoly jako „moc velké" a přes přeplánování nevratně odložil přání.
+ * Nepoznaný 402 až po nějakých krocích zůstává `attempt_allowance` — pokus utrácel
+ * a jen tahle cesta má limit.
+ */
+export function refineBudgetClass(budget: BudgetDeferralClass, steps: number): BudgetDeferralClass {
+  if (budget.recognized || budget.kind !== "attempt_allowance") return budget;
+  return steps > 0 ? budget : { kind: "farm_blocked", recognized: false };
+}
 
 function isBudgetClass(value: unknown): value is BudgetDeferralClass {
   const v = value as Partial<BudgetDeferralClass> | null;
@@ -127,6 +144,45 @@ export function secondsUntilBudgetReset(
   return Math.max(1, Math.ceil(ms / 1000)) + Math.max(0, Math.trunc(marginSec));
 }
 
+/** Pauza mezi pokusy u přídělu a u zablokovaného hlídače (beze změny proti dřívějšku). */
+export const BUDGET_DEFERRAL_DELAY_SEC = 3600;
+
+/** Kolik krátkých odkladů při odmítnutí, které data orchestrátoru nepotvrdila, smí úkol mít v jednom okně. */
+export const MAX_TRANSIENT_WINDOW_DEFERRALS = Number(process.env.MAX_TRANSIENT_WINDOW_DEFERRALS ?? 2);
+
+export type FarmScope = "farm" | "farm_month";
+
+/**
+ * Odklad po „budget: daily/monthly limit reached".
+ *
+ * Hlídač do útraty okna počítá i REZERVACE souběžných, ještě nevyúčtovaných
+ * požadavků (farm_budget_totals: settled → actual_usd, jinak reserved_usd). Judge,
+ * manager, tester i druhý worker běží souběžně, rezervace workera je až ~0,20 US$
+ * a skutečná cena bývá ~0,003 — odmítnutí tak může být jen přechodné. Proto
+ * rozhoduje `farmScope` = vstupní brána nad útratou orchestrátoru (farmGuardScope):
+ *  - "farm_month" / "farm": okno je zavřené i podle našich dat → do resetu toho okna;
+ *  - "unknown" (data nešla načíst): do resetu okna z hlášky — čekání nic nestojí;
+ *  - null: přechodné odmítnutí → krátký odklad (nejvýš do resetu); po
+ *    MAX_TRANSIENT_WINDOW_DEFERRALS takových odkladech v témže okně už do resetu,
+ *    ať přechodná odmítnutí netočí placené pokusy.
+ */
+export function decideFarmWindowDelay(
+  input: { window: BudgetWindow; now: Date; farmScope: FarmScope | null | "unknown"; priorTransient: number },
+  shortDelaySec: number = BUDGET_DEFERRAL_DELAY_SEC,
+  maxTransient: number = MAX_TRANSIENT_WINDOW_DEFERRALS,
+): { delaySec: number; window: BudgetWindow; transient: boolean } {
+  const untilReset = (window: BudgetWindow) => ({
+    delaySec: secondsUntilBudgetReset(window, input.now),
+    window,
+    transient: false,
+  });
+  if (input.farmScope === "farm_month") return untilReset("monthly");
+  if (input.farmScope === "farm") return untilReset("daily");
+  if (input.farmScope === "unknown" || !(input.priorTransient < maxTransient)) return untilReset(input.window);
+  const short = Math.max(1, Math.trunc(shortDelaySec));
+  return { delaySec: Math.min(short, secondsUntilBudgetReset(input.window, input.now)), window: input.window, transient: true };
+}
+
 // --- attempt_allowance: odklady bez pokroku ---------------------------------------
 
 /** Kolik po sobě jdoucích odkladů bez nového commitu úkol smí mít, než se zaparkuje. */
@@ -170,9 +226,20 @@ export type AllowanceDecision =
   | { action: "park"; stalled: number; reason: "stalled" | "total" };
 
 /**
+ * Kolik placených pokusů z téhož checkpointu ještě zbývá po odkladu se `stalled`
+ * konci bez pokroku. Při stalled = 1 jsou to dva: další konec bez pokroku se ještě
+ * odloží, až ten po něm úkol zaparkuje.
+ */
+export function remainingStalledAttempts(stalled: number, maxStalled: number = MAX_STALLED_ALLOWANCE_DEFERRALS): number {
+  return Math.max(0, maxStalled + 1 - stalled);
+}
+
+/**
  * Rozhodne, jestli se úkol po vyčerpaném přídělu pokusu smí znovu odložit.
  *
  * `prior` = dřívější `attempt_budget_deferred` téhož úkolu, NEJNOVĚJŠÍ PRVNÍ.
+ * `totalPrior` = počet přídělových odkladů od posledního resetu životního cyklu
+ * (ruční retry, oprava před sloučením) bez limitu okna; bez něj se spočítá z `prior`.
  * `stalled` ve výsledku = počet odkladů bez pokroku na stejném checkpointu
  * včetně toho aktuálního.
  *
@@ -184,12 +251,21 @@ export type AllowanceDecision =
  * nepřeruší — za to, že farma zavřela okno, úkol nemůže.
  */
 export function decideAllowanceDeferral(
-  input: { committed: boolean; resumeRef: string; startRef?: string | null; prior: readonly PriorBudgetDeferral[] },
+  input: {
+    committed: boolean;
+    resumeRef: string;
+    startRef?: string | null;
+    prior: readonly PriorBudgetDeferral[];
+    totalPrior?: number;
+  },
   maxStalled: number = MAX_STALLED_ALLOWANCE_DEFERRALS,
   maxTotal: number = MAX_ALLOWANCE_DEFERRALS_TOTAL,
 ): AllowanceDecision {
   const prior = input.prior;
-  const totalAllowance = prior.filter(countsAsAllowance).length;
+  const totalAllowance =
+    typeof input.totalPrior === "number" && Number.isFinite(input.totalPrior)
+      ? input.totalPrior
+      : prior.filter(countsAsAllowance).length;
   const progressed = attemptProgressed(input);
 
   let streak = 0;
@@ -256,11 +332,49 @@ export function guardAdmissionReserveUsd(env: Record<string, string | undefined>
 }
 
 /**
+ * Rezerva, kterou brána přičte k útratě nad jedním stropem farmy.
+ *
+ * Nikdy méně než per-pokus příděl (brána tak není volnější než checkBudget) a
+ * nikdy víc než `strop − příděl`. Rezerva větší než strop by bránu zavřela už při
+ * nulové útratě (třeba po zpřísnění farm_daily_cap_usd na 0,20 nebo s velkým
+ * GUARD_ADMISSION_CONTEXT_BYTES) a budget-hold, který používá stejnou bránu, by
+ * projekt už nikdy neobnovil. Farma by tiše a trvale stála, ačkoli hlídač malé
+ * požadavky pouští — stejná past jako PER_ATTEMPT_BUDGET_USD nad stropem projektu.
+ */
+export function guardPendingUsd(capUsd: number, perAttemptUsd: number, guardReserveUsd: number): number {
+  if (!Number.isFinite(guardReserveUsd)) return perAttemptUsd;
+  return Math.max(perAttemptUsd, Math.min(guardReserveUsd, capUsd - perAttemptUsd));
+}
+
+/**
+ * Stropy farmy (měsíc, den) s rezervou hlídače — jen to, co hlídač skutečně vynucuje.
+ * Měsíc první, stejně jako v hlídači i v checkBudget.
+ */
+export function farmGuardScope(
+  spend: SpendSnapshot,
+  caps: CapSet,
+  perAttemptUsd: number,
+  guardReserveUsd: number,
+): FarmScope | null {
+  if (
+    caps.farmMonthlyCapUsd !== undefined &&
+    spend.farmMonthUsd !== undefined &&
+    spend.farmMonthUsd + guardPendingUsd(caps.farmMonthlyCapUsd, perAttemptUsd, guardReserveUsd) > caps.farmMonthlyCapUsd
+  ) {
+    return "farm_month";
+  }
+  if (spend.farmTodayUsd + guardPendingUsd(caps.farmDailyCapUsd, perAttemptUsd, guardReserveUsd) > caps.farmDailyCapUsd) {
+    return "farm";
+  }
+  return null;
+}
+
+/**
  * Vstupní brána pokusu. Nejdřív beze změny `checkBudget(spend, caps, perAttempt)`
- * nad VŠEMI stropy. Navíc farma den/měsíc s rezervou max(perAttempt, rezervace
- * hlídače): pokus nemá smysl pouštět, když ho hlídač stejně zastaví hned při
- * prvním větším požadavku (dřív: 0,40 + 0,15 ≤ 0,60 prošlo, pokus spálil kontext
- * a v půlce narazil na „daily limit reached").
+ * nad VŠEMI stropy. Navíc farma den/měsíc s rezervou hlídače (guardPendingUsd):
+ * pokus nemá smysl pouštět, když ho hlídač stejně zastaví hned při prvním větším
+ * požadavku (dřív: 0,40 + 0,15 ≤ 0,60 prošlo, pokus spálil kontext a v půlce
+ * narazil na „daily limit reached").
  *
  * Rezerva hlídače se ZÁMĚRNĚ nepřičítá ke stropům projektu/uživatele/přání — ty
  * hlídač nevynucuje a jejich využitelnost by jen klesla bez jakéhokoli přínosu.
@@ -272,17 +386,31 @@ export function admissionBlockedScope(
   perAttemptUsd: number,
   guardReserveUsd: number,
 ): ReturnType<typeof checkBudget> {
-  const scope = checkBudget(spend, caps, perAttemptUsd);
-  if (scope) return scope;
-  if (!Number.isFinite(guardReserveUsd) || guardReserveUsd <= perAttemptUsd) return null;
-  return checkBudget(
-    { farmMonthUsd: spend.farmMonthUsd, farmTodayUsd: spend.farmTodayUsd, userTodayUsd: 0, projectTodayUsd: 0 },
-    {
-      farmMonthlyCapUsd: caps.farmMonthlyCapUsd,
-      farmDailyCapUsd: caps.farmDailyCapUsd,
-      userDailyCapUsd: Number.POSITIVE_INFINITY,
-      projectDailyCapUsd: Number.POSITIVE_INFINITY,
-    },
-    guardReserveUsd,
-  );
+  return checkBudget(spend, caps, perAttemptUsd) ?? farmGuardScope(spend, caps, perAttemptUsd, guardReserveUsd);
+}
+
+// --- Texty po zaparkování příliš velkého úkolu ---------------------------------------
+
+/** Co se s přáním stalo po zaparkování úkolu (maybeReplanStuckWish), resp. že selhalo. */
+export type ParkFollowUp = "replanned" | "parked" | "skipped" | "waiting" | "none" | "failed";
+
+/**
+ * Pravdivé pokračování hlášky podle skutečného výsledku, ne podle přání. Úkol bez
+ * přání (refill) žádný plánovač nerozdělí — dostane ho refill jako „moc velký".
+ */
+export function oversizedParkFollowUp(input: { hasWish: boolean; outcome: ParkFollowUp; memory: boolean }): string {
+  if (!input.hasWish) {
+    return `Farma ho už neopakuje${input.memory ? "; poučení je v paměti projektu" : ""} a doplňování práce ho smí ` +
+      `navrhnout znovu jen jako menší, samostatně ověřitelné kroky.`;
+  }
+  switch (input.outcome) {
+    case "replanned":
+      return "Farma ho už neopakuje a přání přeplánuje na menší kroky.";
+    case "waiting":
+      return "Farma ho už neopakuje; přání přeplánuje, až v něm doběhne ostatní práce.";
+    case "parked":
+      return "Farma ho už neopakuje; přání už vyčerpalo svá přeplánování, proto ho odkládá a projekt pokračuje jinou prací.";
+    default:
+      return "Farma ho už neopakuje.";
+  }
 }

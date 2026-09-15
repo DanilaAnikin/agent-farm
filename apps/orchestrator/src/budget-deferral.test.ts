@@ -7,9 +7,15 @@ import {
   classifyBudgetDeferral,
   classifyBudgetText,
   decideAllowanceDeferral,
+  decideFarmWindowDelay,
+  farmGuardScope,
   guardAdmissionReserveUsd,
   guardPeakReservationUsd,
+  oversizedParkFollowUp,
+  refineBudgetClass,
+  remainingStalledAttempts,
   secondsUntilBudgetReset,
+  BUDGET_DEFERRAL_DELAY_SEC,
   BUDGET_RESET_MARGIN_SEC,
 } from "./budget-deferral.js";
 
@@ -153,4 +159,74 @@ test("admission gate blocks farm-wide when the guard would refuse, never loosens
   // Rezerva menší než příděl nebo nesmysl → přesně checkBudget.
   assert.equal(admissionBlockedScope({ ...spend, farmTodayUsd: 0.44 }, caps, 0.15, 0.01), null);
   assert.equal(admissionBlockedScope({ ...spend, farmTodayUsd: 0.46 }, caps, 0.15, Number.NaN), "farm");
+});
+
+// --- revize: neznámý 402, přechodné odmítnutí okna, rezerva nad stropem, texty ------
+
+test("unrecognized 402 before any step is a free farm_blocked wait, after steps it stays bounded allowance", () => {
+  const unknown = { kind: "attempt_allowance", recognized: false } as const;
+  assert.deepEqual(refineBudgetClass(unknown, 0), { kind: "farm_blocked", recognized: false });
+  assert.deepEqual(refineBudgetClass(unknown, 3), unknown);
+  // Poznaný příděl ani hlídač se neupřesňují.
+  assert.deepEqual(refineBudgetClass({ kind: "attempt_allowance", recognized: true }, 0), { kind: "attempt_allowance", recognized: true });
+  assert.deepEqual(refineBudgetClass({ kind: "farm_window", window: "daily", recognized: true }, 0).kind, "farm_window");
+  // Druh farm_blocked se do přídělové řady nepočítá → takový odklad úkol nezaparkuje.
+  const prior = [{ resumeRef: A, kind: "farm_blocked", progressed: false }, { resumeRef: A, kind: "farm_blocked", progressed: false }];
+  assert.deepEqual(decideAllowanceDeferral({ committed: false, resumeRef: A, startRef: A, prior }), { action: "defer", stalled: 1 });
+});
+
+test("farm_window waits for the reset only when the orchestrator's own spend confirms it", () => {
+  const now = new Date("2026-09-15T18:12:40.500Z");
+  const untilDaily = secondsUntilBudgetReset("daily", now);
+  // Potvrzené zavřené okno (nebo nečitelná data) → do resetu.
+  assert.deepEqual(decideFarmWindowDelay({ window: "daily", now, farmScope: "farm", priorTransient: 0 }), { delaySec: untilDaily, window: "daily", transient: false });
+  assert.deepEqual(decideFarmWindowDelay({ window: "daily", now, farmScope: "unknown", priorTransient: 0 }).delaySec, untilDaily);
+  assert.equal(decideFarmWindowDelay({ window: "daily", now, farmScope: "farm_month", priorTransient: 0 }).window, "monthly");
+  // Hláška „monthly", ale podle dat je zavřený jen den → počkat na denní reset a zkusit znovu.
+  assert.equal(decideFarmWindowDelay({ window: "monthly", now, farmScope: "farm", priorTransient: 0 }).window, "daily");
+  // Přechodné odmítnutí (souběžné rezervace) → krátký odklad, po dvou už do resetu.
+  assert.deepEqual(decideFarmWindowDelay({ window: "daily", now, farmScope: null, priorTransient: 0 }), { delaySec: BUDGET_DEFERRAL_DELAY_SEC, window: "daily", transient: true });
+  assert.equal(decideFarmWindowDelay({ window: "daily", now, farmScope: null, priorTransient: 1 }).transient, true);
+  assert.deepEqual(decideFarmWindowDelay({ window: "daily", now, farmScope: null, priorTransient: 2 }), { delaySec: untilDaily, window: "daily", transient: false });
+  assert.equal(decideFarmWindowDelay({ window: "daily", now, farmScope: null, priorTransient: Number.POSITIVE_INFINITY }).transient, false);
+  // Krátký odklad nikdy nepřesáhne reset.
+  const late = new Date("2026-09-15T23:50:00Z");
+  assert.equal(decideFarmWindowDelay({ window: "daily", now: late, farmScope: null, priorTransient: 0 }).delaySec, secondsUntilBudgetReset("daily", late));
+});
+
+test("guard reserve larger than a farm cap never blocks at zero spend and never loosens checkBudget", () => {
+  const zero = { farmMonthUsd: 0, farmTodayUsd: 0, userTodayUsd: 0, projectTodayUsd: 0 };
+  const tight = { farmMonthlyCapUsd: 20, farmDailyCapUsd: 0.2, userDailyCapUsd: 5, projectDailyCapUsd: 0.3 };
+  const reserve = guardPeakReservationUsd();
+  assert.equal(admissionBlockedScope(zero, tight, 0.15, reserve), null);
+  // Nesmyslně velký kontext v env (rezerva > 0,60) farmu trvale nezastaví.
+  const huge = guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "1000000" });
+  assert.ok(huge > 0.6);
+  assert.equal(admissionBlockedScope(zero, { ...tight, farmDailyCapUsd: 0.6 }, 0.15, huge), null);
+  assert.equal(farmGuardScope({ ...zero, farmMonthUsd: 0 }, { ...tight, farmMonthlyCapUsd: 0.2 }, 0.15, reserve), null);
+  // Brána zůstává aspoň tak přísná jako checkBudget(perAttempt): 0,06 + 0,15 > 0,20.
+  assert.equal(admissionBlockedScope({ ...zero, farmTodayUsd: 0.06, userTodayUsd: 0.06 }, tight, 0.15, huge), "farm");
+  // A se stropem 0,60 dál blokuje produkční případ (0,41 + 0,20 > 0,60) i s obří rezervou.
+  assert.equal(admissionBlockedScope({ ...zero, farmTodayUsd: 0.41 }, { ...tight, farmDailyCapUsd: 0.6 }, 0.15, huge), "farm");
+});
+
+test("allowance totals come from the caller when given (reset lifecycle, no LIMIT window)", () => {
+  const progressedPrior = [{ resumeRef: A, kind: "attempt_allowance", progressed: true }];
+  // Po ručním retry je historie starších odkladů mimo počet → úkol se hned nezaparkuje.
+  assert.equal(decideAllowanceDeferral({ committed: true, resumeRef: B, startRef: A, prior: progressedPrior, totalPrior: 1 }).action, "defer");
+  // Celkový počet mimo okno 20 událostí pojistku drží.
+  assert.deepEqual(decideAllowanceDeferral({ committed: true, resumeRef: B, startRef: A, prior: progressedPrior, totalPrior: 6 }), { action: "park", stalled: 0, reason: "total" });
+});
+
+test("texts: remaining attempts from one checkpoint and truthful park follow-ups", () => {
+  assert.equal(remainingStalledAttempts(1, 2), 2);
+  assert.equal(remainingStalledAttempts(2, 2), 1);
+  assert.equal(remainingStalledAttempts(5, 2), 0);
+  assert.match(oversizedParkFollowUp({ hasWish: true, outcome: "replanned", memory: true }), /přeplánuje na menší kroky/);
+  assert.match(oversizedParkFollowUp({ hasWish: true, outcome: "waiting", memory: true }), /až v něm doběhne ostatní práce/);
+  assert.match(oversizedParkFollowUp({ hasWish: true, outcome: "parked", memory: true }), /vyčerpalo svá přeplánování/);
+  assert.equal(oversizedParkFollowUp({ hasWish: true, outcome: "failed", memory: true }), "Farma ho už neopakuje.");
+  const orphan = oversizedParkFollowUp({ hasWish: false, outcome: "none", memory: false });
+  assert.doesNotMatch(orphan, /přání|paměti/);
+  assert.match(orphan, /menší, samostatně ověřitelné kroky/);
 });

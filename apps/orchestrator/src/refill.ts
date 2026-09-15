@@ -7,7 +7,9 @@
  *  (a) dedup nových tasků proti dedup_key VŠECH tasků projektu (trigram ≥ threshold)
  *      + seznam hotových jde do promptu (trigram neuvidí překlad téhož zadání);
  *  (b) max refill_max_rounds_per_day kol na projekt/den (počítáno z events);
- *  (c) parked task znovu otevře jen člověk (nikdy je neresuscitujeme);
+ *  (c) parked task znovu otevře jen člověk (nikdy je neresuscitujeme); úkol bez
+ *      přání zaparkovaný jako příliš velký na jeden pokus smí refill navrhnout
+ *      znovu, ale jen rozdělený na menší kroky;
  *  (d) práce nad NEZMERGOVANÝM kódem: úkol ve stavu `merging` je rozpracovaná
  *      práce (refill se nespustí) a otevřené PR farmy jdou do promptu, ať plánovač
  *      nestaví nad kódem, který v main ještě není.
@@ -187,11 +189,25 @@ async function refillProject(
   // AppError hierarchy" a čtyři varianty „nastav Jest", každou jako samostatný PR
   // se svou paralelní strukturou. Guard proto bere VŠECHNY tasky projektu.
   const guardedTasks = await getDb()
-    .select({ title: tasks.title, dedupKey: tasks.dedupKey, status: tasks.status })
+    .select({
+      title: tasks.title,
+      dedupKey: tasks.dedupKey,
+      status: tasks.status,
+      parkReason: tasks.parkReason,
+      wishId: tasks.wishId,
+    })
     .from(tasks)
     .where(eq(tasks.projectId, projectId));
   const existingKeys = guardedTasks.map((t) => t.dedupKey).filter((k) => k.length > 0);
-  const parkedTitles = guardedTasks.filter((t) => t.status === "parked").map((t) => t.title);
+  // Úkol bez přání, který se nevešel do rozpočtu jednoho pokusu (dispatch.ts), nemá
+  // plánovač, který by ho rozdělil — maybeReplanStuckWish potřebuje přání. Místo
+  // „neobnovovat, čeká na člověka" ho refill dostane zvlášť a smí ho navrhnout znovu
+  // jen jako menší kroky. Zaparkovaný úkol sám se neobnovuje (guard c) a dedup dál
+  // brání založit tentýž velký úkol v jednom kuse.
+  const oversized = (t: (typeof guardedTasks)[number]) =>
+    t.status === "parked" && t.parkReason === "attempt_allowance_exhausted" && t.wishId === null;
+  const parkedTitles = guardedTasks.filter((t) => t.status === "parked" && !oversized(t)).map((t) => t.title);
+  const oversizedTitles = guardedTasks.filter(oversized).map((t) => t.title).slice(-20);
   // Trigramová podobnost neuvidí, že „Nastavit Jest s ts-jest" a „Set up Jest with
   // ts-jest" je totéž — jsou to jiné znaky. Sémantickou vrstvu musí udělat model,
   // takže mu dáme seznam už hotového.
@@ -212,6 +228,7 @@ async function refillProject(
       repoState,
       managerNote: managerNote?.trim() || null,
       parkedTasks: parkedTitles,
+      oversizedTasks: oversizedTitles,
       doneTasks: doneTitles,
       maxTasks: cfg.refillMaxTasksPerRound,
       projectBrief: brief || undefined,

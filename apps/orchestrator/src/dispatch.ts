@@ -54,10 +54,20 @@ import {
   budgetWindowResetAt,
   classifyBudgetDeferral,
   decideAllowanceDeferral,
+  decideFarmWindowDelay,
+  farmGuardScope,
   guardAdmissionReserveUsd,
-  secondsUntilBudgetReset,
+  oversizedParkFollowUp,
+  refineBudgetClass,
+  remainingStalledAttempts,
+  BUDGET_DEFERRAL_DELAY_SEC,
+  type AllowanceDecision,
+  type BudgetWindow,
+  type FarmScope,
+  type ParkFollowUp,
   type PriorBudgetDeferral,
 } from "./budget-deferral.js";
+import { czCount } from "./suggestions.js";
 import type { OpencodeEvent } from "./opencode.js";
 import type { TaskMessage, JudgeMessage } from "./types.js";
 
@@ -820,10 +830,14 @@ async function dispatchTask(
 
     if (outcome.kind === "error") {
       if (isLlmBudgetError(outcome.error)) {
-        await handleBudgetStop({
-          task, projectRaw, message, msgId, attemptId, agentId,
-          steps: outcome.steps, startedAt, worktreePath, error: outcome.error,
-        });
+        try {
+          await handleBudgetStop({
+            task, projectRaw, message, msgId, attemptId, agentId,
+            steps: outcome.steps, startedAt, worktreePath, error: outcome.error,
+          });
+        } catch (err) {
+          await budgetStopFallback({ task, message, msgId, attemptId, agentId, steps: outcome.steps, startedAt, err });
+        }
         return;
       }
       // Chyba workera/infry → requeue bez penalizace (není to selhání tasku).
@@ -1058,19 +1072,19 @@ async function finalizeAttempt(
     .where(eq(attempts.id, attemptId));
 }
 
-/** Pauza mezi pokusy u přídělu a u zablokovaného hlídače (beze změny proti dřívějšku). */
-const BUDGET_DEFERRAL_DELAY_SEC = 3600;
-
 /**
  * Pokus zastavila rozpočtová chyba. Zaplacené změny se nikdy nezahazují
  * (checkpoint vzniká vždy) a rozpočtové čekání se nepočítá jako selhání úkolu.
  * Co dál, rozhoduje druh chyby (budget-deferral.ts):
- *  - farm_window:       zpět do fronty, ale viditelný až po resetu UTC okna;
+ *  - farm_window:       do resetu okna, když zavřené okno potvrdí i útrata
+ *                       orchestrátoru; jinak (souběžné rezervace) krátký odklad
+ *                       s limitem (decideFarmWindowDelay);
  *  - farm_blocked:      zpět do fronty za hodinu (dispatch mezitím stejně stojí
  *                       za pausable/farmRunDecision, takže to nic nestojí);
  *  - attempt_allowance: zpět do fronty, dokud úkol dělá pokrok; po
  *                       MAX_STALLED_ALLOWANCE_DEFERRALS odkladech na stejném
  *                       checkpointu se zaparkuje a přání se přeplánuje.
+ * Výjimku odtud chytá volající (budgetStopFallback), ne obecný catch dispatchTask.
  */
 async function handleBudgetStop(args: {
   task: TaskRow;
@@ -1086,25 +1100,38 @@ async function handleBudgetStop(args: {
 }): Promise<void> {
   const cfg = loadConfig();
   const { task, projectRaw, message, msgId, attemptId, agentId } = args;
-  const budget = classifyBudgetDeferral(args.error);
+  const budget = refineBudgetClass(classifyBudgetDeferral(args.error), args.steps);
   const commit = await commitWorktree(args.worktreePath, `farm checkpoint: ${task.title}`);
   const resumeRef = (await simpleGit(args.worktreePath).revparse(["HEAD"])).trim();
   const startRef = message.resumeRef ?? null;
   const progressed = attemptProgressed({ committed: commit.committed, resumeRef, startRef });
   const summary = `Budget wait (${budgetClassLabel(budget)}); checkpoint ${resumeRef}`;
   const data: Record<string, unknown> = {
-    attemptId, resumeRef, startRef, progressed,
+    attemptId, resumeRef, startRef, progressed, steps: args.steps,
     kind: budget.kind, window: budget.window ?? null, recognized: budget.recognized,
   };
 
   if (budget.kind === "attempt_allowance") {
-    const prior = await priorBudgetDeferrals(task.id);
-    const decision = decideAllowanceDeferral({ committed: commit.committed, resumeRef, startRef, prior });
-    data.stalled = decision.stalled;
-    if (decision.action === "park") {
-      await finalizeAttempt(attemptId, "aborted", args.steps, args.startedAt, `${summary}; parked`);
-      await parkOversizedTask(task, projectRaw, msgId, { ...data, parkCause: decision.reason });
-      return;
+    // Nečitelná historie (DB) nesmí propadnout výš: obecný catch by úkol vrátil se
+    // starým checkpointem za pár sekund. Bez rozhodnutí se jen odloží s novým
+    // checkpointem a běžnou hodinovou pauzou.
+    let decision: AllowanceDecision | null = null;
+    try {
+      const prior = await priorAllowanceDeferrals(task.id);
+      decision = decideAllowanceDeferral({
+        committed: commit.committed, resumeRef, startRef, prior: prior.recent, totalPrior: prior.total,
+      });
+    } catch (err) {
+      console.error("[dispatch] historie rozpočtových odkladů nešla načíst — odkládám bez rozhodnutí:", err);
+      data.historyUnavailable = true;
+    }
+    if (decision) {
+      data.stalled = decision.stalled;
+      if (decision.action === "park") {
+        await finalizeAttempt(attemptId, "aborted", args.steps, args.startedAt, `${summary}; parked`);
+        await parkOversizedTask(task, projectRaw, msgId, { ...data, parkCause: decision.reason }, budget.recognized);
+        return;
+      }
     }
   }
 
@@ -1112,20 +1139,49 @@ async function handleBudgetStop(args: {
   let text: string;
   if (budget.kind === "farm_window") {
     // Denní/měsíční strop farmy: žádné hodinové placené opakování — dřív se úkol
-    // vracel každou hodinu, pokus spálil kontext a hlídač ho znovu zastavil.
-    const window = budget.window ?? "daily";
+    // vracel každou hodinu, pokus spálil kontext a hlídač ho znovu zastavil. Jen
+    // odmítnutí, které útrata orchestrátoru nepotvrdí (souběžné rezervace), dostane
+    // krátký odklad s limitem.
     const now = new Date();
-    delaySec = secondsUntilBudgetReset(window, now);
-    const resetAt = budgetWindowResetAt(window, now);
-    data.resumeAt = new Date(now.getTime() + delaySec * 1000).toISOString();
-    text = `Vyčerpaný ${window === "monthly" ? "měsíční" : "denní"} rozpočet farmy — úkol se znovu spustí až po resetu okna ` +
-      `(${resetAt.toISOString().slice(0, 16).replace("T", " ")} UTC). Rozpracované změny jsou uložené.`;
+    const farmScope = await currentFarmScope(projectRaw, task.wishId, cfg.perAttemptBudgetUsd);
+    const window = budget.window ?? "daily";
+    const priorTransient = farmScope === null
+      ? await priorTransientWindowDeferrals(task.id, window).catch((err) => {
+          console.error("[dispatch] počet přechodných odkladů nešel načíst — odkládám do resetu:", err);
+          return Number.POSITIVE_INFINITY;
+        })
+      : 0;
+    const plan = decideFarmWindowDelay({ window, now, farmScope, priorTransient });
+    delaySec = plan.delaySec;
+    const resumeAt = new Date(now.getTime() + delaySec * 1000);
+    Object.assign(data, { farmScope, transient: plan.transient, resumeAt: resumeAt.toISOString() });
+    if (plan.transient) {
+      text = `Hlídač farmy požadavek odmítl (${window === "monthly" ? "měsíční" : "denní"} limit), ale podle záznamů útrat ` +
+        `je farma pod stropem — nejspíš souběžné rezervace jiných požadavků. Úkol to zkusí znovu za ` +
+        `${czCount(Math.max(1, Math.round(delaySec / 60)), ["minutu", "minuty", "minut"])}. Rozpracované změny jsou uložené.`;
+    } else {
+      const resetAt = budgetWindowResetAt(plan.window, now);
+      text = `Vyčerpaný ${plan.window === "monthly" ? "měsíční" : "denní"} rozpočet farmy — úkol se znovu spustí až po resetu okna ` +
+        `(${resetAt.toISOString().slice(0, 16).replace("T", " ")} UTC). Rozpracované změny jsou uložené.`;
+    }
   } else if (budget.kind === "farm_blocked") {
-    text = "Rozpočtový hlídač farmy teď práci nepouští (pauza nebo nepřipravené účtování) — úkol počká. Rozpracované změny jsou uložené.";
+    text = budget.recognized
+      ? "Rozpočtový hlídač farmy teď práci nepouští (pauza nebo nepřipravené účtování) — úkol počká. Rozpracované změny jsou uložené."
+      : "Pokus zastavila rozpočtová chyba neznámého druhu hned na prvním požadavku (nejspíš poskytovatel modelu), " +
+        "takže příděl pokusu vyčerpat nemohl — úkol počká hodinu a nepočítá se mu to.";
   } else {
-    text = progressed
-      ? `Pokus vyčerpal svůj příděl (${cfg.perAttemptBudgetUsd} US$) — další pokus naváže na uložené změny.`
-      : `Pokus vyčerpal svůj příděl (${cfg.perAttemptBudgetUsd} US$) bez nového commitu (${data.stalled}× po sobě) — ještě jeden pokus z téhož checkpointu.`;
+    const cause = budget.recognized
+      ? `Pokus vyčerpal svůj příděl (${cfg.perAttemptBudgetUsd} US$)`
+      : `Pokus zastavila rozpočtová chyba neznámého druhu (příděl pokusu ${cfg.perAttemptBudgetUsd} US$)`;
+    if (progressed) {
+      text = `${cause} — další pokus naváže na uložené změny.`;
+    } else if (typeof data.stalled === "number") {
+      const left = remainingStalledAttempts(data.stalled);
+      text = `${cause} bez nového commitu (${data.stalled}× po sobě) — z téhož checkpointu ještě nejvýš ` +
+        `${czCount(left, ["pokus", "pokusy", "pokusů"])}.`;
+    } else {
+      text = `${cause} bez nového commitu — další pokus naváže na uložené změny.`;
+    }
   }
 
   await finalizeAttempt(attemptId, "aborted", args.steps, args.startedAt, summary);
@@ -1140,27 +1196,122 @@ async function handleBudgetStop(args: {
   });
 }
 
-/** Dřívější rozpočtové odklady úkolu, nejnovější první (jen `events.data`). */
-async function priorBudgetDeferrals(taskId: string): Promise<PriorBudgetDeferral[]> {
-  const rows = await getSql()<{ data: PriorBudgetDeferral | null }[]>`
-    SELECT data FROM events
-    WHERE task_id = ${taskId} AND type = 'attempt_budget_deferred'
-    ORDER BY ts DESC LIMIT 20
+/**
+ * handleBudgetStop spadl (git, DB). Obecný catch v dispatchTask by pokus označil
+ * 'failed' a requeueNoPenalty by úkol vrátil se starým checkpointem za 2^n s —
+ * obešel by tak odklad do resetu okna i parkování. Tady: pokus 'aborted', úkol zpět
+ * do fronty JEN když je pořád 'running' (už zaparkovaný zůstane zaparkovaný) a
+ * nejdřív za hodinu.
+ */
+async function budgetStopFallback(args: {
+  task: TaskRow;
+  message: TaskMessage;
+  msgId: string;
+  attemptId: string;
+  agentId: string | null;
+  steps: number;
+  startedAt: number;
+  err: unknown;
+}): Promise<void> {
+  const { task, message, msgId, attemptId, err } = args;
+  console.error("[dispatch] zpracování rozpočtového odkladu selhalo:", err);
+  await finalizeAttempt(attemptId, "aborted", args.steps, args.startedAt, `Budget wait; handling failed: ${String(err)}`)
+    .catch(() => undefined);
+  const moved = await getDb()
+    .update(tasks)
+    .set({ status: "queued" })
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, "running")))
+    .returning({ id: tasks.id });
+  if (moved.length > 0) await enqueue(QUEUES.tasks, message, BUDGET_DEFERRAL_DELAY_SEC);
+  await ackDelete(QUEUES.tasks, msgId);
+  await logEvent({
+    projectId: task.projectId,
+    taskId: task.id,
+    agentId: args.agentId,
+    level: "error",
+    type: "dispatch_error",
+    message: `Zpracování rozpočtového odkladu selhalo: ${String(err)} — ` +
+      (moved.length > 0 ? "úkol to zkusí znovu nejdřív za hodinu." : "úkol zůstává ve svém stavu."),
+    data: { attemptId, requeued: moved.length > 0 },
+  });
+}
+
+/**
+ * Přídělové odklady úkolu od posledního resetu životního cyklu, nejnovější první.
+ *
+ * Jen druh `attempt_allowance` (a staré události bez druhu): odklady kvůli oknu
+ * nebo zablokovanému hlídači by jinak z okna LIMIT 20 vytlačily starší přídělové
+ * odklady (dlouhé „accounting is not ready" = událost každou hodinu) a vynulovaly
+ * řadu i pojistku „celkem". `total` se proto počítá zvlášť, bez limitu.
+ *
+ * Reset: ruční retry (`task_retry`, nuluje attempts_count) a oprava před sloučením
+ * (`task_merge_fix`, nová hlava PR). Úkol vrácený do práce se jinak zaparkoval
+ * s důvodem „total" hned při prvním vyčerpání přídělu.
+ */
+async function priorAllowanceDeferrals(taskId: string): Promise<{ recent: PriorBudgetDeferral[]; total: number }> {
+  const rows = await getSql()<{ data: PriorBudgetDeferral | null; total: number }[]>`
+    WITH since AS (
+      SELECT COALESCE(max(ts), '-infinity'::timestamptz) AS ts FROM events
+      WHERE task_id = ${taskId} AND type IN ('task_retry', 'task_merge_fix')
+    ), allowance AS (
+      SELECT e.data, e.ts FROM events e, since
+      WHERE e.task_id = ${taskId} AND e.type = 'attempt_budget_deferred'
+        AND (e.data->>'kind' IS NULL OR e.data->>'kind' = 'attempt_allowance')
+        AND e.ts > since.ts
+    )
+    SELECT data, (SELECT count(*)::int FROM allowance) AS total
+    FROM allowance ORDER BY ts DESC LIMIT 20
   `;
-  return rows.map((r) => (r.data && typeof r.data === "object" ? r.data : {}));
+  return {
+    recent: rows.map((r) => (r.data && typeof r.data === "object" ? r.data : {})),
+    total: rows[0]?.total ?? 0,
+  };
+}
+
+/** Kolik přechodných odkladů kvůli oknu farmy měl úkol v aktuálním okně (den/měsíc UTC). */
+async function priorTransientWindowDeferrals(taskId: string, window: BudgetWindow): Promise<number> {
+  const unit = window === "monthly" ? "month" : "day";
+  const rows = await getSql()<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM events
+    WHERE task_id = ${taskId} AND type = 'attempt_budget_deferred'
+      AND data->>'kind' = 'farm_window' AND data->>'transient' = 'true'
+      AND ts >= date_trunc(${unit}::text, now() at time zone 'UTC') at time zone 'UTC'
+  `;
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Je okno farmy zavřené i podle útrat orchestrátoru (stejná brána jako dispatch)?
+ * "unknown", když se to nepodařilo zjistit — volající pak čeká do resetu.
+ */
+async function currentFarmScope(
+  projectRaw: typeof projects.$inferSelect,
+  wishId: string | null,
+  perAttemptUsd: number,
+): Promise<FarmScope | null | "unknown"> {
+  try {
+    const caps = await getCaps(projectRaw.userId, projectRaw.id, wishId);
+    const spend = await spendSnapshot(projectRaw.userId, projectRaw.id, wishId);
+    return farmGuardScope(spend, caps, perAttemptUsd, guardAdmissionReserveUsd());
+  } catch (err) {
+    console.error("[dispatch] útrata farmy nešla načíst — okno beru jako zavřené:", err);
+    return "unknown";
+  }
 }
 
 /**
  * Úkol je na jeden pokus moc velký. Místo dalšího placeného odkladu ho zaparkuje
  * a napojí na existující autonomní přeplánování přání (maybeReplanStuckWish →
  * replanWishOrPark, s tvrdým limitem kol). Poučení jde do paměti projektu bez
- * LLM volání, aby nový plán úkol rozdělil na menší kroky.
+ * LLM volání, aby nový plán úkol rozdělil na menší kroky. Úkol bez přání převezme
+ * refill (refill.ts: oversizedTasks).
  */
 async function parkOversizedTask(
   task: TaskRow,
   projectRaw: typeof projects.$inferSelect,
   msgId: string,
   data: Record<string, unknown>,
+  recognized: boolean,
 ): Promise<void> {
   const cfg = loadConfig();
   // running → queued → parked (taskMachine nezná přímý přechod; obě hrany povolené).
@@ -1177,7 +1328,40 @@ async function parkOversizedTask(
 
   const why = data.parkCause === "total"
     ? "příděl vyčerpal už příliš mnohokrát celkem"
-    : `${Number(data.stalled) - 1}× po sobě skončil na limitu bez nového commitu`;
+    : `${Number(data.stalled)}× po sobě skončil na limitu bez nového commitu`;
+
+  // Od téhle chvíle je úkol zaparkovaný. Vedlejší efekty nesmí výjimkou propadnout
+  // do obecného catch v dispatchTask — ten by pokus přepsal na 'failed' a úkol vrátil
+  // do fronty se starým checkpointem.
+  let outcome: ParkFollowUp = "failed";
+  try {
+    // Poučení o velikosti úkolu jen u poznané chyby přídělu; u neznámé rozpočtové
+    // chyby by bylo nepravdivé a nový plán by zbytečně drobil úkol, který velký není.
+    if (recognized) {
+      await addMemory({
+        projectId: task.projectId,
+        wishId: task.wishId,
+        kind: "learning",
+        source: "reflection",
+        weight: 110,
+        title: `Poučení: úkol příliš velký na jeden pokus — ${task.title}`,
+        content:
+          `KOŘENOVÁ PŘÍČINA: Úkol „${task.title}" opakovaně vyčerpal rozpočet jednoho pokusu (${cfg.perAttemptBudgetUsd} US$) ` +
+          `bez dokončení.\n\nPOUČENÍ: Takhle velký úkol se do jednoho pokusu nevejde.\n\n` +
+          `DOPORUČENÝ POSTUP PŘÍŠTĚ: Rozdělit ho na menší úkoly, z nichž každý jde ověřit samostatně ` +
+          `a nevyžaduje procházet celé repo najednou.`,
+        tags: ["budget", "task-size"],
+      });
+    }
+    await parkBlockedDependents(task.id, task.wishId, "attempt_allowance_exhausted");
+    outcome = await maybeReplanStuckWish(task.wishId, projectRaw);
+  } catch (err) {
+    console.error(`[dispatch] navazující kroky po zaparkování úkolu ${task.id} selhaly:`, err);
+  }
+
+  const head = recognized
+    ? `Úkol „${task.title}" se nevejde do rozpočtu jednoho pokusu (${cfg.perAttemptBudgetUsd} US$): ${why}.`
+    : `Úkol „${task.title}" opakovaně zastavila rozpočtová chyba neznámého druhu (příděl pokusu ${cfg.perAttemptBudgetUsd} US$): ${why}.`;
   // Samostatný typ (ne `task_parked`): projektový circuit breaker počítá selhání
   // kvality, ne velikost úkolu vůči rozpočtu.
   await logEvent({
@@ -1186,26 +1370,9 @@ async function parkOversizedTask(
     taskId: task.id,
     level: "warn",
     type: "task_parked_attempt_allowance",
-    message: `Úkol „${task.title}" se nevejde do rozpočtu jednoho pokusu (${cfg.perAttemptBudgetUsd} US$): ${why}. ` +
-      `Farma ho už neopakuje a přání přeplánuje na menší kroky.`,
-    data: { ...data, parkReason: "attempt_allowance_exhausted" },
-  });
-  await addMemory({
-    projectId: task.projectId,
-    wishId: task.wishId,
-    kind: "learning",
-    source: "reflection",
-    weight: 110,
-    title: `Poučení: úkol příliš velký na jeden pokus — ${task.title}`,
-    content:
-      `KOŘENOVÁ PŘÍČINA: Úkol „${task.title}" opakovaně vyčerpal rozpočet jednoho pokusu (${cfg.perAttemptBudgetUsd} US$) ` +
-      `bez dokončení.\n\nPOUČENÍ: Takhle velký úkol se do jednoho pokusu nevejde.\n\n` +
-      `DOPORUČENÝ POSTUP PŘÍŠTĚ: Rozdělit ho na menší úkoly, z nichž každý jde ověřit samostatně ` +
-      `a nevyžaduje procházet celé repo najednou.`,
-    tags: ["budget", "task-size"],
-  });
-  await parkBlockedDependents(task.id, task.wishId, "attempt_allowance_exhausted");
-  await maybeReplanStuckWish(task.wishId, projectRaw);
+    message: `${head} ${oversizedParkFollowUp({ hasWish: task.wishId !== null, outcome, memory: recognized })}`,
+    data: { ...data, parkReason: "attempt_allowance_exhausted", followUp: outcome },
+  }).catch((err) => console.error("[dispatch] událost o zaparkování se nezapsala:", err));
 }
 
 /** Task zpět do fronty BEZ inkrementu attempts_count (infra abort / rate limit). */
@@ -1223,17 +1390,28 @@ async function requeueNoPenalty(
   // resetovalo na 0 každé z 8 míst, která TaskMessage staví znovu, takže se
   // bound nikdy nenaplnil. Atomický UPDATE navíc řeší závod 4 dispatch smyček,
   // které by jinak přečetly stejnou hodnotu a zvýšily ji na totéž číslo.
+  //
+  // Jen úkol, který je pořád 'running'. Když ho mezitím zaparkoval někdo jiný
+  // (parkOversizedTask), převzala reconciliace nebo předal judge, bezpodmínečné
+  // 'queued' by ho odparkovalo/zdvojilo a vrátilo s původní zprávou (starý
+  // checkpoint, backoff 2^n s) — mimo odklad do resetu okna i mimo parkování.
   const bumped = await getSql()<{ infra_retries: number }[]>`
     UPDATE tasks SET infra_retries = infra_retries + 1
-    WHERE id = ${task.id} RETURNING infra_retries
+    WHERE id = ${task.id} AND status = 'running' RETURNING infra_retries
   `;
+  if (bumped.length === 0) {
+    await ackDelete(QUEUES.tasks, msgId);
+    return;
+  }
   const infraRetries = bumped[0]?.infra_retries ?? 1;
   if (infraRetries > MAX_INFRA_RETRIES) {
-    await getDb()
+    const parked = await getDb()
       .update(tasks)
       .set({ status: "parked", parkReason: "infra", parkedAt: new Date() })
-      .where(eq(tasks.id, task.id));
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, "running")))
+      .returning({ id: tasks.id });
     await ackDelete(QUEUES.tasks, msgId);
+    if (parked.length === 0) return;
     await logEvent({
       projectId: task.projectId,
       taskId: task.id,
@@ -1251,7 +1429,15 @@ async function requeueNoPenalty(
     return;
   }
   // running → queued (infra kill; bez penalizace, viz taskMachine)
-  await getDb().update(tasks).set({ status: "queued" }).where(eq(tasks.id, task.id));
+  const moved = await getDb()
+    .update(tasks)
+    .set({ status: "queued" })
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, "running")))
+    .returning({ id: tasks.id });
+  if (moved.length === 0) {
+    await ackDelete(QUEUES.tasks, msgId);
+    return;
+  }
   const requeued: TaskMessage = { ...message, note: reason };
   // Exponenciální backoff (2^n s, strop 5 min). Bez něj se zpráva vracela okamžitě
   // viditelná a 4 dispatch smyčky po 2 s ji semlely tisíckrát za hodinu.
