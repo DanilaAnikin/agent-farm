@@ -1,127 +1,156 @@
 import { requireUser } from "@/lib/auth";
 import { FolderGit2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { startOfUtcDayIso } from "@/lib/time";
 import { formatUsd } from "@/lib/format";
+import { countLabel, plural, TVARY } from "@/lib/plural";
+import { OPEN_WISH_STATUSES } from "@/lib/constants";
+import { eventLabel } from "@/lib/event-labels";
+import { RPC, type FarmAttention, type ProjectLastEventRow } from "@/lib/rpc";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusPulse } from "@/components/ui/Live";
 import { NewProjectDialog } from "@/components/projects/NewProjectDialog";
 import { ProjectCard, type ProjectCardData, type ProjectCardWish } from "@/components/projects/ProjectCard";
 import { FirstRunChecklist } from "@/components/projects/FirstRunChecklist";
+import { effectiveWishStatus } from "@/components/projects/wish-status";
 import { RealtimeRefresh } from "@/components/RealtimeRefresh";
 import { WishComposer, type ComposerProject } from "@/components/home/WishComposer";
 import { SuggestionsPanel } from "@/components/home/SuggestionsPanel";
 import { LiveAgents, type AgentDisplay } from "@/components/agents/LiveAgents";
-import { AttentionPanel, type AttentionParked } from "@/components/home/AttentionPanel";
+import { AttentionPanel } from "@/components/home/AttentionPanel";
+import { FarmStatusBand } from "@/components/swarm/FarmStatusBand";
+import { loadFarmOverview } from "@/components/swarm/load-farm-overview";
+import { farmHeadline, farmShortReason } from "@/components/swarm/farm-headline";
+import { projectProgress, queueBreakdown, wishBreakdown, wishBreakdownLine } from "@/components/swarm/queue";
+import { farmBudgetDefaults } from "@/app/actions/project-defaults";
 import type { AgentRow, ProjectRow, WishRow } from "@/lib/types";
 
 export const metadata = { title: "Velín — Perennial" };
 
-// Přání, která jsou „v pohybu" (ne hotová, ne zaparkovaná).
-const ACTIVE_WISH_STATUSES = new Set(["new", "specifying", "awaiting_spec_approval", "active"]);
+const PRACUJE = ["pracuje", "pracují", "pracuje"] as const;
+const BEZICI_UKOL = new Set(["running", "judging", "merging"]);
 
 export default async function CommandCenterPage() {
-  const user = await requireUser();
+  await requireUser();
   const supabase = await createClient();
 
   const [
-    { data: projectsData },
-    { data: wishesData },
-    { data: tasksData },
-    { data: agentsData },
-    { data: costRows },
-    { data: eventRows },
-    { data: connRows },
+    overview,
+    projectsRes,
+    wishesRes,
+    agentsRes,
+    lastEventRes,
+    attentionRes,
+    connRes,
+    taskDoneRes,
+    defaults,
   ] = await Promise.all([
+    loadFarmOverview(),
     supabase.from("projects").select("*").order("created_at", { ascending: false }),
-    supabase.from("wishes").select("id, project_id, title, status").order("created_at", { ascending: false }),
-    supabase.from("tasks").select("id, project_id, wish_id, status, title, updated_at"),
-    supabase.from("agents").select("*").order("last_heartbeat", { ascending: false }),
-    supabase.from("cost_ledger").select("project_id, cost_usd").gte("ts", startOfUtcDayIso()),
-    supabase.from("events").select("project_id, message, ts").order("ts", { ascending: false }).limit(300),
+    // Jen otevřená přání (vč. 'new') — hotová a zaparkovaná velín nepotřebuje.
+    supabase
+      .from("wishes")
+      .select("id, project_id, title, status, created_at")
+      .in("status", [...OPEN_WISH_STATUSES])
+      .order("created_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("agents")
+      .select("id, project_id, role, model, status, current_task_id, last_heartbeat")
+      .neq("status", "dead")
+      .order("last_heartbeat", { ascending: false })
+      .limit(200),
+    supabase.rpc(RPC.projectLastEvent),
+    supabase.rpc(RPC.farmAttention),
     supabase.from("connections").select("kind, status"),
+    supabase.from("events").select("id", { count: "exact", head: true }).eq("type", "task_done").limit(1),
+    farmBudgetDefaults(supabase),
   ]);
 
-  const projects = (projectsData as ProjectRow[] | null) ?? [];
-  const wishes = (wishesData as Pick<WishRow, "id" | "project_id" | "title" | "status">[] | null) ?? [];
+  const projects = (projectsRes.data as ProjectRow[] | null) ?? [];
+  const wishes = (wishesRes.data as Pick<WishRow, "id" | "project_id" | "title" | "status" | "created_at">[] | null) ?? [];
+  const agents = (agentsRes.data as Pick<AgentRow, "id" | "project_id" | "role" | "model" | "status" | "current_task_id" | "last_heartbeat">[] | null) ?? [];
+  const projectById = new Map(projects.map((p) => [p.id, p] as const));
+  const projectNames: Record<string, string> = Object.fromEntries(projects.map((p) => [p.id, p.name]));
+
+  // Úkoly jen pro otevřená přání BĚŽÍCÍCH projektů — kvůli postupu a odvozenému stavu.
+  const aktivniPrani = wishes.filter((w) => projectById.get(w.project_id)?.status === "active");
+  const tasksRes =
+    aktivniPrani.length > 0
+      ? await supabase
+          .from("tasks")
+          .select("id, wish_id, status, park_reason, title")
+          .in(
+            "wish_id",
+            aktivniPrani.map((w) => w.id),
+          )
+          .limit(2000)
+      : { data: [], error: null };
   const tasks =
-    (tasksData as
-      | { id: string; project_id: string; wish_id: string | null; status: string; title: string; updated_at: string }[]
-      | null) ?? [];
-  const agents = (agentsData as AgentRow[] | null) ?? [];
+    (tasksRes.data as { id: string; wish_id: string | null; status: string; park_reason: string | null; title: string }[] | null) ??
+    [];
 
-  const projectName = new Map(projects.map((p) => [p.id, p.name] as const));
-
-  // Útrata za dnešek dle projektu.
-  const spendByProject = new Map<string, number>();
-  let totalSpend = 0;
-  for (const r of (costRows as { project_id: string | null; cost_usd: number }[] | null) ?? []) {
-    totalSpend += r.cost_usd ?? 0;
-    if (!r.project_id) continue;
-    spendByProject.set(r.project_id, (spendByProject.get(r.project_id) ?? 0) + (r.cost_usd ?? 0));
-  }
-
-  // Busy agenti dle projektu + názvy úkolů pro živý pruh.
-  const taskTitleById = new Map<string, string>();
-  for (const t of tasks) taskTitleById.set(t.id, t.title);
-
-  const busyByProject = new Map<string, number>();
-  for (const a of agents) {
-    if (a.status === "busy" && a.project_id) {
-      busyByProject.set(a.project_id, (busyByProject.get(a.project_id) ?? 0) + 1);
-    }
-  }
-  const totalBusy = agents.filter((a) => a.status === "busy").length;
-
-  // Poslední event dle projektu.
-  const lastEventByProject = new Map<string, { message: string; ts: string }>();
-  for (const r of (eventRows as { project_id: string | null; message: string; ts: string }[] | null) ?? []) {
-    if (!r.project_id || lastEventByProject.has(r.project_id)) continue;
-    lastEventByProject.set(r.project_id, { message: r.message, ts: r.ts });
-  }
-
-  // Postup dle projektu a dle přání (done/total).
-  const projProgress = new Map<string, { done: number; total: number }>();
-  const wishProgress = new Map<string, { done: number; total: number }>();
+  const countsByWish = new Map<string, { queued: number; running: number; parked: number; done: number; total: number }>();
   for (const t of tasks) {
-    const pp = projProgress.get(t.project_id) ?? { done: 0, total: 0 };
-    pp.total += 1;
-    if (t.status === "done") pp.done += 1;
-    projProgress.set(t.project_id, pp);
-    if (t.wish_id) {
-      const wp = wishProgress.get(t.wish_id) ?? { done: 0, total: 0 };
-      wp.total += 1;
-      if (t.status === "done") wp.done += 1;
-      wishProgress.set(t.wish_id, wp);
-    }
+    if (!t.wish_id) continue;
+    const c = countsByWish.get(t.wish_id) ?? { queued: 0, running: 0, parked: 0, done: 0, total: 0 };
+    // Archivované úkoly do postupu přání nepatří.
+    if (t.status === "parked" && t.park_reason === "archived") continue;
+    c.total += 1;
+    if (t.status === "queued") c.queued += 1;
+    else if (BEZICI_UKOL.has(t.status)) c.running += 1;
+    else if (t.status === "parked") c.parked += 1;
+    else if (t.status === "done") c.done += 1;
+    countsByWish.set(t.wish_id, c);
   }
 
-  // Aktivní přání dle projektu (s postupem).
+  const busy = agents.filter((a) => a.status === "busy");
+  const busyByProject = new Map<string, number>();
+  for (const a of busy) if (a.project_id) busyByProject.set(a.project_id, (busyByProject.get(a.project_id) ?? 0) + 1);
+
+  const queue = queueBreakdown(overview.rollup);
+  const headline = farmHeadline({
+    state: overview.state,
+    busyAgents: busy.length,
+    queuedActive: queue.queuedActive,
+    sinceIso: overview.sinceIso,
+    offpeakWindows: overview.windows,
+  });
+  const farmStop = farmShortReason(overview.state);
+  const rollupById = new Map(overview.rollup.map((r) => [r.project_id, r] as const));
+  const prehledPrani = wishBreakdown(overview.wishRollup);
+
+  const lastEvents = (lastEventRes.data as ProjectLastEventRow[] | null) ?? [];
+  const lastEventById = new Map(lastEvents.map((e) => [e.project_id, e] as const));
+
   const activeWishesByProject = new Map<string, ProjectCardWish[]>();
-  let totalActiveWishes = 0;
-  for (const w of wishes) {
-    if (!ACTIVE_WISH_STATUSES.has(w.status)) continue;
-    totalActiveWishes += 1;
-    const prog = wishProgress.get(w.id) ?? { done: 0, total: 0 };
+  for (const w of aktivniPrani) {
+    const p = projectById.get(w.project_id)!;
+    const c = countsByWish.get(w.id) ?? { queued: 0, running: 0, parked: 0, done: 0, total: 0 };
+    const s = effectiveWishStatus(w, p, { paused: overview.state.paused }, c);
     const list = activeWishesByProject.get(w.project_id) ?? [];
-    list.push({ id: w.id, title: w.title, status: w.status, done: prog.done, total: prog.total });
+    list.push({ id: w.id, title: w.title, label: s.label, tone: s.tone, hint: s.hint, done: c.done, total: c.total });
     activeWishesByProject.set(w.project_id, list);
   }
 
-  const cards: ProjectCardData[] = projects.map((project) => ({
-    project,
-    todaySpend: spendByProject.get(project.id) ?? 0,
-    busyAgents: busyByProject.get(project.id) ?? 0,
-    lastEvent: lastEventByProject.get(project.id) ?? null,
-    progress: projProgress.get(project.id) ?? { done: 0, total: 0 },
-    activeWishes: activeWishesByProject.get(project.id) ?? [],
-    managerNote: project.manager_note,
-  }));
+  const cards: ProjectCardData[] = projects.map((project) => {
+    const posledni = lastEventById.get(project.id);
+    return {
+      project,
+      todaySpend: overview.todaySpendByProject[project.id] ?? 0,
+      busyAgents: busyByProject.get(project.id) ?? 0,
+      lastEvent: posledni ? { label: eventLabel(posledni.type), message: posledni.message, ts: posledni.ts } : null,
+      progress: projectProgress(rollupById.get(project.id)),
+      activeWishes: activeWishesByProject.get(project.id) ?? [],
+      openWishCount: prehledPrani.openByProject.get(project.id) ?? 0,
+      managerNote: project.manager_note,
+      farmStopReason: farmStop,
+    };
+  });
 
-  // Živý pruh agentů — busy napřed, pak nečinní (bez mrtvých).
-  const liveAgents: AgentDisplay[] = agents
-    .filter((a) => a.status !== "dead")
+  // Živý pruh agentů — pracující napřed, pak nečinní.
+  const taskTitleById = new Map(tasks.map((t) => [t.id, t.title] as const));
+  const liveAgents: AgentDisplay[] = [...agents]
     .sort((a, b) => (a.status === "busy" ? 0 : 1) - (b.status === "busy" ? 0 : 1))
     .map((a) => ({
       id: a.id,
@@ -129,62 +158,96 @@ export default async function CommandCenterPage() {
       model: a.model,
       status: a.status,
       lastHeartbeat: a.last_heartbeat,
-      currentTaskTitle: a.current_task_id ? taskTitleById.get(a.current_task_id) ?? null : null,
-      projectName: a.project_id ? projectName.get(a.project_id) ?? null : null,
+      currentTaskTitle: a.current_task_id ? (taskTitleById.get(a.current_task_id) ?? null) : null,
+      projectName: a.project_id ? (projectNames[a.project_id] ?? null) : null,
     }));
 
-  // Pozornost: zaparkované úkoly + čekající schválení.
-  const parked: AttentionParked[] = tasks
-    .filter((t) => t.status === "parked")
-    .map((t) => ({
-      taskId: t.id,
-      title: t.title,
-      projectId: t.project_id,
-      projectName: projectName.get(t.project_id) ?? "Projekt",
-      wishId: t.wish_id,
-      ts: t.updated_at,
-    }));
+  // Výchozí cíl composeru = naposledy aktivní běžící projekt.
+  const composerProjects: ComposerProject[] = projects.map((p) => {
+    const kandidati = [rollupById.get(p.id)?.last_activity ?? null, lastEventById.get(p.id)?.ts ?? null].filter(
+      (x): x is string => Boolean(x),
+    );
+    return { id: p.id, name: p.name, status: p.status, lastActivity: kandidati.sort().at(-1) ?? null };
+  });
 
-  const attentionCount = parked.length;
-  const composerProjects: ComposerProject[] = projects.map((p) => ({ id: p.id, name: p.name }));
+  const conns = (connRes.data as { kind: string; status: string }[] | null) ?? [];
+  const hasGithub =
+    conns.some((c) => c.kind === "github" && c.status === "active") || Boolean(overview.run.github_status?.ok);
+  const hasCaps = overview.caps.dailyUsd > 0 && overview.caps.monthlyUsd > 0;
+  // Když se nepodařilo zjistit, jestli farma už běžela, kartu raději nezobrazujeme (nebyla by pravdivá).
+  const farmHasRun = taskDoneRes.error ? true : (taskDoneRes.count ?? 0) > 0;
 
-  const conns = (connRows as { kind: string; status: string }[] | null) ?? [];
-  const hasGithub = conns.some((c) => c.kind === "github" && c.status === "active");
-  const hasCaps = (user.profile?.daily_cap_usd ?? 0) > 0;
+  const attention = attentionRes.error ? null : ((attentionRes.data as FarmAttention | null) ?? null);
+  const attentionError = attentionRes.error
+    ? `Panel pozornosti se nepodařilo načíst (${attentionRes.error.message}). Incidenty nemusí být vidět.`
+    : null;
+
+  const nadpis =
+    busy.length > 0 ? `Právě ${plural(busy.length, PRACUJE)} ${countLabel(busy.length, TVARY.agent)}` : headline.title;
+
+  const newProjectDefaults = {
+    projectDailyUsd: defaults.projectDailyUsd,
+    projectMonthlyUsd: defaults.projectMonthlyUsd,
+    farmDailyUsd: defaults.farmDailyUsd,
+    farmMonthlyUsd: defaults.farmMonthlyUsd,
+  };
 
   return (
     <>
-      <RealtimeRefresh tables={["projects", "wishes", "tasks", "agents", "events", "suggestions"]} throttleMs={2000} />
+      {/* Bez `events`: každá událost by obnovila celou stránku. Stav se mění přes tyto tabulky. */}
+      <RealtimeRefresh tables={["projects", "wishes", "tasks", "agents", "suggestions"]} throttleMs={3000} />
 
-      {/* Hlavička velína — editorial: eyebrow + t-title + hero metriky */}
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
+      {/* Hlavička velína — nadpis říká pravdu o stavu farmy */}
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
         <div className="min-w-0">
           <div className="t-eyebrow flex items-center gap-2">
-            {totalBusy > 0 ? <StatusPulse className="h-1.5 w-1.5" /> : null}
-            {totalBusy > 0 ? "Živě · Velín" : "Velín farmy"}
+            {busy.length > 0 ? <StatusPulse className="h-1.5 w-1.5" /> : null}
+            {busy.length > 0 ? "Živě · Velín" : "Velín farmy"}
           </div>
-          <h1 className="t-title mt-2 text-[--color-fg]">
-            {totalBusy > 0 ? (
-              <>
-                Právě pracuje <span className="brand-gradient-text">{totalBusy}</span>{" "}
-                {totalBusy === 1 ? "agent" : "agentů"}
-              </>
-            ) : (
-              "Agenti čekají na tvé přání"
-            )}
-          </h1>
+          <h1 className="t-title mt-2 text-[--color-fg]">{nadpis}</h1>
         </div>
         <div className="flex items-center gap-6">
           <div>
             <div className="t-eyebrow">Aktivní přání</div>
-            <div className="t-metric mt-1 text-2xl text-[--color-fg]">{totalActiveWishes}</div>
+            <div className="t-metric mt-1 text-2xl text-[--color-fg]">
+              {overview.wishRollupError ? "—" : prehledPrani.openActive}
+            </div>
+            <div className="t-meta mt-0.5">
+              {overview.wishRollupError ? "nepodařilo se načíst" : wishBreakdownLine(prehledPrani)}
+            </div>
           </div>
           <div className="h-9 w-px bg-[--color-border-subtle]" />
           <div>
-            <div className="t-eyebrow">Dnes</div>
-            <div className="t-metric mt-1 text-2xl text-[--color-fg]">{formatUsd(totalSpend)}</div>
+            <div className="t-eyebrow" title="Denní strop se počítá v UTC (02:00–02:00 Europe/Prague v létě).">
+              Dnes (UTC)
+            </div>
+            <div className="t-metric mt-1 text-2xl text-[--color-fg]">
+              {overview.todaySpend === null ? "—" : formatUsd(overview.todaySpend)}
+            </div>
+            <div className="t-meta mt-0.5">strop farmy {formatUsd(overview.caps.dailyUsd, "cap")}</div>
           </div>
         </div>
+      </div>
+
+      <div className="mb-5">
+        <FarmStatusBand
+          showTitle={busy.length > 0}
+          headline={headline}
+          degradedReason={overview.degradedReason}
+          sinceIso={overview.sinceIso}
+          nextOffpeakIso={overview.nextOffpeakIso}
+          todaySpend={overview.todaySpend}
+          dailyCap={overview.caps.dailyUsd}
+          monthSpend={overview.monthSpend}
+          monthlyCap={overview.caps.monthlyUsd}
+          monthLabel={overview.monthLabel}
+          spendError={overview.spendError}
+        />
+      </div>
+
+      {/* Pozornost: plná šířka NAD vším, jen skutečné incidenty */}
+      <div className="mb-6">
+        <AttentionPanel attention={attention} error={attentionError} projectNames={projectNames} />
       </div>
 
       {/* PRIMÁRNÍ AKCE: řekni farmě, co má udělat */}
@@ -192,51 +255,55 @@ export default async function CommandCenterPage() {
         <WishComposer projects={composerProjects} />
       </div>
 
-      <FirstRunChecklist hasGithub={hasGithub} hasCaps={hasCaps} />
+      <FirstRunChecklist hasGithub={hasGithub} hasCaps={hasCaps} farmHasRun={farmHasRun} />
 
-      {projects.length === 0 ? (
+      {projectsRes.error ? (
+        <p role="alert" className="mt-4 text-sm text-[--color-warn]">
+          Projekty se nepodařilo načíst ({projectsRes.error.message}).
+        </p>
+      ) : null}
+
+      {projects.length === 0 && !projectsRes.error ? (
         <div className="mt-6">
           <EmptyState
             icon={<FolderGit2 className="size-5" />}
             title="Zatím žádné projekty"
             description="Napiš farmě přání nahoře (a založ nový projekt), nebo si projekt vytvoř ručně. Farma se pak sama nezastaví."
-            action={<NewProjectDialog />}
+            action={<NewProjectDialog defaults={newProjectDefaults} />}
           />
         </div>
       ) : (
         <div className="mt-6 space-y-6">
-          {/* Právě teď pracuje + Co potřebuje pozornost */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader
-                title="Právě teď pracuje"
-                description="Živý registr agentů farmy."
-                action={
-                  totalBusy > 0 ? (
-                    <span className="inline-flex items-center gap-1.5 text-xs text-[--color-brand]">
-                      <span className="h-2 w-2 rounded-full bg-[--color-brand] animate-farm-pulse" />
-                      živě
-                    </span>
-                  ) : null
-                }
-              />
-              <CardBody>
-                <LiveAgents agents={liveAgents} variant="strip" />
-              </CardBody>
-            </Card>
+          <Card>
+            <CardHeader
+              title="Právě teď pracuje"
+              description="Živý registr agentů farmy."
+              action={
+                busy.length > 0 ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-[--color-brand]">
+                    <span className="h-2 w-2 rounded-full bg-[--color-brand] animate-farm-pulse" />
+                    živě
+                  </span>
+                ) : null
+              }
+            />
+            <CardBody>
+              {agentsRes.error ? (
+                <p role="alert" className="text-xs text-[--color-warn]">
+                  Agenty se nepodařilo načíst ({agentsRes.error.message}).
+                </p>
+              ) : (
+                <LiveAgents
+                  agents={liveAgents}
+                  variant="strip"
+                  emptyTitle="Nikdo nepracuje"
+                  emptyHint={`důvod: ${headline.title}`}
+                />
+              )}
+            </CardBody>
+          </Card>
 
-            <Card>
-              <CardHeader
-                title="Potřebuje tvou pozornost"
-                description={attentionCount > 0 ? `${attentionCount} k vyřízení` : "Vše pod kontrolou"}
-              />
-              <CardBody>
-                <AttentionPanel parked={parked} />
-              </CardBody>
-            </Card>
-          </div>
-
-          {/* Návrhy farmy — co dál (univerzální, vč. napříč projekty) */}
+          {/* Rozhodnutí farmy o návrzích — ne schvalovací fronta */}
           <SuggestionsPanel scope="home" />
 
           {/* Přehled projektů */}
@@ -245,9 +312,14 @@ export default async function CommandCenterPage() {
               <h2 className="text-sm font-semibold text-[--color-muted]">
                 Projekty <span className="text-[--color-faint]">({projects.length})</span>
               </h2>
-              <NewProjectDialog />
+              <NewProjectDialog defaults={newProjectDefaults} />
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {tasksRes.error ? (
+              <p role="alert" className="mb-3 text-xs text-[--color-warn]">
+                Postup přání se nepodařilo načíst ({tasksRes.error.message}).
+              </p>
+            ) : null}
+            <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {cards.map((data) => (
                 <ProjectCard key={data.project.id} data={data} />
               ))}

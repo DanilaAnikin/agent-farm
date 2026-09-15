@@ -1,4 +1,4 @@
-import { AGENT_STATUS_META } from "@/lib/constants";
+import { AGENT_ROLE_META, AGENT_STATUS_META } from "@/lib/constants";
 import { Bot } from "lucide-react";
 import { formatRelative } from "@/lib/format";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -15,45 +15,58 @@ export interface AgentDisplay {
   projectName?: string | null;
 }
 
-const ROLE_LABEL: Record<AgentRole, string> = {
-  manager: "Manažer",
-  worker: "Worker",
-  judge: "Soudce",
-  // Tester (QA) se dosud registroval jako 'judge' → ve velíně byl vidět Soudce.
-  tester: "Tester",
-  media: "Média",
-  publisher: "Publisher",
-};
-
 const ROLE_GLYPH: Record<AgentRole, string> = {
   manager: "◆",
   worker: "▲",
   judge: "⚖",
+  // Tester (QA) se dosud registroval jako 'judge' → ve velíně byl vidět Soudce.
   tester: "✓",
   media: "◈",
   publisher: "➤",
 };
 
+/** Popisek role s fallbackem — neznámá role nesmí shodit registr. */
+function roleLabel(role: string): string {
+  return (AGENT_ROLE_META as Record<string, { label: string }>)[role]?.label ?? (role || "Agent");
+}
+
+function roleGlyph(role: string): string {
+  return (ROLE_GLYPH as Record<string, string>)[role] ?? "●";
+}
+
 /**
  * Živý registr agentů — „kdo právě pracuje". Busy agenti pulzují.
- * `variant='strip'` = kompaktní pruh na home, `variant='list'` = svislý seznam v detailu.
+ * `variant='strip'` = kompaktní pruh na velínu, `variant='list'` = svislý seznam v detailu.
+ *
+ * Prázdný stav říká DŮVOD nečinnosti (ze stavu farmy), ne „jakmile dostane farma
+ * přání, agenti naskočí" — farma si práci doplňuje sama.
  */
 export function LiveAgents({
   agents,
   variant = "list",
+  emptyTitle = "Nikdo právě nepracuje",
   emptyHint,
 }: {
   agents: AgentDisplay[];
   variant?: "strip" | "list";
+  emptyTitle?: string;
   emptyHint?: string;
 }) {
   if (agents.length === 0) {
+    if (variant === "strip") {
+      // Na velínu jen jeden řádek — velká prázdná karta nic neříká a zabírá místo.
+      return (
+        <p className="flex items-center gap-2 text-sm text-[--color-muted]">
+          <Bot className="size-4 shrink-0 text-[--color-faint]" />
+          <span>
+            {emptyTitle}
+            {emptyHint ? <span className="text-[--color-faint]"> · {emptyHint}</span> : null}
+          </span>
+        </p>
+      );
+    }
     return (
-      <EmptyState
-        icon={<Bot className="size-5" />}
-        title="Nikdo právě nepracuje"
-        description={emptyHint ?? "Jakmile dostane farma přání, agenti naskočí a uvidíš je tady živě."}
-      />
+      <EmptyState icon={<Bot className="size-5" />} title={emptyTitle} description={emptyHint} />
     );
   }
 
@@ -75,17 +88,17 @@ export function LiveAgents({
                     : "bg-[--color-surface] text-[--color-muted]")
                 }
               >
-                {ROLE_GLYPH[a.role]}
+                {roleGlyph(a.role)}
               </span>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{ROLE_LABEL[a.role]}</span>
+                  <span className="text-sm font-medium">{roleLabel(a.role)}</span>
                   {a.projectName ? (
                     <span className="truncate text-xs text-[--color-faint]">{a.projectName}</span>
                   ) : null}
                 </div>
                 <div className="truncate text-xs text-[--color-muted]">
-                  {busy && a.currentTaskTitle ? a.currentTaskTitle : a.model ?? ROLE_LABEL[a.role]}
+                  {busy && a.currentTaskTitle ? a.currentTaskTitle : (a.model ?? roleLabel(a.role))}
                 </div>
               </div>
             </div>
@@ -113,21 +126,21 @@ export function LiveAgents({
                     : "bg-[--color-surface-2] text-[--color-muted]")
                 }
               >
-                {ROLE_GLYPH[a.role]}
+                {roleGlyph(a.role)}
               </span>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{ROLE_LABEL[a.role]}</span>
+                  <span className="text-sm font-medium">{roleLabel(a.role)}</span>
                   {a.model ? <span className="text-xs text-[--color-faint]">{a.model}</span> : null}
                 </div>
-                <div className="truncate text-xs text-[--color-muted]">
+                <div className="truncate text-xs text-[--color-muted]" suppressHydrationWarning>
                   {busy && a.currentTaskTitle
                     ? a.currentTaskTitle
-                    : `naposledy ${formatRelative(a.lastHeartbeat)}`}
+                    : `poslední signál ${formatRelative(a.lastHeartbeat)}`}
                 </div>
               </div>
             </div>
-            <StatusBadge meta={AGENT_STATUS_META[a.status]} dot />
+            <StatusBadge meta={AGENT_STATUS_META[a.status] ?? { label: a.status, tone: "neutral" }} dot />
           </li>
         );
       })}

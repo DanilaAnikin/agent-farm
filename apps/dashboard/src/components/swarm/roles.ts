@@ -1,6 +1,8 @@
 // Vizuální meta pro role agentů v roji — emoji, popisek a barevný akcent dlaždice.
 // Barvíme dlaždice podle role, aby N paralelních agentů vypadalo jako živý roj.
+// Popisky jsou česky a stejné jako AGENT_ROLE_META v lib/constants.ts.
 import type { AgentRole } from "@/lib/types";
+import { formatDuration } from "@/lib/format";
 
 export interface RoleMeta {
   emoji: string;
@@ -17,7 +19,7 @@ export interface RoleMeta {
 export const ROLE_META: Record<AgentRole, RoleMeta> = {
   worker: {
     emoji: "⚙️",
-    label: "Worker",
+    label: "Vývojář",
     tile: "border-[--color-brand]/30 bg-[--color-brand-soft]/50",
     chip: "bg-[--color-brand-soft] text-[--color-brand]",
     dot: "bg-[--color-brand]",
@@ -59,7 +61,7 @@ export const ROLE_META: Record<AgentRole, RoleMeta> = {
   },
   publisher: {
     emoji: "📡",
-    label: "Publisher",
+    label: "Publikace",
     tile: "border-[--color-brand-2]/30 bg-[--color-info-bg]/40",
     chip: "bg-[--color-info-bg] text-[--color-brand-2]",
     dot: "bg-[--color-brand-2]",
@@ -67,7 +69,22 @@ export const ROLE_META: Record<AgentRole, RoleMeta> = {
   },
 };
 
-// Pořadí rolí v legendě (workeři jako první — jádro roje).
+/** Záloha pro roli, kterou orchestrátor zavede dřív, než ji sem někdo dopíše. */
+const NEZNAMA_ROLE: RoleMeta = {
+  emoji: "🤖",
+  label: "Agent",
+  tile: "border-[--color-border] bg-[--color-surface-2]",
+  chip: "bg-[--color-surface] text-[--color-muted]",
+  dot: "bg-[--color-faint]",
+  text: "text-[--color-muted]",
+};
+
+/** Meta role s fallbackem — neznámá role nesmí shodit celou mřížku. */
+export function roleMeta(role: string): RoleMeta {
+  return (ROLE_META as Record<string, RoleMeta>)[role] ?? { ...NEZNAMA_ROLE, label: role || "Agent" };
+}
+
+// Pořadí rolí v legendě (vývojáři jako první — jádro roje).
 export const ROLE_ORDER: AgentRole[] = [
   "worker",
   "manager",
@@ -77,13 +94,9 @@ export const ROLE_ORDER: AgentRole[] = [
   "publisher",
 ];
 
-// Doba běhu → krátký český tvar ("3 min", "1 h 4 min").
+// Doba běhu → krátký český tvar ("45 s", "3 min", "1 h 4 min").
 export function formatElapsed(seconds: number | null | undefined): string {
   if (seconds == null || seconds < 0) return "—";
-  if (seconds < 60) return `${seconds} s`;
-  const min = Math.floor(seconds / 60);
-  if (min < 60) return `${min} min`;
-  const hod = Math.floor(min / 60);
-  const zbytek = min % 60;
-  return zbytek === 0 ? `${hod} h` : `${hod} h ${zbytek} min`;
+  if (seconds === 0) return "0 s";
+  return formatDuration(seconds);
 }

@@ -10,25 +10,43 @@ import { cn } from "@/lib/cn";
 export interface ComposerProject {
   id: string;
   name: string;
+  status: string;
+  /** Poslední aktivita projektu (ISO) — výchozí cíl je naposledy aktivní běžící projekt. */
+  lastActivity: string | null;
 }
 
 const NEW_PROJECT = "__new__";
 
+/** Naposledy aktivní projekt se `status='active'`; bez něj první projekt; bez projektů nový. */
+export function defaultComposerTarget(projects: ComposerProject[]): string {
+  const aktivni = projects
+    .filter((p) => p.status === "active")
+    .sort((a, b) => (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""));
+  return aktivni[0]?.id ?? projects[0]?.id ?? NEW_PROJECT;
+}
+
 /**
- * THE primary action velína: „Řekni farmě, co má udělat".
+ * Primární akce velína: „Řekni farmě, co má udělat".
  * Volný text + volba cíle: existující projekt, nebo rovnou nový.
- * Odeslání = přání source='dashboard' (manager smyčka ho vyzvedne).
+ * Odeslání = přání source='dashboard' (manažer ho vyzvedne) a přesměrování
+ * rovnou na detail nového přání.
+ *
+ * Dřív se předvybíral první projekt v seznamu — pozastavený explain-and-act —
+ * a přání tam uvázlo. Pozastavené projekty jsou teď zvlášť a s upozorněním.
  */
 export function WishComposer({ projects }: { projects: ComposerProject[] }) {
   const router = useRouter();
-  const hasProjects = projects.length > 0;
   const [text, setText] = useState("");
-  const [target, setTarget] = useState<string>(hasProjects ? (projects[0]?.id ?? NEW_PROJECT) : NEW_PROJECT);
+  const [target, setTarget] = useState<string>(() => defaultComposerTarget(projects));
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const creatingNew = target === NEW_PROJECT;
+  const aktivni = projects.filter((p) => p.status === "active");
+  const pozastavene = projects.filter((p) => p.status !== "active");
+  const vybrany = projects.find((p) => p.id === target);
+  const vybranyStoji = Boolean(vybrany && vybrany.status !== "active");
 
   function submit() {
     setError(null);
@@ -49,7 +67,7 @@ export function WishComposer({ projects }: { projects: ComposerProject[] }) {
       }
       setText("");
       setNewName("");
-      if (res.id) router.push(`/projects/${res.id}`);
+      if (res.link) router.push(res.link);
       router.refresh();
     });
   }
@@ -81,7 +99,7 @@ export function WishComposer({ projects }: { projects: ComposerProject[] }) {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
           }}
           rows={3}
-          placeholder="Např. „Postav mi appku na správu úkolů s přihlášením přes Google a nasaď preview…"
+          placeholder="Např. „Postav mi appku na správu úkolů s přihlášením přes Google a nasaď náhled…"
           className="ring-focus w-full resize-y rounded-[--radius-lg] border border-[--color-border] bg-[--color-bg-sunken] px-4 py-3 text-[15px] leading-relaxed text-[--color-fg] transition-colors placeholder:text-[--color-faint] focus:border-[--color-brand] focus:outline-none"
         />
 
@@ -95,11 +113,20 @@ export function WishComposer({ projects }: { projects: ComposerProject[] }) {
                 aria-label="Cílový projekt"
                 className="ring-focus h-9 min-w-40 appearance-none rounded-[--radius-sm] border border-[--color-border] bg-[--color-surface-2] pl-3 pr-8 text-sm text-[--color-fg] focus:border-[--color-brand] focus:outline-none"
               >
-                {projects.map((p) => (
+                {aktivni.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
                   </option>
                 ))}
+                {pozastavene.length > 0 ? (
+                  <optgroup label="Pozastavené">
+                    {pozastavene.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} (pozastaveno)
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
                 <option value={NEW_PROJECT}>+ Nový projekt…</option>
               </select>
               <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-4 -translate-y-1/2 text-[--color-tertiary]" />
@@ -115,6 +142,9 @@ export function WishComposer({ projects }: { projects: ComposerProject[] }) {
                   newName.trim() ? "border-[--color-border]" : "border-[--color-brand]/50",
                 )}
               />
+            ) : null}
+            {vybranyStoji ? (
+              <span className="text-xs text-[--color-warn]">Projekt je pozastavený — přání počká.</span>
             ) : null}
           </div>
 

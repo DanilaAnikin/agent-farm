@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import type { Tone } from "@/lib/constants";
 import { formatRelative } from "@/lib/format";
+import { countLabel } from "@/lib/plural";
 
 // Druhy paměti (viz @farm/db MEMORY_KINDS) — pořadí = pořadí sekcí v panelu.
 type MemoryKind = "architecture" | "decision" | "convention" | "learning" | "glossary";
@@ -71,14 +72,27 @@ const SOURCE_LABEL: Record<MemorySource, string> = {
  */
 export async function ProjectBrain({ projectId }: { projectId: string }) {
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("project_memory")
     .select("id, kind, title, content, source, weight, created_at, updated_at")
     .eq("project_id", projectId)
     .order("weight", { ascending: false })
-    .order("updated_at", { ascending: false });
+    .order("updated_at", { ascending: false })
+    .limit(200);
 
   const rows = (data as MemoryRow[] | null) ?? [];
+  if (error) {
+    return (
+      <Card>
+        <CardHeader title="Mozek projektu" />
+        <CardBody>
+          <p role="alert" className="text-xs text-[--color-warn]">
+            Paměť projektu se nepodařilo načíst: {error.message}
+          </p>
+        </CardBody>
+      </Card>
+    );
+  }
 
   const byKind = new Map<MemoryKind, MemoryRow[]>();
   for (const row of rows) {
@@ -99,7 +113,9 @@ export async function ProjectBrain({ projectId }: { projectId: string }) {
         description="Znalostní báze, kterou farma čte před každým úkolem — architektura, rozhodnutí, konvence i poučení ze selhání."
         action={
           rows.length > 0 ? (
-            <span className="text-xs tabular-nums text-[--color-muted]">{rows.length} záznamů</span>
+            <span className="text-xs tabular-nums text-[--color-muted]">
+              {countLabel(rows.length, ["záznam", "záznamy", "záznamů"])}
+            </span>
           ) : null
         }
       />

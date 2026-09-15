@@ -2,7 +2,7 @@
 // se z naší domény — žádný runtime request na Google). „Living Mission Control":
 //  - Space Grotesk = display (mechanická geometrie, nese hero čísla + page-titly)
 //  - Inter = text/UI (hustá čitelnost 13–14px)
-//  - JetBrains Mono = telemetry (pravé tabular figures pro útratu/kredity/throughput)
+//  - JetBrains Mono = telemetry (pravé tabular figures pro útratu/kredity/počty úkolů)
 import { Space_Grotesk, Inter, JetBrains_Mono } from "next/font/google";
 
 export const display = Space_Grotesk({

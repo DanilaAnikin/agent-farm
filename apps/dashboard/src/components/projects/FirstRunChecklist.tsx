@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
+import { plural } from "@/lib/plural";
 
 interface ChecklistItem {
   label: string;
@@ -7,17 +8,29 @@ interface ChecklistItem {
   href: string;
 }
 
-// First-run checklist: GitHub klíč / stropy (plně autonomní provoz, bez Telegramu).
+const KROK = ["krok", "kroky", "kroků"] as const;
+
+/**
+ * Úvodní kontrola před prvním během farmy.
+ *
+ * - GitHub: orchestrátor má přístup z prostředí, ne nutně přes připojení v UI.
+ *   Hotovo je tedy aktivní připojení NEBO `farm_settings.github_status.ok`.
+ * - Stropy: hlídá se strop FARMY (denní i měsíční > 0), ne osobní strop profilu.
+ * - Jakmile farma jednou dokončila úkol, karta nemá co říct a zmizí úplně.
+ */
 export function FirstRunChecklist({
   hasGithub,
   hasCaps,
+  farmHasRun,
 }: {
   hasGithub: boolean;
   hasCaps: boolean;
+  farmHasRun: boolean;
 }) {
+  if (farmHasRun) return null;
   const items: ChecklistItem[] = [
-    { label: "Připoj GitHub (PAT pro git operace)", done: hasGithub, href: "/settings" },
-    { label: "Zkontroluj denní stropy útraty", done: hasCaps, href: "/costs" },
+    { label: "GitHub je dostupný pro git operace farmy", done: hasGithub, href: "/settings" },
+    { label: "Denní i měsíční strop farmy je nastavený", done: hasCaps, href: "/costs" },
   ];
   const remaining = items.filter((i) => !i.done).length;
   if (remaining === 0) return null;
@@ -25,8 +38,8 @@ export function FirstRunChecklist({
   return (
     <Card>
       <CardHeader
-        title="Než začneš"
-        description={`Zbývá ${remaining} ${remaining === 1 ? "krok" : "kroky"} k plnému provozu.`}
+        title="Než farma poprvé naběhne"
+        description={`Zbývá ${remaining} ${plural(remaining, KROK)} k plnému provozu.`}
       />
       <CardBody className="space-y-2">
         {items.map((item) => (
