@@ -375,7 +375,7 @@ async function judgeWork(
         incremental: autopilot,
       }),
       validate: validateJudge,
-      metadata: { userId: project.userId, projectId: project.id, taskId: task.id, scope: "system" },
+      metadata: { userId: project.userId, projectId: project.id, wishId: task.wishId ?? undefined, taskId: task.id, scope: "system" },
     });
     verdict = review.data.verdict;
     reasons = review.data.reasons;
@@ -1135,7 +1135,7 @@ async function resolveEmptyDiff(
       incremental: true,
     }),
     validate: validateJudge,
-    metadata: { userId: project.userId, projectId: project.id, taskId: task.id, scope: "system" },
+    metadata: { userId: project.userId, projectId: project.id, wishId: task.wishId ?? undefined, taskId: task.id, scope: "system" },
   });
   const doneMet = (review.data.checks as Record<string, unknown> | undefined)?.done_condition_met;
   const satisfied = review.data.verdict === "approve" && doneMet !== false;

@@ -255,7 +255,7 @@ export interface ApprovalRow {
   payload: Record<string, unknown>;
   status: ApprovalStatus;
   requested_by: string | null;
-  decided_via: "dashboard" | "telegram" | null;
+  decided_via: "dashboard" | "telegram" | "autopilot" | null;
   decided_at: string | null;
   expires_at: string | null;
   created_at: string;

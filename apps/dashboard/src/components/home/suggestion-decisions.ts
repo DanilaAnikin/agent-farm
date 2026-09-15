@@ -21,6 +21,7 @@ export type DecisionKind =
   | "not_in_repo"
   | "cross_project"
   | "stale"
+  | "owner_dismissed"
   | "accepted"
   | "dismissed_other";
 
@@ -52,6 +53,7 @@ const ALIASY: Record<string, DecisionKind> = {
   no_project: "cross_project",
   stale: "stale",
   outdated: "stale",
+  owner_dismissed: "owner_dismissed",
 };
 
 export function parseDecision(status: string, reason: string | null): Decision {
@@ -84,6 +86,7 @@ export function parseDecision(status: string, reason: string | null): Decision {
     not_in_repo: "Zahozeno: nepodložené repozitářem",
     cross_project: "Zahozeno: napříč projekty",
     stale: "Zahozeno: zastaralé",
+    owner_dismissed: "Zahozeno majitelem",
     dismissed_other: "Zahozeno",
   };
   return { kind, outcome: "dropped", label: label[kind], refWishId, detail };

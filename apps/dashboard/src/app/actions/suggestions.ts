@@ -41,10 +41,14 @@ export async function convertSuggestionToWish(
   // Cílový projekt musí existovat a patřit uživateli (RLS).
   const { data: projekt } = await supabase
     .from("projects")
-    .select("id")
+    .select("id, status")
     .eq("id", cil)
-    .maybeSingle<{ id: string }>();
+    .maybeSingle<{ id: string; status: string }>();
   if (!projekt) return { ok: false, message: "Projekt nenalezen nebo k němu nemáš přístup." };
+  // Stejné pravidlo jako intake v orchestrátoru: do pozastaveného projektu se práce nezakládá.
+  if (projekt.status !== "active") {
+    return { ok: false, message: "Projekt je pozastavený — nejdřív ho spusť, pak do něj návrh zadej." };
+  }
 
   const defaults = await farmBudgetDefaults(supabase);
   const description = [s.description, s.rationale ? `\n\n(Proč: ${s.rationale})` : ""]

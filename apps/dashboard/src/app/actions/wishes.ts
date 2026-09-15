@@ -223,7 +223,10 @@ export async function createVoiceWish(input: {
   return { ok: true, id: wish.id };
 }
 
-// Schválení specifikace: nastaví approved_at, založí approval a posune wish → active.
+// Schválení specifikace: nastaví approved_at a založí approval. Přání NEpřepíná na
+// active — naplánuje ho orchestrátor (planApprovedSpecs) a aktivuje až po úspěšném
+// plánu. Dřív přání viselo v active bez úkolů a approval měl klíče wish_id/spec_id,
+// které orchestrátor nečte (hledá payload->>'wishId').
 export async function approveSpec(input: {
   wishId: string;
   specId: string;
@@ -245,21 +248,16 @@ export async function approveSpec(input: {
   const { error: specErr } = await supabase.from("specs").update(specUpdate).eq("id", input.specId);
   if (specErr) return { ok: false, message: "Schválení spec selhalo: " + specErr.message };
 
-  const { error: wishErr } = await supabase
-    .from("wishes")
-    .update({ status: "active" })
-    .eq("id", input.wishId);
-  if (wishErr) return { ok: false, message: wishErr.message };
-
-  await supabase.from("approvals").insert({
+  const { error: apprErr } = await supabase.from("approvals").insert({
     user_id: user.id,
     project_id: input.projectId,
     type: "spec",
     status: "approved",
     decided_via: "dashboard",
     decided_at: nowIso,
-    payload: { wish_id: input.wishId, spec_id: input.specId },
+    payload: { wishId: input.wishId, specId: input.specId },
   });
+  if (apprErr) return { ok: false, message: "Schválení se nepodařilo zapsat: " + apprErr.message };
 
   revalidatePath(`/projects/${input.projectId}/wishes/${input.wishId}`);
   return { ok: true };

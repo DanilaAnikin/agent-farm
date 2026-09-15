@@ -23,6 +23,13 @@ test("aliasy a volný doplněk důvodu", () => {
   assert.equal(parseDecision("dismissed", "PROJECT_PAUSED").kind, "project_paused");
 });
 
+test("kódy z orchestrátoru a Telegramu mají vlastní popisek", () => {
+  // intake zapisuje no_project/cross_project/project_paused/duplicate, Telegram owner_dismissed
+  assert.equal(parseDecision("dismissed", "owner_dismissed").label, "Zahozeno majitelem");
+  assert.equal(parseDecision("dismissed", "cross_project").label, "Zahozeno: napříč projekty");
+  assert.equal(parseDecision("dismissed", "duplicate").outcome, "dropped");
+});
+
 test("neznámý nebo chybějící důvod se nerozbije", () => {
   assert.equal(parseDecision("dismissed", null).label, "Zahozeno");
   assert.equal(parseDecision("dismissed", "neco_noveho").kind, "dismissed_other");

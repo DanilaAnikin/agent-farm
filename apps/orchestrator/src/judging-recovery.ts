@@ -45,7 +45,7 @@ export async function recoverOrphanedJudging(
       if (!attempt) {
         // Missing provenance needs investigation; starting an unrelated worker
         // would conceal the lost artifact and spend the user's budget again.
-        await tx`UPDATE tasks SET status = 'parked', updated_at = now() WHERE id = ${task.id} AND status = 'judging'`;
+        await tx`UPDATE tasks SET status = 'parked', park_reason = 'judging_orphan', parked_at = now(), updated_at = now() WHERE id = ${task.id} AND status = 'judging'`;
         recovered.push({ taskId: task.id, projectId: task.project_id, kind: "missing_artifact" });
         continue;
       }

@@ -90,6 +90,8 @@ async function main() {
       attempt_wall_clock_min: num("ATTEMPT_WALL_CLOCK_MIN", 30),
       refill_max_rounds_per_day: num("REFILL_MAX_ROUNDS_PER_DAY", 6),
       refill_max_tasks_per_round: num("REFILL_MAX_TASKS_PER_ROUND", 5),
+      // Kolik přání smí farma sama zadat do jednoho projektu za den (intake návrhů).
+      max_auto_wishes_per_day: num("MAX_AUTO_WISHES_PER_DAY", 2),
       budget_hold_reset_tz: process.env.BUDGET_HOLD_RESET_TZ ?? "UTC",
     };
     for (const [key, value] of Object.entries(settings)) {

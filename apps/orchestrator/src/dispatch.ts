@@ -1071,7 +1071,10 @@ async function requeueNoPenalty(
   `;
   const infraRetries = bumped[0]?.infra_retries ?? 1;
   if (infraRetries > MAX_INFRA_RETRIES) {
-    await getDb().update(tasks).set({ status: "parked" }).where(eq(tasks.id, task.id));
+    await getDb()
+      .update(tasks)
+      .set({ status: "parked", parkReason: "infra", parkedAt: new Date() })
+      .where(eq(tasks.id, task.id));
     await ackDelete(QUEUES.tasks, msgId);
     await logEvent({
       projectId: task.projectId,

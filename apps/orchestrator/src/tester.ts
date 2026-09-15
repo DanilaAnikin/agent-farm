@@ -264,7 +264,7 @@ async function executeQaWorkspace(ctx: QaContext, workspacePath: string, wishTas
         }),
         validate: validateTesterPlan,
         temperature: 0.2,
-        metadata: { userId: project.userId, projectId: project.id, scope: "system" },
+        metadata: { userId: project.userId, projectId: project.id, wishId: wish.id, scope: "system" },
       });
       planScenarios = applyGroundedQaCommands(plan.data.scenarios, grounding, MAX_SCENARIOS);
     }

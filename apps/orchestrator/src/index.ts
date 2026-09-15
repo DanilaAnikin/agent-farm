@@ -24,6 +24,7 @@ import { runDeliveryOnce } from "./delivery.js";
 
 import { Agent, setGlobalDispatcher } from "undici";
 import { shouldFarmRun } from "./settings.js";
+import { judgeSlots, workerSlots } from "./runtime-config.js";
 
 // Node global fetch (undici) má defaultní headersTimeout i bodyTimeout 300 s.
 // Volání modelu delší než pět minut proto umřelo na "TypeError: fetch failed" —
@@ -53,7 +54,8 @@ interface LoopSpec {
 // Každá dispatch smyčka čte z q_tasks přes FOR UPDATE SKIP LOCKED, takže N smyček
 // = N paralelních workerů bez race (jiná zpráva pro každou). Serializuje se jen
 // merge (rebase-onto-main v mergeToMain). Řízeno MAX_WORKERS_TOTAL.
-const WORKER_SLOTS = Math.max(1, loadConfig().maxWorkersTotal);
+// Výpočet je v runtime-config.ts — stejná čísla zapisuje do farm_settings pro dashboard.
+const WORKER_SLOTS = workerSlots();
 
 /**
  * Obalí smyčku globálním vypínačem.
@@ -91,7 +93,7 @@ const LOOPS: LoopSpec[] = [
     fn: pausable(runDispatchOnce),
   })),
   // Víc judge slotů — judge (build/test v kontejneru) je taky paralelizovatelný.
-  ...Array.from({ length: Math.max(2, Math.ceil(WORKER_SLOTS / 2)) }, (_, i) => ({
+  ...Array.from({ length: judgeSlots() }, (_, i) => ({
     name: `judge-${i + 1}`,
     everyMs: 3_000,
     fn: pausable(runJudgeOnce),

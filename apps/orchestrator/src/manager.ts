@@ -495,7 +495,7 @@ async function architectWish(
     model: MODELS.manager,
     messages: architectMessages,
     validate: validateArchitect,
-    metadata: { userId: project.userId, projectId: project.id, scope: "system" },
+    metadata: { userId: project.userId, projectId: project.id, wishId: wish.id, scope: "system" },
   });
 
   // SEBE-KRITIKA: pokud plán nepokrývá všechna akceptační kritéria, dej architektovi
@@ -518,7 +518,7 @@ async function architectWish(
           },
         ],
         validate: validateArchitect,
-        metadata: { userId: project.userId, projectId: project.id, scope: "system" },
+        metadata: { userId: project.userId, projectId: project.id, wishId: wish.id, scope: "system" },
       });
       // Přijmi revizi JEN když (a) pokrývá víc kritérií A (b) neztratila žádné dřív
       // pokryté (superset). Porovnání MNOŽIN, ne jen počtu — jinak by revize mohla
@@ -742,7 +742,7 @@ async function planWishFallback(
     model: MODELS.manager,
     messages: planMessages,
     validate: validatePlan,
-    metadata: { userId: project.userId, projectId: project.id, scope: "system" },
+    metadata: { userId: project.userId, projectId: project.id, wishId: wish.id, scope: "system" },
   });
 
   for (const t of plan.data.tasks) {
