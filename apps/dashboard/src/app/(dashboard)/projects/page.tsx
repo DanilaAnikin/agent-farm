@@ -25,7 +25,8 @@ import { projectProgress, queueBreakdown, wishBreakdown, wishBreakdownLine } fro
 import { farmBudgetDefaults } from "@/app/actions/project-defaults";
 import type { AgentRow, ProjectRow, WishRow } from "@/lib/types";
 
-export const metadata = { title: "Velín — Perennial" };
+// Titulek odpovídá položce navigace (NAV_ITEMS) — na mobilu se podle něj orientuje.
+export const metadata = { title: "Projekty — Perennial" };
 
 const PRACUJE = ["pracuje", "pracují", "pracuje"] as const;
 const BEZICI_UKOL = new Set(["running", "judging", "merging"]);
@@ -202,7 +203,7 @@ export default async function CommandCenterPage() {
         <div className="min-w-0">
           <div className="t-eyebrow flex items-center gap-2">
             {busy.length > 0 ? <StatusPulse className="h-1.5 w-1.5" /> : null}
-            {busy.length > 0 ? "Živě · Velín" : "Velín farmy"}
+            {busy.length > 0 ? "Živě · Projekty" : "Projekty"}
           </div>
           <h1 className="t-title mt-2 text-[--color-fg]">{nadpis}</h1>
         </div>

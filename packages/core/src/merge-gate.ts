@@ -13,7 +13,8 @@
  *   (b) repo má workflow, ale checků je 0 → čekat (nejvýš ~2 h, pak deny),
  *   (c) soudce práci schválil,
  *   (d) GitHub nehlásí konflikt (`mergeable !== false`),
- *   (e) v cestách ani v přidaných řádcích není tajemství,
+ *   (e) v cestách ani v přidaných řádcích není tajemství a skener viděl obsah
+ *       všech změněných souborů,
  *   (f) vypínač majitele je vypnutý.
  *
  * Funkce nic nevolá a nic nečte — všechno dostane na vstupu, takže je testovatelná
@@ -52,6 +53,12 @@ export interface MergeGateInput {
   changedFiles: string[];
   /** Přidané řádky diffu (bez úvodního `+`). */
   addedLines: string[];
+  /**
+   * Viděl skener obsah VŠECH změněných souborů? false = některý soubor neměl patch
+   * a jeho obsah se nepodařilo stáhnout, nebo PR přesáhl limit výpisu souborů.
+   * Chybí-li (starší volající), bere se jako true.
+   */
+  secretScanComplete?: boolean;
   /** Má repo aspoň jeden aktivní workflow GitHub Actions? */
   repoHasWorkflows: boolean;
   /** Kdy byl PR otevřen — od toho se měří čekání na checky, které se neobjevily. */
@@ -67,6 +74,7 @@ export type MergeGateCode =
   | "judge_not_approved"
   | "secret_path"
   | "secret_content"
+  | "secret_scan_incomplete"
   | "conflict"
   | "stale_check"
   | "check_failed"
@@ -161,6 +169,15 @@ export function evaluateMergeGate(input: MergeGateInput): MergeGateResult {
       allow: false,
       code: "secret_content",
       reason: `V přidaných řádcích je tajemství: ${kinds.join(", ")}.`,
+    };
+  }
+  // Co skener neviděl, to nesmí projít — tajemství ve velkém nebo binárním souboru
+  // by jinak prošlo bez kontroly obsahu.
+  if (input.secretScanComplete === false) {
+    return {
+      allow: false,
+      code: "secret_scan_incomplete",
+      reason: "Obsah některých změněných souborů se nepodařilo zkontrolovat na tajemství.",
     };
   }
 

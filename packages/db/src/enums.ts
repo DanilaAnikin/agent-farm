@@ -158,7 +158,7 @@ export type SuggestionStatus = (typeof SUGGESTION_STATUSES)[number];
 /**
  * Nastavení autonomie projektu (projects.autonomy jsonb) — KIND-AGNOSTICKÉ.
  * proactive: farma sama generuje návrhy co dál (pro cokoliv).
- * selfRun: návrhy se samy převádějí na přání a exekuují (plný autopilot práce).
+ * selfRun: ZASTARALÉ, nikdo ho nečte — návrhy se na přání převádějí vždy (intake v orchestrátoru).
  * autoDeliver: nevratné doručení (publish/prod-deploy) se auto-schválí do denního capu.
  */
 export interface ProjectAutonomy {

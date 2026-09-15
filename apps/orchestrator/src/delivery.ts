@@ -17,8 +17,10 @@
  * PR farma NIKDY nezavírá.
  *
  * Smyčka NENÍ `pausable` (index.ts): merge nestojí tokeny a autonomní farma nemá
- * čekat na konec off-peaku. Respektuje jen vypínač majitele — čte ho jako první
- * věc a znovu těsně před samotným sloučením.
+ * čekat na konec off-peaku. Respektuje vypínač majitele — čte ho jako první
+ * věc a znovu těsně před samotným sloučením — a pauzu projektu (`paused`,
+ * `stopped`): do pozastaveného projektu farma nezasahuje ani slučováním.
+ * `budget_hold` slučovat smí, merge nic nestojí.
  */
 import { getDb, getSql, tasks, attempts, reviews, projects, QUEUES, enqueue } from "@farm/db";
 import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
@@ -26,8 +28,10 @@ import { evaluateMergeGate, taskMachine } from "@farm/core";
 import type { MergeGateCheckRun, MergeGateResult } from "@farm/core";
 import { logEvent } from "./events.js";
 import type { LogEventInput } from "./events.js";
-import { getSetting } from "./settings.js";
+import { getSetting, isGlobalPaused } from "./settings.js";
 import { githubClientForProject, fetchPullHead, redactSecrets } from "./git.js";
+import { judgeHeadMove } from "./pr-head-move.js";
+import type { HeadMoveCompare, HeadMoveVerdict } from "./pr-head-move.js";
 import type { GithubRepoClient } from "./git.js";
 import { enqueueReadyDependents, parkBlockedDependents } from "./dag.js";
 import { deliverApprovedAttempt, reportWishProgress, maybeCompleteWish, maybeReplanStuckWish } from "./judge.js";
@@ -39,6 +43,16 @@ const MERGE_STUCK_MS = Number(process.env.MERGE_STUCK_MS ?? 24 * 60 * 60_000);
 const MAX_MERGE_FIXES = Number(process.env.MAX_MERGE_FIXES ?? 3);
 /** Kolik úkolů v `merging` zpracovat za jednu iteraci. */
 const BATCH = 20;
+/** GitHub pulls.listFiles vrátí nejvýš tolik souborů; větší PR nejde celý proskenovat. */
+const LIST_FILES_MAX = 3000;
+/** Kolik souborů bez patche smí skener stáhnout celé (za jedno vyhodnocení PR). */
+const BLOB_SCAN_MAX_FILES = 40;
+/** Větší soubor se celý nestahuje — sken se prohlásí za neúplný. */
+const BLOB_SCAN_MAX_BYTES = 2 * 1024 * 1024;
+/** Odložené nasazení (dashboard při automatické pauze) po této době vyprší. */
+const DEFERRED_DEPLOY_TTL_H = 24;
+/** Stavy projektu, do kterých farma nesahá ani slučováním (ruční pauza, rollout). */
+const PROJECT_HOLD_STATUSES: readonly string[] = ["paused", "stopped"];
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -75,6 +89,10 @@ export async function runDeliveryOnce(): Promise<void> {
     return;
   }
 
+  await promoteDeferredDeploys().catch((err) =>
+    console.error("[delivery] odložená nasazení se nepodařilo zařadit:", redactSecrets(String(err))),
+  );
+
   const rows = await getDb()
     .select()
     .from(tasks)
@@ -110,11 +128,60 @@ async function ownerPaused(): Promise<boolean> {
   return Boolean(await getSetting<unknown>("owner_pause", false));
 }
 
+/**
+ * Dashboard při AUTOMATICKÉ pauze zapíše „Nasadit hned" jako `deferred` (watcher
+ * bere jen `pending`, nasazovací skript by za pauzy požadavek zamítl). Dřív ho
+ * nic nepřevedlo zpátky, visel navždy a blokoval každé další ruční nasazení.
+ * Po skončení pauzy se čerstvý požadavek zařadí; starší než 24 h vyprší —
+ * po dni už „nasadit hned" neplatí a automatická cesta nasazuje sama.
+ */
+async function promoteDeferredDeploys(): Promise<void> {
+  if (await isGlobalPaused()) return;
+  const sql = getSql();
+  // Tabulku zakládá nasazovací infrastruktura hostitele — v téhle DB nemusí být.
+  const exists = await sql<{ t: string | null }[]>`SELECT to_regclass('public.deploy_requests')::text AS t`;
+  if (!exists[0]?.t) return;
+  const promoted = await sql<{ project: string }[]>`
+    UPDATE deploy_requests
+    SET status = 'pending', detail = 'Automatická pauza skončila — nasazení zařazeno.'
+    WHERE status = 'deferred' AND requested_at > now() - make_interval(hours => ${DEFERRED_DEPLOY_TTL_H})
+    RETURNING project
+  `;
+  await sql`
+    UPDATE deploy_requests
+    SET status = 'skipped', detail = 'Odložené nasazení vypršelo (déle než 24 h) — nasadí se automatickou cestou.',
+        finished_at = now()
+    WHERE status = 'deferred' AND requested_at <= now() - make_interval(hours => ${DEFERRED_DEPLOY_TTL_H})
+  `;
+  for (const r of promoted) console.log(`[delivery] odložené nasazení projektu ${r.project} zařazeno`);
+}
+
 async function deliverTask(task: TaskRow, mergedProjects: Set<string>): Promise<void> {
   const projRows = await getDb().select().from(projects).where(eq(projects.id, task.projectId)).limit(1);
   const project = projRows[0];
   if (!project) return;
   if (mergedProjects.has(project.id)) return;
+
+  // Pozastavený projekt (ruční pauza, circuit-breaker) ani projekt v postupném
+  // náběhu farma nemění: nesloučí PR, neaktualizuje větev, nevrací úkol k opravě
+  // a čekání se do „24 h na stejném důvodu" nepočítá (streak přeruší jiný kód).
+  if (PROJECT_HOLD_STATUSES.includes(project.status)) {
+    await logEventDeduped(
+      {
+        projectId: project.id,
+        taskId: task.id,
+        level: "info",
+        type: "pr_merge_blocked",
+        message:
+          project.status === "stopped"
+            ? "Projekt čeká na postupné zapnutí — farma do té doby PR neslučuje."
+            : "Projekt je pozastavený — farma PR neslučuje, dokud projekt znovu nepoběží.",
+        data: { projectStatus: project.status },
+      },
+      "project_paused",
+    );
+    return;
+  }
 
   if (project.repoMode !== "existing") {
     // Do 'merging' se dnes dostane jen existující repo; nová repa merguje judge.
@@ -203,16 +270,17 @@ async function deliverTask(task: TaskRow, mergedProjects: Set<string>): Promise<
 
   const headSha = pr.head.sha;
 
-  // Hlava PR se pohnula od posouzeného commitu. Přijatelné jsou jen merge commity
-  // z hlavní větve (update-branch) — cizí commity soudce neviděl.
+  // Hlava PR se pohnula od posouzeného commitu. Přijatelné je jen sloučení hlavní
+  // větve (update-branch), které nemění posouzenou změnu — viz pr-head-move.ts.
+  // Chyba GitHubu vyhodí výjimku (zkusí se za minutu), NEvrací úkol k opravě.
   if (attempt.headSha && headSha !== attempt.headSha) {
-    const onlyBaseMerges = await onlyMergeCommitsSince(gh, attempt.headSha, headSha);
-    if (!onlyBaseMerges) {
+    const verdict = await checkHeadMove(gh, pr.base.ref, attempt.headSha, headSha);
+    if (!verdict.safe) {
       await requeueAsFix(
         task,
         project,
         attempt,
-        `PR #${prNumber} obsahuje commity, které soudce neposoudil.`,
+        `PR #${prNumber} obsahuje změny, které soudce neposoudil (${verdict.reason}).`,
         "Zkontroluj nové commity v PR, ověř je a dokonči úkol na téže větvi.",
       );
       return;
@@ -246,7 +314,8 @@ async function deliverTask(task: TaskRow, mergedProjects: Set<string>): Promise<
   }
 
   // Podklady brány.
-  const checkRunsRaw = (await octokit.checks.listForRef({ owner, repo, ref: headSha, per_page: 100 })).data.check_runs;
+  // Stránkovat: padající check-run na druhé stránce by brána jinak neviděla.
+  const checkRunsRaw = await octokit.paginate(octokit.checks.listForRef, { owner, repo, ref: headSha, per_page: 100 });
   const checkRuns: MergeGateCheckRun[] = checkRunsRaw.map((c) => ({
     name: c.name,
     status: c.status,
@@ -269,6 +338,11 @@ async function deliverTask(task: TaskRow, mergedProjects: Set<string>): Promise<
       .filter((l) => l.startsWith("+") && !l.startsWith("+++"))
       .map((l) => l.slice(1)),
   );
+  // GitHub u velkých a binárních souborů patch nevrací a listFiles končí na 3000
+  // souborech. Obsah takových souborů se stáhne celý; co stáhnout nejde, to brána nepustí.
+  const scan = await scanFilesWithoutPatch(gh, files);
+  addedLines.push(...scan.lines);
+  const secretScanComplete = scan.complete && files.length < LIST_FILES_MAX && files.length >= (pr.changed_files ?? 0);
 
   const gateInput = {
     headSha,
@@ -281,6 +355,7 @@ async function deliverTask(task: TaskRow, mergedProjects: Set<string>): Promise<
     judgeApproved: true,
     changedFiles,
     addedLines,
+    secretScanComplete,
     repoHasWorkflows,
     openedAt: pr.created_at,
   };
@@ -523,15 +598,86 @@ async function mergePullRequest(
   return { merged: false, message: "repo nepovoluje žádný způsob sloučení, který farma umí" };
 }
 
-/** Obsahuje posun hlavy PR jen merge commity (update-branch z hlavní větve)? */
-async function onlyMergeCommitsSince(gh: GithubRepoClient, base: string, head: string): Promise<boolean> {
+/**
+ * Podklady pro judgeHeadMove: tři compare. `baseRef...X` (tři tečky) = commity a
+ * diff větve od společného předka s hlavní větví, tedy BEZ commitů z hlavní větve.
+ * 404 (posouzený commit už na GitHubu není, např. po force-push) = neověřitelné.
+ * Jiná chyba se propaguje — smyčka to zkusí znovu a úkol se zbytečně nevrací.
+ */
+async function checkHeadMove(
+  gh: GithubRepoClient,
+  baseRef: string,
+  judgedSha: string,
+  headSha: string,
+): Promise<HeadMoveVerdict> {
+  const compare = (base: string, head: string) =>
+    gh.octokit.repos.compareCommits({ owner: gh.owner, repo: gh.repo, base, head, per_page: 250 });
+  const toCompare = (data: Awaited<ReturnType<typeof compare>>["data"]): HeadMoveCompare => ({
+    commits: data.commits.map((c) => ({ sha: c.sha, parents: (c.parents ?? []).map((p) => p.sha) })),
+    totalCommits: data.total_commits,
+    files: (data.files ?? []).map((f) => ({
+      filename: f.filename,
+      status: f.status,
+      additions: f.additions,
+      deletions: f.deletions,
+      sha: f.sha,
+      patch: f.patch ?? null,
+    })),
+  });
   try {
-    const cmp = await gh.octokit.repos.compareCommits({ owner: gh.owner, repo: gh.repo, base, head });
-    if (cmp.data.status !== "ahead") return false;
-    return cmp.data.commits.every((c) => (c.parents?.length ?? 0) > 1);
-  } catch {
-    return false;
+    const [since, judged, current] = await Promise.all([
+      compare(judgedSha, headSha),
+      compare(baseRef, judgedSha),
+      compare(baseRef, headSha),
+    ]);
+    return judgeHeadMove({
+      sinceJudgedStatus: since.data.status,
+      judged: toCompare(judged.data),
+      current: toCompare(current.data),
+    });
+  } catch (err) {
+    if (httpStatus(err) === 404) return { safe: false, reason: "posouzený commit už na GitHubu neexistuje" };
+    throw err;
   }
+}
+
+/**
+ * Stáhne celý obsah změněných souborů, ke kterým GitHub nevrátil patch, a vrátí
+ * jejich řádky pro skener tajemství. `complete: false` = něco zůstalo neprohlédnuté.
+ * Soubor bez obsahu (prázdný nový soubor, přejmenování beze změny) se nestahuje.
+ */
+async function scanFilesWithoutPatch(
+  gh: GithubRepoClient,
+  files: { filename: string; status: string; sha?: string | null; patch?: string; changes?: number; additions?: number }[],
+): Promise<{ lines: string[]; complete: boolean }> {
+  const bezPatche = files.filter((f) => f.status !== "removed" && !f.patch);
+  const lines: string[] = [];
+  let complete = true;
+  let stazeno = 0;
+  for (const f of bezPatche) {
+    // Přejmenování beze změn obsahu nemá co skenovat (obsah už prošel dřív). Binární
+    // a velké soubory (GitHub u nich hlásí 0/0 nebo patch vynechá) se stahují celé.
+    if (f.status === "renamed" && (f.changes ?? 0) === 0) continue;
+    if (!f.sha || stazeno >= BLOB_SCAN_MAX_FILES) {
+      complete = false;
+      break;
+    }
+    stazeno++;
+    try {
+      const blob = await gh.octokit.git.getBlob({ owner: gh.owner, repo: gh.repo, file_sha: f.sha });
+      if ((blob.data.size ?? 0) > BLOB_SCAN_MAX_BYTES) {
+        complete = false;
+        break;
+      }
+      const text =
+        blob.data.encoding === "base64" ? Buffer.from(blob.data.content, "base64").toString("utf8") : blob.data.content;
+      lines.push(...text.split("\n"));
+    } catch {
+      complete = false;
+      break;
+    }
+  }
+  return { lines, complete };
 }
 
 /** Jméno a konec logu padajících kroků CI — do poznámky workerovi. */

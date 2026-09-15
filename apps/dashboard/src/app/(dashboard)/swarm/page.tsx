@@ -16,12 +16,12 @@ import { errorGroups, type FeedEvent } from "@/components/swarm/event-groups";
 import { ATTEMPT_STATUS_META, PROJECT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatNumber, formatRelative } from "@/lib/format";
 import { countLabel, plural, TVARY } from "@/lib/plural";
+import { modelLabel } from "@/lib/admin-guards";
 import type { AgentRow, AttemptStatus, ProjectStatus } from "@/lib/types";
 
-export const metadata = { title: "Velín roje — Perennial" };
+// Titulek odpovídá položce navigace (NAV_ITEMS).
+export const metadata = { title: "Roj — Perennial" };
 
-// Živý agent = pracuje NEBO poslední signál do ~120 s (a není mrtvý).
-const LIVE_HEARTBEAT_MS = 120 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const PRACUJE = ["pracuje", "pracují", "pracuje"] as const;
@@ -175,7 +175,8 @@ export default async function SwarmPage() {
     return {
       id: a.id,
       role: a.role,
-      model: a.model ?? run?.model ?? null,
+      // Lidský název modelu, ne syrový alias (stejně jako Administrace a Náklady).
+      model: (a.model ?? run?.model) ? modelLabel(a.model ?? run?.model) : null,
       projectName: a.project_id ? (projectNames[a.project_id] ?? null) : null,
       taskTitle: task?.title ?? null,
       href: task ? (task.wish_id ? `/projects/${task.project_id}/wishes/${task.wish_id}` : `/projects/${task.project_id}`) : null,
@@ -183,9 +184,8 @@ export default async function SwarmPage() {
     };
   });
 
-  const liveWorkers = agents.filter(
-    (a) => a.role === "worker" && (a.status === "busy" || now - new Date(a.last_heartbeat).getTime() <= LIVE_HEARTBEAT_MS),
-  ).length;
+  // Obsazená kapacita = vývojáři, kteří PRACUJÍ — stejný význam jako hero „právě pracuje".
+  const busyWorkers = busyAgents.filter((a) => a.role === "worker").length;
 
   // Kapacitu hlásí běžící orchestrátor. Chybí-li, NEHÁDÁME ji z env dashboardu.
   const kapacitaRaw = Number(overview.run.runtime_max_workers_total);
@@ -204,7 +204,7 @@ export default async function SwarmPage() {
   const lastDoneTask = lastDone?.task_id ? taskById.get(lastDone.task_id) : undefined;
   const kpis: SwarmKpis = {
     liveAgents: busyAgents.length,
-    liveWorkers,
+    busyWorkers,
     maxWorkers,
     activeProjects: projects.filter((p) => p.status === "active").length,
     doneTasks24h: done24Res.error ? null : (done24Res.count ?? 0),
@@ -249,7 +249,7 @@ export default async function SwarmPage() {
     });
 
   const capacityLine = maxWorkers
-    ? `Kapacita: až ${countLabel(maxWorkers, TVARY.worker)}.`
+    ? `Kapacita: až ${countLabel(maxWorkers, TVARY.vyvojar)}.`
     : "Kapacita neznámá — orchestrátor ji zatím nehlásí.";
 
   return (
@@ -258,8 +258,8 @@ export default async function SwarmPage() {
       <RealtimeRefresh tables={["events"]} throttleMs={10000} />
 
       <div className="mb-5">
-        <div className="t-eyebrow">Roj</div>
-        <h1 className="t-title mt-2 text-[--color-fg]">Velín roje</h1>
+        <div className="t-eyebrow">Napříč projekty</div>
+        <h1 className="t-title mt-2 text-[--color-fg]">Roj</h1>
         <p className="mt-1.5 t-body text-[--color-muted]">
           Celý roj na jeden pohled — napříč všemi tvými projekty. {capacityLine}
         </p>
@@ -302,7 +302,11 @@ export default async function SwarmPage() {
           ) : (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
               <StatusBadge meta={ATTEMPT_STATUS_META[lastRun.status] ?? { label: lastRun.status, tone: "neutral" }} dot />
-              <span className="text-[--color-muted]" title={formatDate(lastRun.started_at)} suppressHydrationWarning>
+              <span
+                className="text-[--color-muted]"
+                title={formatDate(lastRun.finished_at ?? lastRun.started_at)}
+                suppressHydrationWarning
+              >
                 {formatRelative(lastRun.finished_at ?? lastRun.started_at)}
               </span>
               {lastRunProject ? (
@@ -322,7 +326,7 @@ export default async function SwarmPage() {
                   {lastRunTask.title}
                 </Link>
               ) : null}
-              {lastRun.model ? <span className="text-xs text-[--color-faint]">{lastRun.model}</span> : null}
+              {lastRun.model ? <span className="text-xs text-[--color-faint]">{modelLabel(lastRun.model)}</span> : null}
               {lastRunPrUrl ? (
                 <a href={lastRunPrUrl} target="_blank" rel="noreferrer" className="text-xs text-[--color-brand] hover:underline">
                   Pull request #{lastRun.pr_number}

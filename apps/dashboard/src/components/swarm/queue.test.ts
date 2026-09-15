@@ -91,6 +91,27 @@ test("otevřená přání: rozpad aktivní vs. pozastavené", () => {
   assert.equal(b.openPaused, 27);
   assert.equal(b.openByProject.get("b"), 27);
   assert.equal(wishBreakdownLine(b), "1 rozpracované · 27 čeká v pozastavených projektech");
+  // Sloveso musí souhlasit s číslem i u 2–4.
+  assert.equal(
+    wishBreakdownLine({ openActive: 0, openPaused: 3, openByProject: new Map() }),
+    "0 rozpracovaných · 3 čekají v pozastavených projektech",
+  );
+});
+
+test("fronta: sloveso u 2–4 v množném čísle („2 se slučují“)", () => {
+  const prazdna = {
+    queuedActive: 0,
+    runningActive: 0,
+    judgingActive: 0,
+    mergingActive: 0,
+    queuedPaused: 0,
+    parkedLive: 0,
+    parkedArchived: 0,
+  };
+  assert.equal(queueSubline({ ...prazdna, mergingActive: 2 }), "2 se slučují");
+  assert.equal(queueSubline({ ...prazdna, mergingActive: 1 }), "1 se slučuje");
+  assert.equal(queueSubline({ ...prazdna, mergingActive: 5 }), "5 se slučuje");
+  assert.equal(queueHeadline({ ...prazdna, queuedActive: 3 }), "3 úkoly čekají (aktivní projekty)");
   assert.equal(
     wishBreakdownLine(wishBreakdown([{ project_id: "a", project_status: "active", status: "new", cnt: "3" }])),
     "3 rozpracovaná",

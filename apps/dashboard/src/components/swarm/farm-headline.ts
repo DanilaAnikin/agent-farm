@@ -127,7 +127,8 @@ export function farmHeadline(input: FarmHeadlineInput): FarmHeadline {
       const za = Math.max(0, Math.round((new Date(kdy).getTime() - now.getTime()) / 1000));
       return {
         title: `Drahé hodiny DeepSeeku — farma se sama rozjede v ${formatTimeShort(kdy)}`,
-        detail: `Za ${formatDuration(za < 60 ? 60 : za)} (čas Europe/Prague). Do té doby stojí záměrně, tokeny ve špičce stojí násobek.`,
+        // Časové pásmo patří k absolutnímu času (titulek, patička pásu), ne k délce trvání.
+        detail: `Za ${formatDuration(za < 60 ? 60 : za)}. Do té doby stojí záměrně, tokeny ve špičce stojí násobek.`,
         tone: "info",
       };
     }

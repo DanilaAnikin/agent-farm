@@ -83,7 +83,7 @@ export function parseDecision(status: string, reason: string | null): Decision {
     accepted: "Přijato",
     duplicate: "Zahozeno: duplicita",
     project_paused: "Zahozeno: projekt je pozastavený",
-    not_in_repo: "Zahozeno: nepodložené repozitářem",
+    not_in_repo: "Zahozeno: mimo repozitář",
     cross_project: "Zahozeno: napříč projekty",
     stale: "Zahozeno: zastaralé",
     owner_dismissed: "Zahozeno majitelem",
@@ -101,16 +101,17 @@ export interface DecisionCounts {
   crossProject: number;
 }
 
-const ZADANO = ["zadáno", "zadána", "zadáno"] as const;
-const ZAHOZENO = ["zahozeno", "zahozena", "zahozeno"] as const;
+// Shoda s „návrh" (mužský neživotný): 1 zadán, 2 zadány, 5 zadáno.
+const ZADANO = ["zadán", "zadány", "zadáno"] as const;
+const ZAHOZENO = ["zahozen", "zahozeny", "zahozeno"] as const;
 const DUPLICIT = ["duplicita", "duplicity", "duplicit"] as const;
 
-/** „2 zadána · 31 zahozeno (25 duplicit, 6 mimo repo)". */
+/** „2 zadány · 31 zahozeno (25 duplicit, 6 mimo repozitář)". */
 export function decisionSummary(c: DecisionCounts): string {
   const casti = [`${c.assigned} ${plural(c.assigned, ZADANO)}`, `${c.dropped} ${plural(c.dropped, ZAHOZENO)}`];
   const proc: string[] = [];
   if (c.duplicate > 0) proc.push(`${c.duplicate} ${plural(c.duplicate, DUPLICIT)}`);
-  if (c.notInRepo > 0) proc.push(`${c.notInRepo} mimo repo`);
+  if (c.notInRepo > 0) proc.push(`${c.notInRepo} mimo repozitář`);
   if (c.projectPaused > 0) proc.push(`${c.projectPaused} u pozastavených projektů`);
   if (c.crossProject > 0) proc.push(`${c.crossProject} napříč projekty`);
   return proc.length > 0 && c.dropped > 0 ? `${casti.join(" · ")} (${proc.join(", ")})` : casti.join(" · ");

@@ -153,7 +153,7 @@ export function CapEditor({
       <Card>
         <CardHeader
           title="Denní stropy projektů"
-          description={`Omezují práci workerů daného projektu a platí hned v plánovači úkolů. Celkově vždy platí strop farmy (${formatUsd(farmDailyCap, "cap")}/den).`}
+          description={`Omezují práci vývojářů daného projektu a platí hned v plánovači úkolů. Celkově vždy platí strop farmy (${formatUsd(farmDailyCap, "cap")}/den).`}
         />
         <CardBody>
           {projects.length === 0 ? (

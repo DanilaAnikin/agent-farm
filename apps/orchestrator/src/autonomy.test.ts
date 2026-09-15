@@ -4,6 +4,7 @@ import {
   DEFAULT_MAX_AUTO_WISHES_PER_DAY,
   czCount,
   decideSuggestion,
+  hasRepoEvidence,
   joinRationale,
   mapSuggestionProject,
   parseMaxAutoWishes,
@@ -42,13 +43,31 @@ test("intake: návrh bez projektu, který žádný projekt nezmiňuje → no_pro
   });
 });
 
-test("intake: do pozastaveného projektu nikdy — ani když je volno", () => {
+test("intake: do stojícího projektu nikdy — ale návrh se nezahodí, jen odloží", () => {
+  // budget_hold je dočasný automatický stav: zahození by bylo nevratné, i když se
+  // projekt po resetu okna sám rozjede. Totéž ruční pauza a postupný náběh.
   for (const status of ["paused", "budget_hold", "stopped"] as const) {
     assert.deepEqual(decideSuggestion({ ...base, projectStatus: status, dedup: null }), {
-      action: "dismiss",
+      action: "defer",
       reason: "project_paused",
     });
   }
+  // Ani jistá duplicita v stojícím projektu se neřeší — posoudí se po obnovení.
+  assert.deepEqual(decideSuggestion({ ...base, projectStatus: "budget_hold", dedup: { known: true } }), {
+    action: "defer",
+    reason: "project_paused",
+  });
+});
+
+test("intake: vypnuté „Farma sama vybírá další práci“ návrh odloží", () => {
+  assert.deepEqual(decideSuggestion({ ...base, proactive: false }), { action: "defer", reason: "proactive_off" });
+  assert.deepEqual(decideSuggestion({ ...base, proactive: true }), { action: "convert", reason: "converted" });
+});
+
+test("intake: doklad z repozitáře se pozná podle značky z joinRationale", () => {
+  assert.equal(hasRepoEvidence(joinRationale("proč", "src/app.ts chybí test")), true);
+  assert.equal(hasRepoEvidence("Starý návrh bez dokladu"), false);
+  assert.equal(hasRepoEvidence(null), false);
 });
 
 test("intake: duplicita se zahodí dřív, než rozhodnou limity", () => {

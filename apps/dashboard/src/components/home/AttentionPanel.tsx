@@ -25,8 +25,9 @@ function Polozka({ item, projectNames }: { item: AttentionItem; projectNames: Re
         <div className="mt-0.5 text-[11px] text-[--color-faint]">
           {projekt ? `${projekt} · ` : ""}
           {item.since ? (
-            <span title={`${formatDate(item.since)} (Europe/Prague)`} suppressHydrationWarning>
-              od {formatRelative(item.since)}
+            // „od před 3 hodinami" není česky — relativní čas stojí sám, přesný v title.
+            <span title={`Od ${formatDate(item.since)} (Europe/Prague)`} suppressHydrationWarning>
+              začalo {formatRelative(item.since)}
             </span>
           ) : null}
         </div>

@@ -1,6 +1,9 @@
-// Horní KPI pruh velína roje. Hero = počet ŽIVÝCH agentů právě teď (pulzuje),
-// vedle sekundární metriky: aktivní projekty, dokončené úkoly a neúspěšné pokusy
-// za 24 h a fronta rozdělená na aktivní a pozastavené projekty.
+// Horní KPI pruh roje. Hero = počet agentů, kteří PRÁVĚ PRACUJÍ (pulzuje), vedle
+// sekundární metriky: aktivní projekty, dokončené úkoly a neúspěšné pokusy za 24 h
+// a fronta rozdělená na aktivní a pozastavené projekty.
+//
+// „Pracuje" má na celé dlaždici jeden význam: status busy. Dřív hero počítal
+// pracující, ale obsazenost kapacity i nečinné vývojáře s čerstvým signálem.
 import { cn } from "@/lib/cn";
 import { Stat } from "@/components/ui/Card";
 import { formatNumber, formatRelative } from "@/lib/format";
@@ -8,8 +11,10 @@ import { countLabel, TVARY } from "@/lib/plural";
 import { queueHeadline, queueSubline, type QueueBreakdown } from "./queue";
 
 export interface SwarmKpis {
+  /** Agenti, kteří právě pracují (status busy), všechny role. */
   liveAgents: number;
-  liveWorkers: number;
+  /** Vývojáři, kteří právě pracují (role worker, status busy) — obsazená kapacita. */
+  busyWorkers: number;
   /** Kapacita z `farm_settings.runtime_max_workers_total`; null = neznámá. */
   maxWorkers: number | null;
   activeProjects: number;
@@ -22,24 +27,24 @@ export interface SwarmKpis {
 }
 
 export function SwarmKpiStrip({ kpis }: { kpis: SwarmKpis }) {
-  const { liveAgents, liveWorkers, maxWorkers, activeProjects, doneTasks24h, failedAttempts24h, lastDone, queue } =
+  const { liveAgents, busyWorkers, maxWorkers, activeProjects, doneTasks24h, failedAttempts24h, lastDone, queue } =
     kpis;
 
-  // Poměr obsazenosti roje (živí vývojáři / kapacita).
-  const capRatio = maxWorkers && maxWorkers > 0 ? Math.min(1, liveWorkers / maxWorkers) : null;
+  // Poměr obsazenosti roje (pracující vývojáři / kapacita).
+  const capRatio = maxWorkers && maxWorkers > 0 ? Math.min(1, busyWorkers / maxWorkers) : null;
   const podrad = queueSubline(queue);
   const nicZa24h = doneTasks24h === 0 && failedAttempts24h === 0;
 
   return (
     <div className="space-y-3">
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* HERO — živí agenti právě teď */}
+        {/* HERO — agenti, kteří právě pracují */}
         <div className="relative overflow-hidden rounded-2xl border border-[--color-brand]/30 bg-[--color-brand-soft]/40 p-5">
           <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-[--color-brand]">
             <span
               className={cn("h-2 w-2 rounded-full bg-[--color-brand]", liveAgents > 0 && "animate-farm-pulse")}
             />
-            živých agentů právě teď
+            právě pracuje
           </div>
 
           <div className="mt-2 flex items-end gap-3">
@@ -52,7 +57,7 @@ export function SwarmKpiStrip({ kpis }: { kpis: SwarmKpis }) {
               {formatNumber(liveAgents)}
             </span>
             <span className="pb-1 text-sm text-[--color-muted]">
-              {maxWorkers ? `kapacita: až ${countLabel(maxWorkers, TVARY.worker)}` : "kapacita neznámá"}
+              {maxWorkers ? `kapacita: až ${countLabel(maxWorkers, TVARY.vyvojar)}` : "kapacita neznámá"}
             </span>
           </div>
 
@@ -66,12 +71,12 @@ export function SwarmKpiStrip({ kpis }: { kpis: SwarmKpis }) {
                 />
               </div>
               <p className="mt-1.5 text-[11px] text-[--color-muted]">
-                Obsazené sloty: {liveWorkers}/{maxWorkers}
+                Pracující vývojáři: {busyWorkers} z {maxWorkers}
               </p>
             </div>
           ) : (
             <p className="mt-4 text-[11px] text-[--color-muted]">
-              Obsazené sloty: {liveWorkers} (orchestrátor kapacitu nehlásí)
+              Pracující vývojáři: {busyWorkers} (orchestrátor kapacitu nehlásí)
             </p>
           )}
         </div>

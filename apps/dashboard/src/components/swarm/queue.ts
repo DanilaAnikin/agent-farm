@@ -79,7 +79,9 @@ export function queueBreakdown(rows: readonly TaskRollupInput[]): QueueBreakdown
   return b;
 }
 
-const CEKA = ["čeká", "čekají", "čeká"] as const;
+/** Slovesa u počtu musí souhlasit s číslem („2 úkoly čekají", ne „2 čeká"). */
+export const CEKA = ["čeká", "čekají", "čeká"] as const;
+export const SLUCUJE = ["se slučuje", "se slučují", "se slučuje"] as const;
 
 /** „2 úkoly čekají (aktivní projekty)". */
 export function queueHeadline(b: QueueBreakdown): string {
@@ -91,7 +93,7 @@ export function queueSubline(b: QueueBreakdown): string | null {
   const casti: string[] = [];
   if (b.runningActive > 0) casti.push(`${b.runningActive} v práci`);
   if (b.judgingActive > 0) casti.push(`${b.judgingActive} u soudce`);
-  if (b.mergingActive > 0) casti.push(`${b.mergingActive} se slučuje`);
+  if (b.mergingActive > 0) casti.push(`${b.mergingActive} ${plural(b.mergingActive, SLUCUJE)}`);
   if (b.queuedPaused > 0) casti.push(`${b.queuedPaused} v pozastavených projektech`);
   return casti.length > 0 ? casti.join(" · ") : null;
 }
@@ -181,6 +183,6 @@ const ROZPRACOVANE = ["rozpracované", "rozpracovaná", "rozpracovaných"] as co
 /** „1 rozpracované · 27 čeká v pozastavených projektech". */
 export function wishBreakdownLine(b: WishBreakdown): string {
   const casti = [`${b.openActive} ${plural(b.openActive, ROZPRACOVANE)}`];
-  if (b.openPaused > 0) casti.push(`${b.openPaused} čeká v pozastavených projektech`);
+  if (b.openPaused > 0) casti.push(`${b.openPaused} ${plural(b.openPaused, CEKA)} v pozastavených projektech`);
   return casti.join(" · ");
 }

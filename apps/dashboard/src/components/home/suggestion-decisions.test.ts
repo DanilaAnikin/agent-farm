@@ -38,14 +38,14 @@ test("neznámý nebo chybějící důvod se nerozbije", () => {
 test("souhrn za 7 dní s českými tvary", () => {
   assert.equal(
     decisionSummary({ assigned: 2, dropped: 31, duplicate: 25, notInRepo: 6, projectPaused: 0, crossProject: 0 }),
-    "2 zadána · 31 zahozeno (25 duplicit, 6 mimo repo)",
+    "2 zadány · 31 zahozeno (25 duplicit, 6 mimo repozitář)",
   );
   assert.equal(
     decisionSummary({ assigned: 1, dropped: 0, duplicate: 0, notInRepo: 0, projectPaused: 0, crossProject: 0 }),
-    "1 zadáno · 0 zahozeno",
+    "1 zadán · 0 zahozeno",
   );
   assert.equal(
     decisionSummary({ assigned: 0, dropped: 3, duplicate: 3, notInRepo: 0, projectPaused: 0, crossProject: 0 }),
-    "0 zadáno · 3 zahozena (3 duplicity)",
+    "0 zadáno · 3 zahozeny (3 duplicity)",
   );
 });

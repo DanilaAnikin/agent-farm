@@ -274,7 +274,7 @@ export function farmState(input: FarmStateInput, now: Date = new Date()): FarmSt
     paused: true,
     title: "Farma je pozastavená, zdroj neznámý",
     detail:
-      "Globální pauza platí, ale žádný hlídač se k ní nehlásí (pause_source je prázdný). Nikdo ji sám nezruší.",
+      "Globální pauza platí, ale žádný hlídač se k ní nehlásí. Nikdo ji sám nezruší.",
     tone: "danger",
     nextResumeAt: naplanovane,
   };

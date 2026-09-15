@@ -14,7 +14,7 @@ import { InviteForm, InviteRowActions } from "@/components/admin/InviteForm";
 import { UserRow } from "@/components/admin/UserRow";
 import { RealtimeRefresh } from "@/components/RealtimeRefresh";
 import { AGENT_ROLE_META, AGENT_STATUS_META } from "@/lib/constants";
-import { capFromSetting, farmState, isFarmPaused, pauseLabel } from "@/lib/farm-state";
+import { capFromSetting, farmState, isFarmPaused, parsePauseSource, pauseLabel } from "@/lib/farm-state";
 import { getBudgetSnapshot } from "@/lib/server/farm-state";
 import {
   AGENT_HIDE_AFTER_MS,
@@ -141,6 +141,11 @@ export default async function AdminPage() {
       : stav.code === "budget"
         ? "rozpočet"
         : "—";
+  // owner_pause a global_pause jsou nezávislé klíče — automatická pauza může platit
+  // i pod zapnutým vypínačem a po jeho uvolnění farma dál stojí.
+  const hlidacDrzi = Boolean(pauseInput.global_pause) && parsePauseSource(pauseInput.pause_source) !== "owner";
+  const automatickaPauza = hlidacDrzi || (!ownerPaused && farmaStoji);
+  const popisAutomaticke = !ownerPaused && farmaStoji ? stav.detail : hlidacDrzi ? pauseLabel(pauseInput.pause_source) : undefined;
   const farmDailyCap = capFromSetting(settings.get("farm_daily_cap_usd"), 0.6);
   const dnesFarma = budgetRes.snapshot.day_counted ?? budgetRes.snapshot.day_settled;
 
@@ -163,9 +168,10 @@ export default async function AdminPage() {
               initialPaused={ownerPaused}
               onToggle={setGlobalPause}
               mode={ownerPaused ? "owner" : farmaStoji ? "auto" : "running"}
+              autoPaused={automatickaPauza}
               labelPaused="Farmu drží vypínač majitele"
               labelActive={farmaStoji ? stav.title : "Farma běží"}
-              detail={farmaStoji ? stav.detail : undefined}
+              detail={popisAutomaticke}
             />
           </CardBody>
         </Card>
@@ -241,8 +247,8 @@ export default async function AdminPage() {
           </Table>
         </CardBody>
         <CardFooter className="t-meta">
-          Uložený strop je ruční přepis plánu a nikdy nepřekročí strop farmy. Druhou pojistkou je LiteLLM max_budget
-          (druhá pojistka, platí nižší z obou).
+          Uložený strop je ruční přepis plánu a nikdy nepřekročí strop farmy. Druhou pojistkou je rozpočtový limit
+          brány LiteLLM; platí nižší z obou.
         </CardFooter>
       </Card>
 
@@ -341,13 +347,6 @@ export default async function AdminPage() {
           </CardFooter>
         ) : null}
       </Card>
-
-      {farmaStoji && !ownerPaused ? (
-        <p className="t-meta mt-4">
-          <Badge tone="info">Pozn.</Badge> Automatickou pauzu (levné hodiny, kredit, měsíční strop) tlačítko „Spustit“
-          nepřebije — farma se rozjede sama.
-        </p>
-      ) : null}
     </>
   );
 }

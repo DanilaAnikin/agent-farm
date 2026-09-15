@@ -139,6 +139,17 @@ test("bez schválení soudcem → deny", () => {
   assert.equal(evaluateMergeGate(base({ judgeApproved: false })).code, "judge_not_approved");
 });
 
+test("neúplný sken tajemství → deny, i se zelenými checky", () => {
+  const r = evaluateMergeGate(base({ secretScanComplete: false }));
+  assert.equal(r.allow, false);
+  assert.notEqual(r.wait, true);
+  assert.equal(r.code, "secret_scan_incomplete");
+  // Nalezené tajemství má přednost (konkrétnější důvod).
+  assert.equal(evaluateMergeGate(base({ secretScanComplete: false, addedLines: [fakeGithubToken] })).code, "secret_content");
+  // Starší volající bez pole → jako úplný sken.
+  assert.equal(evaluateMergeGate(base()).allow, true);
+});
+
 test("GitHub ještě počítá mergeable → wait", () => {
   const r = evaluateMergeGate(base({ mergeable: null, mergeableState: "unknown" }));
   assert.equal(r.wait, true);

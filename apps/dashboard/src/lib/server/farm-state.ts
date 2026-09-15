@@ -164,7 +164,7 @@ export async function getBudgetSnapshot(): Promise<BudgetSnapshotResult> {
     snapshot,
     degraded,
     degradedReason: degraded
-      ? "Rozpočtový hlídač neodpovídá — čísla níž jsou jen z našeho ledgeru, ne z brány."
+      ? "Rozpočtový hlídač neodpovídá — čísla níž jsou jen ze zaúčtovaných pohybů, ne z rozpočtové brány."
       : null,
   };
 }

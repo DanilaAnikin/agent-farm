@@ -245,7 +245,7 @@ BEGIN
       'kind', 'pause_overdue',
       'severity', 'error',
       'title', 'Automatická pauza se nepustila',
-      'detail', 'Je levné okno (mimo špičku), ale farma je pořád pozastavená se zdrojem „offpeak". Plánovač ji měl sám rozjet.',
+      'detail', 'Je levné okno (mimo špičku), ale farma je pořád pozastavená kvůli drahým hodinám. Plánovač ji měl sám rozjet.',
       'since', (SELECT fs.updated_at FROM public.farm_settings fs WHERE fs.key = 'global_pause')
     );
   END IF;
@@ -263,7 +263,18 @@ BEGIN
       'kind', 'agent_stalled',
       'severity', 'warn',
       'title', 'Agent bez signálu',
-      'detail', 'Agent role ' || zaznam.role || ' je ve stavu ' || zaznam.status || ', ale netepe.',
+      -- České popisky rolí a stavů (stejné jako AGENT_ROLE_META v dashboardu), ne syrové enumy.
+      'detail', CASE zaznam.role
+                  WHEN 'manager' THEN 'Manažer'
+                  WHEN 'worker' THEN 'Vývojář'
+                  WHEN 'judge' THEN 'Soudce'
+                  WHEN 'tester' THEN 'Tester'
+                  WHEN 'media' THEN 'Agent médií'
+                  WHEN 'publisher' THEN 'Agent publikace'
+                  ELSE 'Agent'
+                END
+                || CASE zaznam.status WHEN 'busy' THEN ' se hlásí jako pracující' ELSE ' se hlásí jako nečinný' END
+                || ', ale přes 3 minuty nedal signál.',
       'since', zaznam.last_heartbeat,
       'agent_id', zaznam.id,
       'project_id', zaznam.project_id

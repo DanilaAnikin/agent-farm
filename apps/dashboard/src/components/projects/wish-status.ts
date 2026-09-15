@@ -27,6 +27,8 @@ export interface WishStatusInput {
 
 export interface ProjectStatusInput {
   status: string;
+  /** projects.trust_mode — specifikace se schvalují automaticky. Chybí = výchozí true. */
+  trust_mode?: boolean | null;
 }
 
 export interface FarmStatusInput {
@@ -65,7 +67,7 @@ export function effectiveWishStatus(
       tone: "neutral",
       hint:
         project.status === "stopped"
-          ? "Projekt čeká v rolloutu, přání počká na jeho zapnutí."
+          ? "Projekt čeká na postupné zapnutí, přání počká na jeho spuštění."
           : "Projekt je pozastavený, přání počká.",
     };
   }
@@ -94,7 +96,15 @@ export function effectiveWishStatus(
     return { label: "Připravuje se specifikace", tone: "info", hint: null };
   }
   if (wish.status === "awaiting_spec_approval") {
-    return { label: "Specifikace ke schválení", tone: "info", hint: null };
+    // Farma je autonomní — v autopilotu specifikaci schválí sama, štítek nemá
+    // vyzývat k lidskému zásahu, který není potřeba.
+    return project.trust_mode === false
+      ? {
+          label: "Čeká na schválení specifikace",
+          tone: "warn",
+          hint: "Projekt má vypnuté automatické schvalování specifikací (starší nastavení).",
+        }
+      : { label: "Specifikace se schvaluje automaticky", tone: "info", hint: null };
   }
 
   const zije = counts.queued + counts.running;

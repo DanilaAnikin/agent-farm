@@ -81,7 +81,7 @@ export function ConnectionsForm({
     <Card>
       <CardHeader
         title="GitHub"
-        description="Přes GitHub farma klonuje repozitáře, pushuje větve a otevírá PR."
+        description="Přes GitHub farma klonuje repozitáře, nahrává větve a otevírá pull requesty."
         action={
           githubStatus && !githubStatus.ok ? (
             <Badge tone="danger" dot>Chyba</Badge>

@@ -22,6 +22,16 @@ test("zastavený projekt (rollout) se chová jako pozastavený", () => {
   assert.equal(s.label, "Stojí (projekt pozastaven)");
 });
 
+test("specifikace: v autopilotu se schvaluje sama, jinak čeká na schválení", () => {
+  const auto = effectiveWishStatus({ status: "awaiting_spec_approval" }, { status: "active", trust_mode: true }, BEZI, PRAZDNO);
+  assert.equal(auto.label, "Specifikace se schvaluje automaticky");
+  // Bez údaje o trust_mode platí výchozí autopilot.
+  assert.equal(effectiveWishStatus({ status: "awaiting_spec_approval" }, { status: "active" }, BEZI, PRAZDNO).label, auto.label);
+  const rucne = effectiveWishStatus({ status: "awaiting_spec_approval" }, { status: "active", trust_mode: false }, BEZI, PRAZDNO);
+  assert.equal(rucne.label, "Čeká na schválení specifikace");
+  assert.doesNotMatch(rucne.label, /\bspec\b/);
+});
+
 test("budget_hold → čeká na rozpočet", () => {
   const s = effectiveWishStatus({ status: "active" }, { status: "budget_hold" }, BEZI, PRAZDNO);
   assert.equal(s.label, "Čeká na rozpočet");

@@ -15,6 +15,7 @@ import { formatPercent, formatRelative, formatUsd, spendRatio } from "@/lib/form
 import { countLabel, plural, TVARY } from "@/lib/plural";
 import { progressBreakdown, type ProjectProgress } from "@/components/swarm/queue";
 import type { WishTone } from "@/components/projects/wish-status";
+import { projectIdleSentence, projectStatusLine, projectWaitingPredicate } from "@/components/projects/project-status";
 import type { ProjectRow } from "@/lib/types";
 
 export interface ProjectCardWish {
@@ -46,14 +47,6 @@ export interface ProjectCardData {
 
 const PRACUJE = ["pracuje", "pracují", "pracuje"] as const;
 const CEKA = ["čeká", "čekají", "čeká"] as const;
-
-function stavProjektu(status: string): string {
-  if (status === "active") return "Projekt aktivní";
-  if (status === "paused") return "Projekt pozastaven";
-  if (status === "stopped") return "Projekt čeká v rolloutu";
-  if (status === "budget_hold") return "Projekt čeká na rozpočet";
-  return "Projekt";
-}
 
 export function ProjectCard({ data }: { data: ProjectCardData }) {
   const { project, todaySpend, busyAgents, lastEvent, progress, activeWishes, openWishCount, managerNote, farmStopReason } =
@@ -88,7 +81,7 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
 
       {/* Stav farmy NAD stavem projektu — aktivní projekt na stojící farmě nepracuje. */}
       <p className={cn("mt-2 text-xs", bezi && farmStopReason ? "text-[--color-warn]" : "text-[--color-muted]")}>
-        {stavProjektu(project.status)} · {farmStopReason ? `farma stojí: ${farmStopReason}` : "farma běží"}
+        {projectStatusLine(project.status)} · {farmStopReason ? `farma stojí: ${farmStopReason}` : "farma běží"}
       </p>
 
       {/* Postup projektu bez archivované historické fronty */}
@@ -101,12 +94,12 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
         <p className="text-[11px] text-[--color-faint]">{progressBreakdown(progress)}</p>
       </div>
 
-      {/* Přání: u pozastaveného projektu jen jeden řádek, jinak rozpracovaná s postupem */}
+      {/* Přání: u stojícího projektu jen jeden řádek, jinak rozpracovaná s postupem */}
       {!bezi ? (
         <p className="mt-4 text-xs text-[--color-muted]">
           {openWishCount > 0
-            ? `${countLabel(openWishCount, TVARY.prani)} ${plural(openWishCount, CEKA)}, projekt ${project.status === "stopped" ? "čeká v rolloutu" : "je pozastavený"}.`
-            : "Projekt je pozastavený."}
+            ? `${countLabel(openWishCount, TVARY.prani)} ${plural(openWishCount, CEKA)}, projekt ${projectWaitingPredicate(project.status)}.`
+            : projectIdleSentence(project.status)}
         </p>
       ) : activeWishes.length > 0 ? (
         <ul className="mt-4 space-y-2.5">

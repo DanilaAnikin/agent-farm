@@ -1,6 +1,7 @@
 import { AGENT_ROLE_META, AGENT_STATUS_META } from "@/lib/constants";
 import { Bot } from "lucide-react";
 import { formatRelative } from "@/lib/format";
+import { modelLabel } from "@/lib/admin-guards";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/Badge";
 import type { AgentRole, AgentStatus } from "@/lib/types";
@@ -98,7 +99,7 @@ export function LiveAgents({
                   ) : null}
                 </div>
                 <div className="truncate text-xs text-[--color-muted]">
-                  {busy && a.currentTaskTitle ? a.currentTaskTitle : (a.model ?? roleLabel(a.role))}
+                  {busy && a.currentTaskTitle ? a.currentTaskTitle : a.model ? modelLabel(a.model) : roleLabel(a.role)}
                 </div>
               </div>
             </div>
@@ -131,7 +132,7 @@ export function LiveAgents({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{roleLabel(a.role)}</span>
-                  {a.model ? <span className="text-xs text-[--color-faint]">{a.model}</span> : null}
+                  {a.model ? <span className="text-xs text-[--color-faint]">{modelLabel(a.model)}</span> : null}
                 </div>
                 <div className="truncate text-xs text-[--color-muted]" suppressHydrationWarning>
                   {busy && a.currentTaskTitle

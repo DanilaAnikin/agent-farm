@@ -38,6 +38,8 @@ export const TVARY = {
   navrh: ["návrh", "návrhy", "návrhů"],
   agent: ["agent", "agenti", "agentů"],
   worker: ["worker", "workery", "workerů"],
+  // Role `worker` se v UI jmenuje „Vývojář" (AGENT_ROLE_META) — tenhle tvar patří do textů.
+  vyvojar: ["vývojář", "vývojáři", "vývojářů"],
   pokus: ["pokus", "pokusy", "pokusů"],
   udalost: ["událost", "události", "událostí"],
   hodina: ["hodina", "hodiny", "hodin"],

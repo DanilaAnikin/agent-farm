@@ -64,8 +64,10 @@ function Row({
 /**
  * Autonomie projektu — popis SKUTEČNÉ politiky farmy. Žádné sliby o čekání na
  * „tap" nebo ručním schvalování: specifikace schvaluje autopilot, práci
- * kontrolují automatické brány (soudce, testy, QA) a nasazení hlídá health check
- * s rollbackem. Přepínače mění jen to, co orchestrátor opravdu čte.
+ * kontrolují automatické brány (soudce, testy, QA) a nasazení hlídá kontrola
+ * zdraví s návratem k předchozí verzi. Přepínače mění jen to, co orchestrátor
+ * opravdu čte — dřívější „Autopilot práce" (autonomy.selfRun) nečetl nikdo,
+ * převod návrhů na přání je jediné chování farmy.
  */
 export function AutonomyControls({
   projectId,
@@ -84,7 +86,6 @@ export function AutonomyControls({
 
   // `proactive` je v orchestrátoru výchozí zapnutý (vypíná ho jen explicitní false).
   const [proactive, setProactive] = useState(initial.proactive !== false);
-  const [selfRun, setSelfRun] = useState(Boolean(initial.selfRun));
   const [autoDeliver, setAutoDeliver] = useState(Boolean(initial.autoDeliver));
   const [cap, setCap] = useState<number>(
     typeof initial.deliverDailyCap === "number" ? initial.deliverDailyCap : 1,
@@ -107,7 +108,6 @@ export function AutonomyControls({
   function current(overrides: Partial<ProjectAutonomy>): ProjectAutonomy {
     return {
       proactive,
-      selfRun,
       autoDeliver,
       deliverDailyCap: cap,
       ...overrides,
@@ -126,6 +126,10 @@ export function AutonomyControls({
           sloučení do hlavní větve.
         </li>
         <li>
+          <span className="text-[--color-fg]">Návrhy:</span> samy se zadávají jako přání a farma je odpracuje až do
+          sloučení.
+        </li>
+        <li>
           <span className="text-[--color-fg]">Rozpočet:</span> hlídá ho strop projektu a rozpočtový hlídač farmy.
         </li>
       </ul>
@@ -133,7 +137,7 @@ export function AutonomyControls({
       <div className="divide-y divide-[--color-border]">
         <Row
           title="Farma sama vybírá další práci"
-          hint="Sleduje repozitář a stav projektu a navrhuje další krok. Duplicity a nápady, které repozitář nepodporuje, sama zahazuje."
+          hint="Sleduje repozitář a stav projektu, navrhuje další krok a sama ho zadá jako přání. Duplicity a nápady, které repozitář nepodporuje, zahazuje. Vypnuto = farma v projektu sama novou práci nevybírá ani nezadává."
         >
           <Switch
             label="Farma sama vybírá další práci"
@@ -147,23 +151,8 @@ export function AutonomyControls({
         </Row>
 
         <Row
-          title="Autopilot práce"
-          hint="Vybrané návrhy se samy zadají jako přání a farma je odpracuje až do sloučení. Bez něj návrhy jen vznikají."
-        >
-          <Switch
-            label="Autopilot práce"
-            checked={selfRun}
-            disabled={pending}
-            onChange={(v) => {
-              setSelfRun(v);
-              persist(current({ selfRun: v }));
-            }}
-          />
-        </Row>
-
-        <Row
           title="Automatické doručení"
-          hint="Hotová práce se po úspěšném QA sama doručí — publikace a nasazení přes automatické brány (health check, rollback), do denního limitu."
+          hint="Hotová práce se po úspěšném QA sama doručí — publikace a nasazení přes automatické brány (kontrola zdraví a návrat k předchozí verzi), do denního limitu."
         >
           <Switch
             label="Automatické doručení"

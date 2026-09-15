@@ -19,8 +19,10 @@ import type { ProjectStatus } from "@/lib/types";
  *   výchozí nabídne archivaci fronty starší než 30 dní. Pozastavené projekty
  *   mají ve frontě úkoly ze srpna, které by se jinak rozjely nad dávno změněným
  *   repozitářem.
- * - Projekt v rolloutu (`stopped`) se nespouští ručně: zapne ho rollout sám po
- *   zdravotních branách.
+ * - Projekt v postupném náběhu (`stopped`) se nespouští ručně: zapne ho automat
+ *   sám po kontrolách zdraví.
+ * - Projekt čekající na rozpočet (`budget_hold`) jde jen pozastavit; spustí se
+ *   sám po resetu okna.
  */
 export function PauseResumeButton({
   projectId,
@@ -42,10 +44,10 @@ export function PauseResumeButton({
     return (
       <span
         className="inline-flex items-center gap-1.5 text-xs text-[--color-muted]"
-        title="Postupný rollout zapíná projekty po jednom, když projdou zdravotní brány."
+        title="Postupné zapínání spouští projekty po jednom, když projdou kontroly zdraví."
       >
         <Hourglass className="size-3.5 shrink-0" />
-        Čeká v rolloutu (zapne se automaticky po zdravotních branách)
+        Čeká na postupné zapnutí (zapne se sám po kontrolách zdraví)
       </span>
     );
   }

@@ -130,36 +130,67 @@ export async function createProject(formData: FormData): Promise<ActionResult> {
   return { ok: true, id: data.id };
 }
 
+/** Stavy, které smí dashboard nastavit ručně. `budget_hold` a `stopped` drží automat. */
+const RUCNI_STAVY: readonly ProjectStatus[] = ["active", "paused"];
+
+/**
+ * Proč se hlídá i výchozí stav: projekt v postupném náběhu (`stopped`) zapíná
+ * farm-project-rollout sám po kontrolách zdraví. Dřív se odmítal jen přechod
+ * stopped → active, takže stopped → paused → active kontroly obešel dvěma kliky.
+ * `budget_hold` → active by zase přebil automatické čekání na rozpočet.
+ */
+async function overPrechodStavu(
+  supabase: Supabase,
+  projectId: string,
+  status: ProjectStatus,
+): Promise<{ ok: true; current: ProjectStatus } | { ok: false; result: ActionResult }> {
+  if (!RUCNI_STAVY.includes(status)) {
+    return { ok: false, result: { ok: false, message: "Tenhle stav projektu se ručně nastavit nedá." } };
+  }
+  const { data: current, error } = await supabase
+    .from("projects")
+    .select("status")
+    .eq("id", projectId)
+    .maybeSingle<{ status: ProjectStatus }>();
+  if (error) return { ok: false, result: { ok: false, message: "Stav projektu se nepodařilo načíst." } };
+  if (!current) return { ok: false, result: { ok: false, message: "Projekt nenalezen nebo k němu nemáš přístup." } };
+  if (current.status === "stopped") {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        message: "Projekt čeká na postupné zapnutí — zapne se sám po kontrolách zdraví, ručně se jeho stav nemění.",
+      },
+    };
+  }
+  if (current.status === "budget_hold" && status === "active") {
+    return {
+      ok: false,
+      result: { ok: false, message: "Projekt čeká na obnovení rozpočtu — pokračuje sám po resetu okna." },
+    };
+  }
+  return { ok: true, current: current.status };
+}
+
 export async function setProjectStatus(
   projectId: string,
   status: ProjectStatus,
 ): Promise<ActionResult> {
   const supabase = await createClient();
 
-  if (status === "active") {
-    // Projekt v rolloutu ('stopped') zapíná farm-project-rollout sám po zdravotních
-    // branách. Ruční „Spustit" by je obešel.
-    const { data: current } = await supabase
-      .from("projects")
-      .select("status")
-      .eq("id", projectId)
-      .maybeSingle<{ status: ProjectStatus }>();
-    if (current?.status === "stopped") {
-      return {
-        ok: false,
-        message: "Projekt čeká v rolloutu — zapne se automaticky po zdravotních branách.",
-      };
-    }
-  }
+  const prechod = await overPrechodStavu(supabase, projectId, status);
+  if (!prechod.ok) return prechod.result;
 
   const { data: updated, error } = await supabase
     .from("projects")
     .update({ status, updated_at: new Date().toISOString() })
     .eq("id", projectId)
+    // Automat (rollout, rozpočet) mohl stav mezitím změnit — nepřepisujeme ho naslepo.
+    .eq("status", prechod.current)
     .select("id");
   if (error) return { ok: false, message: error.message };
   if (!updated || updated.length === 0) {
-    return { ok: false, message: "Projekt nenalezen nebo k němu nemáš přístup." };
+    return { ok: false, message: "Stav projektu se mezitím změnil — načti stránku znovu." };
   }
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/projects");
@@ -236,6 +267,12 @@ export async function resumeProject(
 ): Promise<ActionResult> {
   const supabase = await createClient();
   let archivovano = 0;
+
+  // Stav (a přístup) se ověří PŘED archivací — dřív se u projektu v postupném
+  // náběhu fronta archivovala a spuštění pak stejně odmítlo.
+  const prechod = await overPrechodStavu(supabase, projectId, "active");
+  if (!prechod.ok) return prechod.result;
+  if (prechod.current !== "paused") return { ok: false, message: "Projekt už běží." };
 
   if (opts.archiveStale) {
     const hranice = new Date(Date.now() - STALE_QUEUE_DAYS * DAY_MS).toISOString();

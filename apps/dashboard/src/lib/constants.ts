@@ -45,14 +45,14 @@ export const SUGGESTION_KIND_META: Record<SuggestionKind, KindMeta> = {
 export const PROJECT_STATUS_META: Record<ProjectStatus, Meta> = {
   active: { label: "Aktivní", tone: "ok" },
   paused: { label: "Pozastaveno", tone: "warn" },
-  budget_hold: { label: "Rozpočtový hold", tone: "violet" },
+  budget_hold: { label: "Čeká na rozpočet", tone: "violet" },
   stopped: { label: "Zastaveno", tone: "neutral" },
 };
 
 export const WISH_STATUS_META: Record<WishStatus, Meta> = {
   new: { label: "Nové", tone: "info" },
   specifying: { label: "Specifikuje se", tone: "info" },
-  awaiting_spec_approval: { label: "Čeká na schválení spec", tone: "warn" },
+  awaiting_spec_approval: { label: "Čeká na schválení specifikace", tone: "warn" },
   active: { label: "Aktivní", tone: "ok" },
   done: { label: "Hotovo", tone: "neutral" },
   parked: { label: "Zaparkováno", tone: "danger" },
@@ -101,7 +101,7 @@ export const TASK_KIND_META: Record<TaskKind, Meta> = {
   code: { label: "Kód", tone: "info" },
   media: { label: "Média", tone: "violet" },
   publish: { label: "Publikace", tone: "ok" },
-  deploy: { label: "Deploy", tone: "warn" },
+  deploy: { label: "Nasazení", tone: "warn" },
 };
 
 export const ATTEMPT_STATUS_META: Record<AttemptStatus, Meta> = {

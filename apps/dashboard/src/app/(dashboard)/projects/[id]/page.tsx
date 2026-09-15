@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { startOfUtcDayIso } from "@/lib/time";
 import { formatPercent, formatUsd } from "@/lib/format";
-import { countLabel, TVARY } from "@/lib/plural";
+import { countLabel, plural, TVARY } from "@/lib/plural";
 import { farmState } from "@/lib/farm-state";
 import { getBudgetSnapshot, getFarmRunState } from "@/lib/server/farm-state";
 import { OPEN_WISH_STATUSES, PROJECT_STATUS_META } from "@/lib/constants";
@@ -26,7 +26,8 @@ import { ProgressBar } from "@/components/ui/ProgressBar";
 import { LiveAgents, type AgentDisplay } from "@/components/agents/LiveAgents";
 import { QaStatusBadge, type QaStatus } from "@/components/wishes/QaStatusBadge";
 import { farmShortReason } from "@/components/swarm/farm-headline";
-import { progressBreakdown, projectProgress } from "@/components/swarm/queue";
+import { CEKA, progressBreakdown, projectProgress } from "@/components/swarm/queue";
+import { projectAgentHint, projectIdleSentence, projectStatusLine } from "@/components/projects/project-status";
 import type { FeedEvent } from "@/components/swarm/event-groups";
 import type { AgentRow, ProjectRow, WishRow } from "@/lib/types";
 
@@ -209,7 +210,7 @@ export default async function ProjectMissionControl({
 
   const projektBezi = project.status === "active";
   const agentHint = !projektBezi
-    ? "Projekt je pozastavený, agenti na něm nepracují."
+    ? (projectAgentHint(project.status) ?? "")
     : farmStop
       ? `Farma stojí: ${farmStop}.`
       : "Farma běží a práci projektu si doplňuje sama.";
@@ -237,7 +238,7 @@ export default async function ProjectMissionControl({
           <>
             Řídicí panel projektu — živý stav agentů, fronty a útraty.
             <span className={`mt-1 block text-xs ${projektBezi && farmStop ? "text-[--color-warn]" : ""}`}>
-              {projektBezi ? "Projekt aktivní" : project.status === "stopped" ? "Projekt čeká v rolloutu" : "Projekt pozastaven"} ·{" "}
+              {projectStatusLine(project.status)} ·{" "}
               {farmStop ? `farma stojí: ${farmStop}` : "farma běží"}
             </span>
           </>
@@ -276,7 +277,7 @@ export default async function ProjectMissionControl({
           hint={cap > 0 ? `strop ${formatUsd(cap, "cap")}` : "bez rozpočtu"}
           tone={todaySpend !== null && cap > 0 && todaySpend >= cap ? "danger" : "default"}
         />
-        <Stat label="Fronta" value={queued} hint={`${countLabel(queued, TVARY.ukol)} čeká`} />
+        <Stat label="Fronta" value={queued} hint={`${countLabel(queued, TVARY.ukol)} ${plural(queued, CEKA)}`} />
         <Stat
           label="Běží"
           value={bezi}
@@ -321,7 +322,7 @@ export default async function ProjectMissionControl({
                       ? farmStop
                         ? `Práce se doplní, až farma naběhne (${farmStop}).`
                         : "Farma sama doplní další práci v příštím kole."
-                      : "Projekt je pozastavený."
+                      : (projectIdleSentence(project.status) ?? "")
                   }
                 />
               ) : (

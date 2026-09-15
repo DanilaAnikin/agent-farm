@@ -76,7 +76,12 @@ export default async function SettingsPage() {
               </dl>
               <p className="t-meta mt-3">
                 Tvoje stropy: {userCaps.sourceLabel}.
-                {stateRes.degraded ? " Stropy farmy se nepodařilo načíst autoritativně, jsou zobrazené výchozí hodnoty." : ""}{" "}
+                {/* Záložní čtení tabulky vrací skutečné hodnoty; výchozí jen když se nepřečetlo nic. */}
+                {stateRes.degraded
+                  ? stateRes.state.updated_at === null
+                    ? " Stropy farmy se nepodařilo načíst, jsou zobrazené výchozí hodnoty."
+                    : " Stropy farmy jsou přečtené záložní cestou přímo z nastavení farmy."
+                  : ""}{" "}
                 <Link href="/costs" className="text-[--color-accent] hover:underline">
                   Čerpání a úpravy v Nákladech →
                 </Link>

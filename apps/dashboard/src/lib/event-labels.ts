@@ -56,7 +56,7 @@ export const EVENT_META: Record<string, EventMeta> = {
   attempt_setup_timeout: B("Příprava pokusu vypršela", "warn"),
   attempt_budget_deferred: B("Pokus odložen kvůli rozpočtu", "warn"),
   dispatch_error: N("Nepodařilo se spustit práci", "danger"),
-  worker_cap_reached: N("Vyčerpány sloty workerů"),
+  worker_cap_reached: N("Vyčerpána kapacita vývojářů"),
   orphan_container_killed: N("Uklizen osiřelý kontejner"),
   task_deps_pending: N("Úkol čeká na závislosti"),
   reconciliation_requeue: N("Úkol vrácen do fronty"),
@@ -177,7 +177,7 @@ export const EVENT_META: Record<string, EventMeta> = {
   budget_rejected: N("Rozpočtová brána odmítla požadavky", "warn"),
   out_of_credits: D("Došel kredit u poskytovatele", "danger"),
   project_paused_auto: D("Projekt automaticky pozastaven", "warn"),
-  project_rollout_activated: D("Projekt zapnut v rolloutu", "ok"),
+  project_rollout_activated: D("Projekt zapnut po postupném náběhu", "ok"),
   circuit_breaker: D("Projekt dočasně zastaven po sérii chyb", "danger"),
   circuit_breaker_resumed: D("Projekt znovu spuštěn", "ok"),
 

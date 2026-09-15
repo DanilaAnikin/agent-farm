@@ -6,8 +6,10 @@ import { getFarmRunState } from "@/lib/server/farm-state";
 import { parsePauseSource } from "@/lib/farm-state";
 import type { ActionResult } from "@/app/actions/types";
 
-/** Text, který se zapíše k odloženému deployi a ukáže člověku. */
-const ODLOZENO = "Deploy odložen — proběhne automaticky po obnovení";
+/** Text, který se zapíše k odloženému nasazení a ukáže člověku. */
+const ODLOZENO = "Nasazení odloženo — proběhne automaticky po skončení automatické pauzy";
+/** Odložené nasazení po této době vyprší (orchestrátor ho převede na `skipped`). */
+const ODLOZENO_PLATI_H = 24;
 
 /**
  * „Nasadit hned" — vedlejší ruční akce. Hlavní cesta je automatická
@@ -40,29 +42,33 @@ export async function deployProject(projectId: string): Promise<ActionResult> {
       který vypínač zakazuje.
     - Automatická pauza (levné hodiny, kredit, měsíční strop) se pustí sama.
       Požadavek se nezahazuje, ale zapíše jako 'deferred' — watcher bere jen
-      'pending', takže se nic nespustí, a autodeploy kontrola ho po obnovení
-      nasadí sama. Dřívější „nejdřív ji pusť" vyzývalo člověka přebít automat.
+      'pending', takže se nic nespustí. Merge smyčka orchestrátoru (delivery.ts)
+      ho po skončení pauzy převede na 'pending'; starší než 24 h vyprší jako
+      'skipped'. Dřívější „nejdřív ji pusť" vyzývalo člověka přebít automat.
 
     Kontrola pauzy běží i v farm-deploy.sh na hostiteli; tahle dává srozumitelnou
     odpověď hned.
   */
   const { state, degraded } = await getFarmRunState();
   if (degraded && state.updated_at === null) {
-    return { ok: false, message: "Stav farmy se nepodařilo načíst — deploy se nezařadí." };
+    return { ok: false, message: "Stav farmy se nepodařilo načíst — nasazení se nezařadí." };
   }
   const zdroj = parsePauseSource(state.pause_source);
   const majitel = Boolean(state.owner_pause) || (Boolean(state.global_pause) && zdroj === "owner");
   if (majitel) {
-    return { ok: false, message: "Farmu jsi pozastavil ty — deploy se nezařadí, dokud ji nespustíš." };
+    return { ok: false, message: "Farmu jsi pozastavil ty — nasazení se nezařadí, dokud ji nespustíš." };
   }
   const automatickaPauza = Boolean(state.global_pause);
 
-  // Nezakládej druhý deploy, když už jeden běží/čeká/je odložený.
+  // Nezakládej druhé nasazení, když už jedno běží, čeká nebo je čerstvě odložené.
+  // Odložené starší než 24 h se nepočítá — jinak by jeden zapomenutý záznam
+  // blokoval ruční nasazení navždy.
+  const hranice = new Date(Date.now() - ODLOZENO_PLATI_H * 60 * 60 * 1000).toISOString();
   const { data: inflight, error: inflightErr } = await supabase
     .from("deploy_requests")
     .select("id, status")
     .eq("project", proj.name)
-    .in("status", ["pending", "running", "deferred"])
+    .or(`status.in.(pending,running),and(status.eq.deferred,requested_at.gt."${hranice}")`)
     .limit(1);
   if (inflightErr) return { ok: false, message: "Frontu nasazení se nepodařilo přečíst." };
   if (inflight && inflight.length > 0) {
@@ -79,7 +85,7 @@ export async function deployProject(projectId: string): Promise<ActionResult> {
       status: "deferred",
       detail: ODLOZENO,
     });
-    if (error) return { ok: false, message: "Odložený deploy se nepodařilo zapsat: " + error.message };
+    if (error) return { ok: false, message: "Odložené nasazení se nepodařilo zapsat: " + error.message };
     revalidatePath(`/projects/${projectId}`);
     return { ok: true, message: `${ODLOZENO}.` };
   }

@@ -131,7 +131,12 @@ export default async function WishDetailPage({
   const archivovanoTs = wish.status === "parked" ? (archivRes.data?.ts ?? null) : null;
   const stav = archivovanoTs
     ? { label: `Archivováno ${formatDateShort(archivovanoTs)} (historická fronta)`, tone: "neutral" as const, hint: null }
-    : effectiveWishStatus(wish, { status: projectData?.status ?? "active" }, { paused: state.paused }, counts);
+    : effectiveWishStatus(
+        wish,
+        { status: projectData?.status ?? "active", trust_mode: trustMode },
+        { paused: state.paused },
+        counts,
+      );
 
   return (
     <>

@@ -70,7 +70,7 @@ export function DeployStatus({
           {lastDoneAt ? ` · naposledy úspěšně ${formatDate(lastDoneAt)}` : ""}
         </p>
       ) : last?.status === "deferred" ? (
-        <p className="text-[--color-muted]">{last.detail ?? "Deploy odložen — proběhne automaticky po obnovení"}</p>
+        <p className="text-[--color-muted]">{last.detail ?? "Nasazení odloženo — proběhne automaticky po skončení automatické pauzy"}</p>
       ) : null}
       <Button
         size="sm"

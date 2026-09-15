@@ -16,6 +16,8 @@
  *     Běží jen v nejistém pásmu 0,3–0,8, jen když farma smí pracovat
  *     (`shouldFarmRun`) a jen když to volající dovolí. Jinak rozhodne práh 0,55
  *     a výsledek nese `uncertain: true`, ať volající může rozhodnutí odložit.
+ *     Neúspěch modelu se pamatuje (30 min pauza, po 3 neúspěších rozhodne práh)
+ *     a placených volání je nejvýš SEMANTIC_CALLS_PER_DAY denně.
  */
 import { getDb, getSql, projects } from "@farm/db";
 import { eq } from "drizzle-orm";
@@ -60,6 +62,45 @@ const SEMANTIC_CANDIDATES = 20;
 const SEMANTIC_CACHE_TTL_MS = 6 * 3_600_000;
 const SEMANTIC_CACHE_MAX = 500;
 
+/** Po neúspěšném volání modelu se na tutéž otázku čeká tak dlouho (negativní cache). */
+export const SEMANTIC_FAILURE_BACKOFF_MS = 30 * 60_000;
+/** Po tolika neúspěších se o téže otázce rozhodne mechanickým prahem (bez modelu). */
+export const SEMANTIC_MAX_FAILURES = 3;
+/** Strop placených sémantických kontrol za den (UTC) — pojistka proti smyčce chyb. */
+export const SEMANTIC_CALLS_PER_DAY = Number(process.env.WORK_DEDUP_SEMANTIC_CALLS_PER_DAY ?? 60);
+
+export type SemanticAttempt = "call" | "wait" | "mechanical";
+
+export interface SemanticAttemptState {
+  /** Kolikrát už model u téhle otázky selhal. */
+  failures: number;
+  /** Kdy naposledy selhal (ms); null = zatím nikdy. */
+  lastFailureAt: number | null;
+  /** Kolik placených volání už dnes proběhlo. */
+  callsToday: number;
+  now: number;
+}
+
+/**
+ * Smí se model zeptat? Dřív se po chybě nic neuložilo, návrh zůstal „nejistý",
+ * intake ho odložil a za minutu se ptal znovu — při trvalé chybě modelu až tři
+ * placená volání za minutu bez konce.
+ *  - call: zeptat se,
+ *  - wait: teď ne (čerstvá chyba nebo denní strop) — výsledek zůstane nejistý,
+ *  - mechanical: model opakovaně selhal — rozhodne mechanický práh.
+ */
+export function semanticAttempt(
+  s: SemanticAttemptState,
+  limits: { maxFailures?: number; backoffMs?: number; callsPerDay?: number } = {},
+): SemanticAttempt {
+  if (s.failures >= (limits.maxFailures ?? SEMANTIC_MAX_FAILURES)) return "mechanical";
+  if (s.lastFailureAt !== null && s.now - s.lastFailureAt < (limits.backoffMs ?? SEMANTIC_FAILURE_BACKOFF_MS)) {
+    return "wait";
+  }
+  if (s.callsToday >= (limits.callsPerDay ?? SEMANTIC_CALLS_PER_DAY)) return "wait";
+  return "call";
+}
+
 const KIND_LABEL: Record<KnownWorkKind, string> = {
   wish: "přání",
   task: "úkol",
@@ -74,6 +115,14 @@ export function knownWorkKindLabel(kind: KnownWorkKind): string {
 // pořád dokola na totéž. Klíč obsahuje velikost korpusu — když přibude práce,
 // otázka se položí znovu.
 const semanticCache = new Map<string, { at: number; result: KnownWorkResult }>();
+// Negativní cache: neúspěchy modelu podle stejného klíče jako semanticCache.
+const semanticFailures = new Map<string, { count: number; at: number }>();
+// Počítadlo placených volání za den (UTC) v tomhle procesu.
+let semanticCalls = { day: "", count: 0 };
+
+function utcDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
 
 /** Načte korpus známé práce projektu (viz hlavička souboru). */
 export async function loadWorkCorpus(projectId: string, opts: KnownWorkOptions = {}): Promise<WorkCorpusItem[]> {
@@ -149,8 +198,21 @@ export async function isKnownWork(
 
   if (opts.semantic === false || !(await shouldFarmRun())) return { ...fallback, uncertain: true };
 
+  const now = Date.now();
+  if (semanticCalls.day !== utcDay(now)) semanticCalls = { day: utcDay(now), count: 0 };
+  const failure = semanticFailures.get(cacheKey);
+  const attempt = semanticAttempt({
+    failures: failure?.count ?? 0,
+    lastFailureAt: failure?.at ?? null,
+    callsToday: semanticCalls.count,
+    now,
+  });
+  if (attempt === "mechanical") return fallback;
+  if (attempt === "wait") return { ...fallback, uncertain: true };
+
   try {
     opts.onSemanticCall?.();
+    semanticCalls.count++;
     const owner = await getDb()
       .select({ userId: projects.userId })
       .from(projects)
@@ -174,9 +236,12 @@ export async function isKnownWork(
       : { known: false, score: best.score, via: "semantic" };
     if (semanticCache.size >= SEMANTIC_CACHE_MAX) semanticCache.clear();
     semanticCache.set(cacheKey, { at: Date.now(), result });
+    semanticFailures.delete(cacheKey);
     return result;
   } catch (err) {
     console.error(`[work-dedup] sémantická kontrola projektu ${projectId} selhala:`, String(err).slice(0, 200));
+    if (semanticFailures.size >= SEMANTIC_CACHE_MAX) semanticFailures.clear();
+    semanticFailures.set(cacheKey, { count: (failure?.count ?? 0) + 1, at: Date.now() });
     return { ...fallback, uncertain: true };
   }
 }

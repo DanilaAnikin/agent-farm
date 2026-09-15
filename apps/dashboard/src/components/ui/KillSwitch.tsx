@@ -20,11 +20,14 @@ export type KillSwitchMode = "owner" | "auto" | "running";
  *
  * `initialPaused` = stav vypínače majitele (`owner_pause`), ne `global_pause`.
  * `detail` je starší alias pro `autoDetail` (admin stránka ho předává jako ReactNode).
+ * `autoPaused` = automatická pauza platí NEZÁVISLE na vypínači. Obě pauzy můžou
+ * platit současně; bez propu se odvodí z `mode === 'auto'` (starší volající).
  */
 export function KillSwitch({
   initialPaused,
   onToggle,
   mode,
+  autoPaused,
   autoDetail,
   detail,
   labelPaused = "Nouzové zastavení je zapnuté — farma nic nespustí, dokud ho nevypneš.",
@@ -34,6 +37,8 @@ export function KillSwitch({
   onToggle: (next: boolean) => Promise<{ ok: boolean; message?: string }>;
   /** Kdo farmu právě drží. Bez propu se odvodí jen z vypínače majitele. */
   mode?: KillSwitchMode;
+  /** Platí automatická pauza (hlídač), i když je zapnutý vypínač majitele? */
+  autoPaused?: boolean;
   /** Popis automatické pauzy pro `mode === 'auto'` (typicky `farmState().detail`). */
   autoDetail?: ReactNode;
   /** Alias pro `autoDetail` — kdo pauzu drží a kdy se farma rozjede. */
@@ -53,6 +58,7 @@ export function KillSwitch({
   }, [initialPaused]);
 
   const efektivniMode: KillSwitchMode = mode ?? (paused ? "owner" : "running");
+  const automatickaPauza = autoPaused ?? efektivniMode === "auto";
 
   function toggle() {
     const next = !paused;
@@ -112,15 +118,18 @@ export function KillSwitch({
       <div
         className={cn(
           "w-full max-w-sm rounded-[--radius-sm] border px-3 py-2 text-xs",
-          efektivniMode === "auto"
+          automatickaPauza
             ? "border-[--color-info]/30 bg-[--color-info-bg] text-[--color-fg]"
             : "border-[--color-border-subtle] text-[--color-muted]",
         )}
       >
         <span className="font-medium">Automatická pauza: </span>
-        {efektivniMode === "auto"
-          ? (autoDetail ?? detail ?? "farmu drží hlídač — rozjede se sama.")
-          : "žádná."}
+        {automatickaPauza ? (autoDetail ?? detail ?? "farmu drží hlídač — rozjede se sama.") : "žádná."}
+        {automatickaPauza ? (
+          <span className="mt-1 block text-[--color-muted]">
+            Tlačítko „Uvolnit“ ji nepřebije — farma se rozjede sama, až ji hlídač pustí.
+          </span>
+        ) : null}
       </div>
 
       {notice ? (
