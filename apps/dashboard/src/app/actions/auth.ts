@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createClient as createSupabaseAdmin } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { supabaseServiceRoleKey, supabaseUrl } from "@/lib/env";
+import { inviteRejection } from "@/lib/admin-guards";
 import type { AuthResult } from "@/app/actions/types";
 
 function appBase(): string {
@@ -68,13 +69,21 @@ export async function acceptInvite(_prev: AuthResult, formData: FormData): Promi
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  // Pozvánka platí jen nepoužitá, nezrušená a nevypršelá (migrace 0015).
   const { data: invite } = await admin
     .from("invites")
-    .select("id, email, used_at")
+    .select("id, email, used_at, expires_at, revoked_at")
     .eq("token", token)
-    .maybeSingle<{ id: string; email: string; used_at: string | null }>();
+    .maybeSingle<{
+      id: string;
+      email: string;
+      used_at: string | null;
+      expires_at: string | null;
+      revoked_at: string | null;
+    }>();
   if (!invite) return { ok: false, message: "Pozvánka je neplatná nebo neexistuje." };
-  if (invite.used_at) return { ok: false, message: "Tahle pozvánka už byla použita. Přihlas se." };
+  const zamitnuti = inviteRejection(invite);
+  if (zamitnuti) return { ok: false, message: zamitnuti };
 
   const { data: created, error: createErr } = await admin.auth.admin.createUser({
     email: invite.email,

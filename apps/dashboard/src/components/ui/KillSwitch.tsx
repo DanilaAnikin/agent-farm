@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/Badge";
@@ -19,12 +19,14 @@ export type KillSwitchMode = "owner" | "auto" | "running";
  * neřekl, kdo farmu drží ani kdy se sama rozjede.
  *
  * `initialPaused` = stav vypínače majitele (`owner_pause`), ne `global_pause`.
+ * `detail` je starší alias pro `autoDetail` (admin stránka ho předává jako ReactNode).
  */
 export function KillSwitch({
   initialPaused,
   onToggle,
   mode,
   autoDetail,
+  detail,
   labelPaused = "Nouzové zastavení je zapnuté — farma nic nespustí, dokud ho nevypneš.",
   labelActive = "Nouzové zastavení je vypnuté — farma smí pracovat.",
 }: {
@@ -33,7 +35,9 @@ export function KillSwitch({
   /** Kdo farmu právě drží. Bez propu se odvodí jen z vypínače majitele. */
   mode?: KillSwitchMode;
   /** Popis automatické pauzy pro `mode === 'auto'` (typicky `farmState().detail`). */
-  autoDetail?: string;
+  autoDetail?: ReactNode;
+  /** Alias pro `autoDetail` — kdo pauzu drží a kdy se farma rozjede. */
+  detail?: ReactNode;
   labelPaused?: string;
   labelActive?: string;
 }) {
@@ -115,7 +119,7 @@ export function KillSwitch({
       >
         <span className="font-medium">Automatická pauza: </span>
         {efektivniMode === "auto"
-          ? (autoDetail ?? "farmu drží hlídač — rozjede se sama.")
+          ? (autoDetail ?? detail ?? "farmu drží hlídač — rozjede se sama.")
           : "žádná."}
       </div>
 
