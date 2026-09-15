@@ -16,7 +16,11 @@
  *      qa_runs;
  *   6) PASS → uzavře přání (active → done) a zařadí preview deploy;
  *      FAIL → self-healing: pro každý selhaný scénář založí opravný task a
- *      re-enqueue do q_tasks (po N kolech přání zaparkuje pro člověka).
+ *      re-enqueue do q_tasks (po N kolech přání přeplánuje z výsledků QA).
+ *
+ * U repo_mode='existing' se přání uzavírá až po potvrzeném sloučení všech PR
+ * (úkoly jsou 'done' až po merge; navíc kontrola pr_opened bez pr_merged).
+ * Chyba Testera (infrastruktura) se opakuje s exponenciálním odstupem v q_qa.
  *
  * Rozpočet: LLM volání jdou přes @farm/llm s metadata scope 'system'; počet
  * scénářů i vision volání je zastropovaný. Když aplikaci nejde vůbec spustit
@@ -66,6 +70,8 @@ import { prepareQaWorkspace, QaArtifactError, qaInfrastructureFailure } from "./
 import type { QaWorkspace, ReviewedQaArtifact } from "./qa-artifact.js";
 import { withProjectRepoLock } from "./git.js";
 import { groundQaCommands, applyGroundedQaCommands } from "./qa-command-grounding.js";
+import { lastReplanAt, isSupersededTask } from "./dag.js";
+import { replanWishOrPark } from "./judge.js";
 
 /** Kolik scénářů maximálně vykonáme (strop nákladů a času). */
 const MAX_SCENARIOS = 14;
@@ -73,8 +79,10 @@ const MAX_SCENARIOS = 14;
 const MAX_VISION_CHECKS = 8;
 /** Práh, nad kterým považujeme vizuální kontrolu za splněnou. */
 const VISION_PASS_SCORE = 0.5;
-/** Po kolika neúspěšných QA kolech přání zaparkujeme pro člověka. */
+/** Po kolika neúspěšných QA kolech farma přání přeplánuje z výsledků QA. */
 const MAX_QA_ROUNDS = 3;
+/** Kolikrát po sobě (za 48 h) se QA po chybě infrastruktury zopakuje, než se přání odloží. */
+const MAX_QA_ERROR_RETRIES = Number(process.env.MAX_QA_ERROR_RETRIES ?? 6);
 /** Kolik opravných tasků maximálně založíme za jedno kolo. */
 const MAX_FIX_TASKS = 8;
 /** Kandidátní porty, na kterých runner hledá běžící web server. */
@@ -105,7 +113,11 @@ export async function runQaLoop(): Promise<void> {
       type: "qa_error",
       message: `Tester selhal: ${String(err)}`,
     });
-    // Zprávu odklidíme, ať nezacyklí; přání zůstane 'active' → vyřeší člověk/refill.
+    // Původní zprávu odklidíme (nezacyklí) a QA se zopakuje s odstupem — přání
+    // nezůstane viset v 'active' bez toho, že by ho někdo znovu ověřil.
+    await scheduleQaRetry(message.projectId, message.wishId, String(err)).catch((e) =>
+      console.error("[tester] naplánování opakování QA selhalo:", e),
+    );
     await ackDelete(QUEUES.qa, msgId);
   }
 }
@@ -136,10 +148,10 @@ async function runQa(message: QaMessage): Promise<void> {
   const qaRunId = insertedRun[0]?.id;
   if (!qaRunId) throw new Error("Nepodařilo se založit qa_run.");
 
-  // Registr flotily: Tester je 'busy' na tomto přání. (Role 'tester' v AGENT_ROLES
-  // není — reuse role 'judge', model = manager, kterým Tester plánuje scénáře.)
+  // Registr flotily: Tester je 'busy' na tomto přání. Vlastní role 'tester' — dřív
+  // se registroval jako 'judge' a ve velíně se zobrazoval jako Soudce.
   const agentId = await registerAgent({
-    role: "judge",
+    role: "tester",
     projectId: project.id,
     model: MODELS.manager,
   });
@@ -170,10 +182,15 @@ async function executeQa(ctx: QaContext): Promise<void> {
   const cfg = loadConfig();
   let workspace: QaWorkspace | undefined;
   try {
-    const wishTasks = await getDb().select().from(tasks).where(eq(tasks.wishId, wish.id));
+    // Úkoly nahrazené přeplánováním (zaparkované před posledním přeplánováním) se nepočítají.
+    const replanAt = await lastReplanAt(wish.id);
+    const wishTasks = (await getDb().select().from(tasks).where(eq(tasks.wishId, wish.id)))
+      .filter((t) => !isSupersededTask(t, replanAt));
     if (wishTasks.length === 0 || wishTasks.some(t => t.status !== "done")) throw new QaArtifactError("wish_tasks_not_complete");
     const artifacts: ReviewedQaArtifact[] = [];
     if (project.repoMode === "existing") {
+      // Přání se uzavírá až po SLOUČENÍ, ne po otevření PR.
+      await assertPullRequestsMerged(wishTasks.map((t) => t.id));
       const codeTasks = wishTasks.filter(t => t.kind === "code");
       if (!codeTasks.length) throw new QaArtifactError("missing_code_artifacts");
       const approved = await getDb().select({ taskId: attempts.taskId, attemptId: attempts.id, branch: attempts.branch })
@@ -253,7 +270,8 @@ async function executeQaWorkspace(ctx: QaContext, workspacePath: string, wishTas
     }
   } catch (err) {
     if (isLlmBudgetError(err)) {
-      await failRunAsError(ctx, "QA odloženo do obnovení rozpočtu.");
+      // Opakování zařídí runQaLoop (odklad na obnovení rozpočtu), ne backoff chyb.
+      await failRunAsError(ctx, "QA odloženo do obnovení rozpočtu.", { retry: false });
       throw err;
     }
     // Nepodařilo se naplánovat scénáře → infra/model chyba, ne selhání appky.
@@ -406,8 +424,11 @@ async function executeQaWorkspace(ctx: QaContext, workspacePath: string, wishTas
   }
 }
 
-/** Zapíše qa_run jako 'error' a emitne qa_error (infra/model chyba, ne selhání appky). */
-async function failRunAsError(ctx: QaContext, message: string): Promise<void> {
+/**
+ * Zapíše qa_run jako 'error' a emitne qa_error (infra/model chyba, ne selhání appky).
+ * Standardně rovnou naplánuje opakování QA s exponenciálním odstupem.
+ */
+async function failRunAsError(ctx: QaContext, message: string, opts: { retry?: boolean } = {}): Promise<void> {
   await getDb()
     .update(qaRuns)
     .set({ status: "error", passed: false, summary: message, finishedAt: new Date() })
@@ -420,6 +441,64 @@ async function failRunAsError(ctx: QaContext, message: string): Promise<void> {
     message,
     data: { qaRunId: ctx.qaRunId },
   });
+  if (opts.retry !== false) await scheduleQaRetry(ctx.project.id, ctx.wish.id, message);
+}
+
+/**
+ * Chyba Testera → zpět do q_qa s exponenciálním odstupem (2, 4, 8 … min, strop 4 h).
+ * Tvrdý limit MAX_QA_ERROR_RETRIES kol za 48 h; pak se přání odloží, aby opakované
+ * spouštění nepálilo rozpočet — kód je u existujícího repa v té chvíli už sloučený.
+ */
+async function scheduleQaRetry(projectId: string, wishId: string, reason: string): Promise<void> {
+  const rows = await getSql()<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM events
+    WHERE wish_id = ${wishId} AND type = 'qa_retry_scheduled' AND ts >= now() - interval '48 hours'
+  `;
+  const round = (rows[0]?.n ?? 0) + 1;
+  if (round > MAX_QA_ERROR_RETRIES) {
+    wishMachine.assert("active", "parked");
+    const parked = await getDb()
+      .update(wishes)
+      .set({ status: "parked" })
+      .where(and(eq(wishes.id, wishId), eq(wishes.status, "active")))
+      .returning({ id: wishes.id });
+    if (parked.length === 0) return;
+    await logEvent({
+      projectId,
+      wishId,
+      level: "warn",
+      type: "wish_parked",
+      message: `Tester ani po ${MAX_QA_ERROR_RETRIES} opakováních nešel spustit (${reason.slice(0, 160)}) — farma přání odkládá, aby nepálila rozpočet, a pokračuje jinou prací projektu.`,
+      data: { rounds: MAX_QA_ERROR_RETRIES, cause: "qa_error" },
+    });
+    return;
+  }
+  const delaySec = Math.min(4 * 60 * 60, 120 * 2 ** (round - 1));
+  const retry: QaMessage = { projectId, wishId };
+  await enqueue(QUEUES.qa, retry, delaySec);
+  await logEvent({
+    projectId,
+    wishId,
+    level: "warn",
+    type: "qa_retry_scheduled",
+    message: `Tester selhal (${reason.slice(0, 160)}) — farma QA sama zopakuje za ${Math.round(delaySec / 60)} min (kolo ${round}/${MAX_QA_ERROR_RETRIES}).`,
+    data: { round, delaySec },
+  });
+}
+
+/**
+ * U existujícího repa smí QA přání uzavřít jen tehdy, když je každý otevřený PR
+ * úkolů přání potvrzeně sloučený (pr_opened bez pr_merged = ještě nedoručeno).
+ */
+async function assertPullRequestsMerged(taskIds: string[]): Promise<void> {
+  if (taskIds.length === 0) return;
+  const sql = getSql();
+  const rows = await sql<{ n: number }[]>`
+    SELECT count(DISTINCT o.task_id)::int AS n FROM events o
+    WHERE o.type = 'pr_opened' AND o.task_id IN ${sql(taskIds)}
+      AND NOT EXISTS (SELECT 1 FROM events m WHERE m.type = 'pr_merged' AND m.task_id = o.task_id)
+  `;
+  if ((rows[0]?.n ?? 0) > 0) throw new QaArtifactError("pull_requests_not_merged");
 }
 
 /** PASS → uzavře přání (active → done) a zařadí preview deploy pro kód. */
@@ -463,17 +542,8 @@ async function selfHeal(ctx: QaContext, failed: QaScenario[]): Promise<void> {
   // Kolik krát už QA pro toto přání selhalo (včetně právě emitnutého qa_failed).
   const rounds = await countQaFailedRounds(wish.id);
   if (rounds >= MAX_QA_ROUNDS) {
-    wishMachine.assert("active", "parked");
-    await getDb().update(wishes).set({ status: "parked" }).where(eq(wishes.id, wish.id));
-    await logEvent({
-      projectId: project.id,
-      wishId: wish.id,
-      level: "warn",
-      type: "wish_parked",
-      message: `Přání „${wish.title}" zaparkováno — Tester ho neuzdravil ani po ${rounds} kolech. Vyžaduje člověka.`,
-      data: { rounds },
-    });
-    // REFLEXE: co selhalo napříč koly → poučení do project_memory (self-healing brain).
+    // REFLEXE PRVNÍ: poučení z výsledků QA musí být v project_memory dřív, než
+    // plánovač přání přeplánuje — nová specifikace a plán z něj vychází.
     await reflectOnFailure({
       projectId: project.id,
       userId: project.userId,
@@ -481,9 +551,20 @@ async function selfHeal(ctx: QaContext, failed: QaScenario[]): Promise<void> {
       taskTitle: `QA přání: ${wish.title}`,
       doneCondition: "Všechny QA scénáře přání musí projít v Testeru (funkčně i vizuálně).",
       failures: failed.map((s) => `${s.name} (${s.kind}): ${s.detail ?? "bez detailu"}`),
-      evidence: `Tester zaparkoval přání po ${rounds} kolech. Selhaly scénáře: ${failed
+      evidence: `Tester přání neuzdravil ani po ${rounds} kolech. Selhaly scénáře: ${failed
         .map((s) => s.name)
         .join(", ")}.`,
+    });
+    // Vyčerpané QA → přeplánovat přání z výsledků QA (s tvrdým limitem kol).
+    await replanWishOrPark({
+      wishId: wish.id,
+      project,
+      cause: "qa_exhausted",
+      leftoverParkReason: "qa_false_fix",
+      summary: `Tester ho neuzdravil ani po ${rounds} kolech (selhalo: ${failed
+        .map((s) => s.name)
+        .slice(0, 4)
+        .join(", ")})`,
     });
     return;
   }
