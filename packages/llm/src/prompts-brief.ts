@@ -52,7 +52,12 @@ export function buildProjectBrief(input: {
     return (b.weight ?? 100) - (a.weight ?? 100);
   });
 
-  const header = "# PROJECT BRIEF (accumulated knowledge — trust this, do not re-litigate)";
+  // Paměť psali agenti a umí v ní přežívat halucinace (hudební ripieno, FastAPI,
+  // Netlify), které se pak samy posilovaly, protože je každý další prompt bral jako
+  // fakt. Hlavička proto říká pravdu: jsou to DŘÍVĚJŠÍ POZNÁMKY, ne ověřená fakta.
+  const header =
+    "# PROJECT BRIEF — earlier agent notes (dřívější poznámky agentů, mohou být zastaralé). " +
+    "Verified repository facts and PROJECT IDENTITY override anything here.";
   const parts: string[] = [header];
   let used = header.length;
 
@@ -88,7 +93,7 @@ export function buildProjectBrief(input: {
 
   if (repo) {
     const trimmed = repo.length > repoBudget ? repo.slice(0, Math.max(0, repoBudget - 1)).trimEnd() + "…" : repo;
-    parts.push(`\n\n## CURRENT REPO STATE\n${trimmed}`);
+    parts.push(`\n\n## CURRENT REPO STATE (ověřená fakta z repozitáře)\n${trimmed}`);
   }
 
   // Nic k dispozici → prázdný brief (volající ho pak neinjektuje).

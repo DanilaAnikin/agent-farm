@@ -1,12 +1,87 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  WORK_DEDUP_THRESHOLD,
+  classifyWorkScore,
   isDuplicate,
   isLoopingOutput,
   normalize,
+  normalizeWork,
+  rankSimilarWork,
   similarity,
   taskDedupKey,
+  workSimilarity,
 } from "./dedup.js";
+
+test("normalizeWork: česká diakritika, interpunkce a velikost písmen nerozhodují", () => {
+  assert.equal(
+    normalizeWork("Přidat přihlášení", "Formulář na /login, e-mail + heslo."),
+    "pridat prihlaseni formular na login e mail heslo",
+  );
+  assert.equal(normalizeWork("ŽLUŤOUČKÝ kůň", null), "zlutoucky kun");
+  assert.equal(normalizeWork("", ""), "");
+});
+
+test("normalizeWork: z dlouhého popisu bere jen začátek", () => {
+  const long = "a".repeat(5000);
+  assert.ok(normalizeWork("Titulek", long).length < 700);
+});
+
+test("workSimilarity: stejná práce s jinou diakritikou a interpunkcí je nad prahem 0,55", () => {
+  const a = { title: "Přidat přihlášení přes e-mail", description: "Formulář /login s e-mailem a heslem." };
+  const b = { title: "pridat prihlaseni pres email", description: "formular login s emailem a heslem" };
+  assert.ok(workSimilarity(a, b) >= WORK_DEDUP_THRESHOLD, `skóre ${workSimilarity(a, b)}`);
+});
+
+test("workSimilarity: nesouvisející česká zadání jsou pod prahem", () => {
+  const a = { title: "Přidat tmavý režim", description: "Přepínač tmavého režimu v hlavičce." };
+  const b = { title: "Opravit webhook Stripe", description: "Ošetřit chybu podpisu webhooku." };
+  assert.ok(workSimilarity(a, b) < WORK_DEDUP_THRESHOLD);
+  assert.equal(classifyWorkScore(workSimilarity(a, b)), "unknown");
+});
+
+test("workSimilarity: krátký titulek bez popisu proti dlouhému popisu nepadne na nulu", () => {
+  const short = { title: "Přidat Sentry monitoring", description: "" };
+  const long = {
+    title: "Monitoring chyb přes Sentry",
+    description:
+      "Napojit Sentry na backend i frontend, aby se chyby hlásily. " +
+      "Nastavit DSN přes proměnnou prostředí, zachytávat nezachycené výjimky a odmítnuté sliby. ".repeat(4),
+  };
+  const s = workSimilarity(short, long);
+  // Délka popisu nesmí skóre stáhnout pod nejisté pásmo — o shodě pak rozhodne model.
+  assert.ok(s >= 0.3, `skóre ${s}`);
+  assert.equal(workSimilarity(short, long), workSimilarity(long, short));
+});
+
+test("workSimilarity: prázdný vstup není shoda s ničím", () => {
+  assert.equal(workSimilarity({ title: "", description: "" }, { title: "", description: "" }), 0);
+  assert.equal(workSimilarity({ title: "", description: null }, { title: "Přidat testy" }), 0);
+  assert.equal(workSimilarity({ title: "!!!" }, { title: "Přidat testy" }), 0);
+});
+
+test("classifyWorkScore: jisté pásmo nad 0,8 a pod 0,3, jinak rozhoduje model", () => {
+  assert.equal(classifyWorkScore(0.81), "known");
+  assert.equal(classifyWorkScore(0.8), "uncertain");
+  assert.equal(classifyWorkScore(0.55), "uncertain");
+  assert.equal(classifyWorkScore(0.3), "uncertain");
+  assert.equal(classifyWorkScore(0.29), "unknown");
+});
+
+test("rankSimilarWork: nejbližší první, limit a vyřazení nulových shod", () => {
+  const corpus = [
+    { title: "Opravit webhook Stripe", description: "podpis" },
+    { title: "Přidat přihlášení e-mailem", description: "formulář /login" },
+    { title: "Přihlášení přes e-mail", description: "login formulář s heslem" },
+    { title: "", description: "" },
+  ];
+  const ranked = rankSimilarWork({ title: "Přihlášení e-mailem", description: "formulář /login" }, corpus, 2);
+  assert.equal(ranked.length, 2);
+  assert.ok(ranked[0]!.score >= ranked[1]!.score);
+  assert.match(ranked[0]!.item.title, /přihlášení/i);
+  assert.equal(rankSimilarWork({ title: "" }, corpus).length, 0);
+  assert.equal(rankSimilarWork({ title: "x" }, [], 5).length, 0);
+});
 
 test("normalize odstraní diakritiku, interpunkci a sjednotí velikost písmen", () => {
   assert.equal(normalize("Ěščř ŽÁÁ!"), "escr zaa");

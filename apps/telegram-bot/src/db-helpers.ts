@@ -12,6 +12,7 @@ import {
   profiles,
   farmSettings,
   suggestions,
+  convertSuggestionToWish,
 } from "@farm/db";
 import { and, count, desc, eq, gt, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { startOfUtcDay, startOfUtcMonth } from "./types.js";
@@ -391,92 +392,102 @@ export async function getNewSuggestions(userId: string, limit = 20): Promise<Sug
     .limit(limit);
 }
 
+export interface SuggestionDecisionRow {
+  id: string;
+  projectName: string | null;
+  title: string;
+  status: string;
+  decidedReason: string | null;
+  decidedAt: Date | null;
+}
+
+/**
+ * Co farma o návrzích uživatele sama rozhodla (zadala / zahodila) od `since`.
+ * Nejnovější první.
+ */
+export async function getRecentSuggestionDecisions(
+  userId: string,
+  since: Date,
+  limit = 15,
+): Promise<SuggestionDecisionRow[]> {
+  return getDb()
+    .select({
+      id: suggestions.id,
+      projectName: projects.name,
+      title: suggestions.title,
+      status: suggestions.status,
+      decidedReason: suggestions.decidedReason,
+      decidedAt: suggestions.decidedAt,
+    })
+    .from(suggestions)
+    .leftJoin(projects, eq(projects.id, suggestions.projectId))
+    .where(
+      and(
+        eq(suggestions.userId, userId),
+        inArray(suggestions.status, ["converted", "dismissed"]),
+        gte(suggestions.decidedAt, since),
+      ),
+    )
+    .orderBy(desc(suggestions.decidedAt))
+    .limit(limit);
+}
+
 export interface DecideSuggestionResult {
   ok: boolean;
   text: string;
 }
 
 /**
- * Přijetí návrhu: z projektového návrhu založí přání (source 'telegram') a
- * návrh označí 'converted' + wishId. Návrh napříč projekty (bez projectId) nelze
- * převést na přání (přání musí patřit projektu) — označí se 'accepted'.
+ * „Zadat hned": farma by návrh zadala sama, jakmile na něj přijde řada; tohle ho
+ * jen předběhne. Převod jde přes JEDINOU sdílenou implementaci v @farm/db (stejně
+ * jako orchestrátor), takže platí stejná pravidla — do pozastaveného projektu ani
+ * napříč projekty se práce nezakládá.
  */
 export async function acceptSuggestionForUser(
   userId: string,
   id: string,
 ): Promise<DecideSuggestionResult> {
-  const rows = await getDb()
-    .select()
-    .from(suggestions)
-    .where(and(eq(suggestions.id, id), eq(suggestions.userId, userId)))
-    .limit(1);
-  const s = rows[0];
-  if (!s) return { ok: false, text: "Návrh už není k dispozici." };
-  if (s.status !== "new") return { ok: false, text: "O tomto návrhu už bylo rozhodnuto." };
-
-  const now = new Date();
-
-  // Návrh napříč projekty — bez cílového projektu nelze založit přání.
-  if (!s.projectId) {
-    await getDb()
-      .update(suggestions)
-      .set({ status: "accepted", decidedAt: now })
-      .where(eq(suggestions.id, id));
+  const res = await convertSuggestionToWish(getDb(), id, { source: "telegram", userId });
+  if (res.ok) {
     return {
       ok: true,
-      text: `✅ Návrh „${s.title}“ přijat. Je napříč projekty — otevři konkrétní projekt a zadej ho jako přání.`,
+      text: `▶️ Návrh „${res.title}“ zadán hned — manažer z něj připraví specifikaci.`,
     };
   }
-
-  const inserted = await getDb()
-    .insert(wishes)
-    .values({
-      projectId: s.projectId,
-      title: s.title,
-      description: s.description,
-      source: "telegram",
-      status: "new",
-    })
-    .returning({ id: wishes.id });
-  const wishId = inserted[0]?.id ?? null;
-
-  await getDb()
-    .update(suggestions)
-    .set({ status: "converted", wishId, decidedAt: now })
-    .where(eq(suggestions.id, id));
-
-  await insertEvent({
-    projectId: s.projectId,
-    wishId,
-    type: "wish_created",
-    level: "info",
-    message: "Přání z přijatého návrhu farmy (Telegram).",
-    data: { source: "suggestion", suggestionId: id, via: "telegram" },
-  });
-
-  return {
-    ok: true,
-    text: `✅ Návrh „${s.title}“ přijat — založeno přání. Manager z něj připraví specifikaci.`,
-  };
+  switch (res.reason) {
+    case "not_found":
+      return { ok: false, text: "Návrh už není k dispozici." };
+    case "already_decided":
+      return { ok: false, text: "O tomto návrhu už farma rozhodla." };
+    case "no_project":
+      return {
+        ok: false,
+        text: "Návrh nepatří k jednomu projektu — práci napříč projekty farma nezakládá a sama ho zahodí.",
+      };
+    case "project_paused":
+      return { ok: false, text: "Projekt je pozastavený — do pozastaveného projektu farma práci nezakládá." };
+  }
 }
 
-/** Zahození návrhu: status 'dismissed'. */
+/** Zahození návrhu vlastníkem: status 'dismissed' s důvodem 'owner_dismissed'. */
 export async function dismissSuggestionForUser(
   userId: string,
   id: string,
 ): Promise<DecideSuggestionResult> {
-  const rows = await getDb()
-    .select({ status: suggestions.status, title: suggestions.title })
-    .from(suggestions)
-    .where(and(eq(suggestions.id, id), eq(suggestions.userId, userId)))
-    .limit(1);
-  const s = rows[0];
-  if (!s) return { ok: false, text: "Návrh už není k dispozici." };
-  if (s.status !== "new") return { ok: false, text: "O tomto návrhu už bylo rozhodnuto." };
-  await getDb()
+  const updated = await getDb()
     .update(suggestions)
-    .set({ status: "dismissed", decidedAt: new Date() })
-    .where(eq(suggestions.id, id));
+    .set({ status: "dismissed", decidedAt: new Date(), decidedReason: "owner_dismissed" })
+    .where(and(eq(suggestions.id, id), eq(suggestions.userId, userId), eq(suggestions.status, "new")))
+    .returning({ title: suggestions.title, projectId: suggestions.projectId });
+  const s = updated[0];
+  if (!s) return { ok: false, text: "O tomto návrhu už farma rozhodla, nebo už není k dispozici." };
+  await insertEvent({
+    projectId: s.projectId,
+    type: "suggestion_dismissed",
+    level: "info",
+    message: `Návrh „${s.title}“ zahodil vlastník přes Telegram.`,
+    data: { suggestionId: id, title: s.title, reason: "owner_dismissed", via: "telegram" },
+  });
   return { ok: true, text: `✖️ Návrh „${s.title}“ zahozen.` };
 }
 
