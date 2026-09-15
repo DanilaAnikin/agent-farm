@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  classifyCheckCommand,
   deletedTestFiles,
+  deriveHarnessPlan,
+  detectPackageManager,
+  extractWorkflowRunCommands,
+  harnessScript,
+  installCommand,
+  isHarnessRunBroken,
+  newlyBrokenChecks,
+  parseHarnessOutput,
   isProtectedPath,
   isTestPath,
   protectedFilesTouched,
@@ -107,6 +116,113 @@ test("deletedTestFiles chytí smazané testy a ignoruje ostatní", () => {
     deleted.map((f) => f.path),
     ["src/foo.test.ts", "src/__tests__/util.ts", "src/bar.spec.ts"],
   );
+});
+
+test("detectPackageManager: lockfile má přednost, pak pole packageManager", () => {
+  assert.equal(detectPackageManager(["package.json", "package-lock.json"]), "npm");
+  assert.equal(detectPackageManager(["pnpm-lock.yaml", "package-lock.json"]), "pnpm");
+  assert.equal(detectPackageManager(["yarn.lock"]), "yarn");
+  assert.equal(detectPackageManager(["package.json"], "pnpm@9.15.0"), "pnpm");
+  assert.equal(detectPackageManager(["README.md"]), null);
+});
+
+test("installCommand: reprodukovatelná instalace podle lockfilu", () => {
+  assert.equal(installCommand("npm"), "npm ci --ignore-scripts");
+  assert.equal(installCommand("pnpm"), "pnpm install --frozen-lockfile --ignore-scripts");
+});
+
+test("extractWorkflowRunCommands: jednořádkové i blokové run, bez ${{ }}", () => {
+  const yaml = [
+    "jobs:",
+    "  ci:",
+    "    steps:",
+    "      - uses: actions/checkout@v4",
+    "      - run: pnpm install --frozen-lockfile",
+    "      - name: Checks",
+    "        run: |",
+    "          pnpm typecheck",
+    "          pnpm test",
+    "      - run: echo ${{ secrets.TOKEN }}",
+    "      - name: Lint",
+    "        run: 'pnpm lint'",
+  ].join("\n");
+  assert.deepEqual(extractWorkflowRunCommands(yaml), [
+    "pnpm install --frozen-lockfile",
+    "pnpm typecheck",
+    "pnpm test",
+    "pnpm lint",
+  ]);
+});
+
+test("classifyCheckCommand: rozliší kontroly a vynechá deploy", () => {
+  assert.equal(classifyCheckCommand("pnpm -r build"), "build");
+  assert.equal(classifyCheckCommand("npx tsc --noEmit"), "typecheck");
+  assert.equal(classifyCheckCommand("pnpm --filter web test"), "tests");
+  assert.equal(classifyCheckCommand("eslint ."), "lint");
+  assert.equal(classifyCheckCommand("npm ci"), "install");
+  assert.equal(classifyCheckCommand("pnpm run deploy"), null);
+  assert.equal(classifyCheckCommand("echo hello"), null);
+});
+
+test("deriveHarnessPlan: env_recipe > workflow > skript, správce z lockfilu", () => {
+  const plan = deriveHarnessPlan({
+    rootFiles: ["package.json", "package-lock.json"],
+    scripts: { build: "next build", test: "vitest", lint: "eslint ." },
+    workflowRuns: ["npm ci", "npm run lint -- --max-warnings=0", "npx tsc --noEmit"],
+    envRecipe: { commands: { test: "npm run test:ci" } },
+  });
+  assert.equal(plan.packageManager, "npm");
+  assert.equal(plan.install, "npm ci --ignore-scripts");
+  assert.equal(plan.checks.tests, "npm run test:ci");
+  assert.equal(plan.source.tests, "env_recipe");
+  assert.equal(plan.checks.lint, "npm run lint -- --max-warnings=0");
+  assert.equal(plan.source.lint, "workflow");
+  assert.equal(plan.checks.typecheck, "npx tsc --noEmit");
+  assert.equal(plan.checks.build, "npm run build");
+  assert.equal(plan.source.build, "script");
+});
+
+test("deriveHarnessPlan: chybějící kontrola = null (nespouští se)", () => {
+  const plan = deriveHarnessPlan({ rootFiles: ["pnpm-lock.yaml"], scripts: { build: "tsc" }, workflowRuns: [] });
+  assert.equal(plan.checks.build, "pnpm run build");
+  assert.equal(plan.checks.tests, null);
+  assert.equal(plan.source.tests, "none");
+});
+
+test("harnessScript + parseHarnessOutput: značky exit, skipped i log", () => {
+  const plan = deriveHarnessPlan({ rootFiles: ["pnpm-lock.yaml"], scripts: { build: "tsc", test: "vitest" }, workflowRuns: [] });
+  const script = harnessScript(plan);
+  assert.match(script, /INSTALL_EXIT=\$\?/);
+  assert.match(script, /LINT_EXIT=0; echo LINT_SKIPPED=1/);
+  const run = parseHarnessOutput(
+    ["INSTALL_EXIT=0", "BUILD_EXIT=0", "TEST_EXIT=1", "TEST_LOG: expected 2 got 3", "LINT_EXIT=0", "LINT_SKIPPED=1", "TYPECHECK_EXIT=0", "TYPECHECK_SKIPPED=1"].join("\n"),
+  );
+  assert.equal(run.install, 0);
+  assert.equal(run.exits.tests, 1);
+  assert.deepEqual(run.skipped, ["lint", "typecheck"]);
+  assert.equal(run.logs.tests, "expected 2 got 3");
+});
+
+test("isHarnessRunBroken: chybějící výstup nebo vše červené = porucha harnessu", () => {
+  assert.equal(isHarnessRunBroken(parseHarnessOutput("")), true);
+  assert.equal(
+    isHarnessRunBroken(parseHarnessOutput("INSTALL_EXIT=1\nBUILD_EXIT=1\nTEST_EXIT=1\nLINT_EXIT=0\nLINT_SKIPPED=1\nTYPECHECK_EXIT=0\nTYPECHECK_SKIPPED=1")),
+    true,
+  );
+  // Jedna padající kontrola je výsledek práce, ne porucha.
+  assert.equal(
+    isHarnessRunBroken(parseHarnessOutput("INSTALL_EXIT=0\nBUILD_EXIT=0\nTEST_EXIT=1\nLINT_EXIT=0\nTYPECHECK_EXIT=0")),
+    false,
+  );
+});
+
+test("newlyBrokenChecks: blokuje jen nově rozbité, bez baseline všechny padající", () => {
+  const candidate = parseHarnessOutput("INSTALL_EXIT=0\nBUILD_EXIT=0\nTEST_EXIT=1\nLINT_EXIT=1\nTYPECHECK_EXIT=0");
+  const main = parseHarnessOutput("INSTALL_EXIT=0\nBUILD_EXIT=0\nTEST_EXIT=0\nLINT_EXIT=1\nTYPECHECK_EXIT=0");
+  assert.deepEqual(newlyBrokenChecks(candidate, main), ["tests"]);
+  assert.deepEqual(newlyBrokenChecks(candidate, null), ["tests", "lint"]);
+  const mainWithoutLint = parseHarnessOutput("INSTALL_EXIT=0\nBUILD_EXIT=0\nTEST_EXIT=0\nLINT_EXIT=0\nLINT_SKIPPED=1\nTYPECHECK_EXIT=0");
+  assert.deepEqual(newlyBrokenChecks(candidate, mainWithoutLint), ["tests", "lint"]);
 });
 
 test("deletedTestFiles: bez smazaných testů → prázdné pole", () => {

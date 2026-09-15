@@ -66,6 +66,28 @@ test("dependent NENÍ ready, dokud závislost není 'done'", async () => {
   assert.ok(ready.includes(dependent), "po dokončení root je dependent ready");
 });
 
+test("dependent NENÍ ready, dokud je závislost jen 'merging' (PR otevřený, nesloučený)", async () => {
+  const userId = await createUser();
+  const projectId = await createProject(userId, { repoMode: "existing" });
+
+  const root = await createTask(projectId, { title: "scaffold", status: "merging", dependsOn: [] });
+  const dependent = await createTask(projectId, {
+    title: "feature",
+    status: "queued",
+    dependsOn: [root],
+  });
+
+  assert.ok(
+    !(await readyDependentIds(projectId)).includes(dependent),
+    "otevřený PR předchůdce nestačí — jeho kód v hlavní větvi ještě není",
+  );
+
+  // Merge smyčka potvrdí sloučení → merging → done → dependent je ready.
+  const sql = getSql();
+  await sql`UPDATE tasks SET status = 'done' WHERE id = ${root} AND status = 'merging'`;
+  assert.ok((await readyDependentIds(projectId)).includes(dependent), "po sloučení je dependent ready");
+});
+
 test("úkol s více závislostmi je ready až když jsou VŠECHNY done", async () => {
   const userId = await createUser();
   const projectId = await createProject(userId);

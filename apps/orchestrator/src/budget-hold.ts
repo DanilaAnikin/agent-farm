@@ -65,7 +65,6 @@ export async function runBudgetHoldOnce(): Promise<void> {
   for (const project of paused) {
     try {
       const pausedSince = project.updatedAt ?? project.createdAt ?? now;
-      if (!shouldAutoResume(pausedSince, now)) continue;
 
       /*
         Obnovovat se smí JEN to, co pozastavil stroj.
@@ -81,7 +80,7 @@ export async function runBudgetHoldOnce(): Promise<void> {
         skončí, až ji zruší člověk.
       */
       const autoPause = await getDb()
-        .select({ id: events.id })
+        .select({ id: events.id, data: events.data })
         .from(events)
         .where(
           and(
@@ -92,6 +91,10 @@ export async function runBudgetHoldOnce(): Promise<void> {
         )
         .limit(1);
       if (autoPause.length === 0) continue;
+      // Circuit breaker zapisuje `resumeAt` (časová pauza, výchozí 6 h). Starší
+      // události ho nemají → původní chování: obnovit po resetu denního okna.
+      const resumeAt = Date.parse(String((autoPause[0]?.data as { resumeAt?: unknown } | null)?.resumeAt ?? ""));
+      if (Number.isFinite(resumeAt) ? now.getTime() < resumeAt : !shouldAutoResume(pausedSince, now)) continue;
       const caps = await getCaps(project.userId, project.id);
       const spend = await spendSnapshot(project.userId, project.id);
       if (checkBudget(spend, caps, cfg.perAttemptBudgetUsd) !== null) continue;

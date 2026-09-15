@@ -20,6 +20,7 @@ import { runSpendSyncOnce } from "./spend-sync.js";
 import { runSuggestionsOnce, runSelfRunOnce } from "./suggestions.js";
 import { runSupervisorOnce } from "./supervisor.js";
 import { runAutoDeliverOnce } from "./auto-deliver.js";
+import { runDeliveryOnce } from "./delivery.js";
 
 import { Agent, setGlobalDispatcher } from "undici";
 import { shouldFarmRun } from "./settings.js";
@@ -107,6 +108,10 @@ const LOOPS: LoopSpec[] = [
   { name: "self-run", everyMs: 60_000, fn: pausable(runSelfRunOnce) },
   { name: "supervisor", everyMs: 30 * 60_000, fn: pausable(runSupervisorOnce) },
   { name: "auto-deliver", everyMs: 45_000, fn: pausable(runAutoDeliverOnce) },
+  // Merge smyčka ZÁMĚRNĚ bez `pausable`: sloučení PR nestojí žádné tokeny a
+  // autonomní farma nemá čekat na konec off-peaku ani na reset rozpočtu. Vypínač
+  // majitele (`owner_pause`) si smyčka čte jako první věc uvnitř sama.
+  { name: "delivery", everyMs: 60_000, fn: runDeliveryOnce },
 ];
 
 /** Supervisor: drží smyčku běžící; když spadne (runLoop by neměl, ale pro jistotu), restartuje. */

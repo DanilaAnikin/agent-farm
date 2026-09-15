@@ -1,7 +1,8 @@
 /**
  * Auto-doručení (univerzální princip, zatím zapojena content-publish cesta):
  * u projektů s autonomy.autoDeliver se hotový reel sám pošle k publikaci —
- * do denního capu se approval SCHVÁLÍ automaticky, nad cap čeká na jeden tap.
+ * do denního capu se approval SCHVÁLÍ automaticky, nad cap farma NEčeká na člověka,
+ * ale pošle reel sama po resetu denního limitu.
  *
  * BEZPEČNOST: produkční deploy (deploy_prod) zůstává VŽDY na lidském schválení,
  * bez ohledu na autoDeliver — nevratná akce s vysokým rizikem.
@@ -44,6 +45,25 @@ async function deliveredToday(projectId: string): Promise<number> {
   return rows[0]?.n ?? 0;
 }
 
+/**
+ * Jedna informativní událost za den na projekt, že doručení čeká na reset limitu.
+ * Smyčka běží á 45 s — bez deduplikace by zaplavila řeku událostí.
+ */
+async function logDeferredOnce(projectId: string, cap: number): Promise<void> {
+  const rows = await getSql()<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM events
+    WHERE project_id = ${projectId} AND type = 'auto_deliver_deferred'
+      AND ts >= date_trunc('day', now() at time zone 'UTC')
+  `;
+  if ((rows[0]?.n ?? 0) > 0) return;
+  await logEvent({
+    projectId,
+    type: "auto_deliver_deferred",
+    message: `Denní limit doručení (${cap}) je vyčerpaný — farma další reel pošle sama po resetu limitu v 00:00 UTC.`,
+    data: { cap },
+  });
+}
+
 export async function runAutoDeliverOnce(): Promise<void> {
   if (await isGlobalPaused()) return;
 
@@ -79,20 +99,29 @@ export async function runAutoDeliverOnce(): Promise<void> {
         null;
       const underCap = (await deliveredToday(p.id)) < cap;
 
-      // Založ publish_request.
+      // Nad denním limitem se NEzakládá čekající schválení pro člověka. Reel zůstane
+      // vygenerovaný bez publish_requestu a tahle smyčka ho sama pošle, jakmile se
+      // denní limit resetuje (00:00 UTC) — farma na nikoho nečeká. Limit sám se
+      // tím nijak neobchází: počítá se dál z dnešních publish_requestů.
+      if (!underCap) {
+        await logDeferredOnce(p.id, cap);
+        break;
+      }
+
+      // Založ publish_request (pod limitem → rovnou schválený).
       const prRow = await getDb()
         .insert(publishRequests)
         .values({
           mediaAssetId: reel.id,
           target: "instagram",
           caption,
-          status: underCap ? "approved" : "pending_approval",
+          status: "approved",
         })
         .returning({ id: publishRequests.id });
       const prId = prRow[0]?.id;
       if (!prId) continue;
 
-      // Approval — buď rovnou schválený (do capu), nebo čekající (jeden tap).
+      // Approval jako auditní stopa automatického rozhodnutí (už schválený).
       const apRow = await getDb()
         .insert(approvals)
         .values({
@@ -100,10 +129,10 @@ export async function runAutoDeliverOnce(): Promise<void> {
           projectId: p.id,
           type: "publish",
           payload: { publishRequestId: prId, mediaAssetId: reel.id, caption, auto: true },
-          status: underCap ? "approved" : "pending",
+          status: "approved",
           requestedBy: "auto-deliver",
-          decidedVia: underCap ? "dashboard" : undefined,
-          decidedAt: underCap ? new Date() : undefined,
+          decidedVia: "dashboard",
+          decidedAt: new Date(),
         })
         .returning({ id: approvals.id });
       const approvalId = apRow[0]?.id;
@@ -113,23 +142,13 @@ export async function runAutoDeliverOnce(): Promise<void> {
         .set({ approvalId: approvalId ?? null })
         .where(eq(publishRequests.id, prId));
 
-      if (underCap) {
-        await enqueue(QUEUES.publish, { publishRequestId: prId });
-        await logEvent({
-          projectId: p.id,
-          type: "auto_deliver",
-          message: "Auto-doručení: reel automaticky schválen a odeslán k publikaci.",
-          data: { publishRequestId: prId, mediaAssetId: reel.id },
-        });
-      } else {
-        await logEvent({
-          projectId: p.id,
-          level: "warn",
-          type: "auto_deliver_pending",
-          message: "Denní limit doručení vyčerpán — reel čeká na tvé schválení.",
-          data: { publishRequestId: prId, mediaAssetId: reel.id },
-        });
-      }
+      await enqueue(QUEUES.publish, { publishRequestId: prId });
+      await logEvent({
+        projectId: p.id,
+        type: "auto_deliver",
+        message: "Auto-doručení: reel automaticky schválen a odeslán k publikaci.",
+        data: { publishRequestId: prId, mediaAssetId: reel.id },
+      });
     }
   }
 }

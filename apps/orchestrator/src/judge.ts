@@ -4,7 +4,8 @@
  * mechanická config ráčna (chráněné soubory → escalate) → LLM review (Kimi) →
  * decideNextAction (loop detection + attempts) → merge/requeue/park.
  */
-import { join } from "node:path";
+import { promises as fs } from "node:fs";
+import { join, relative, isAbsolute } from "node:path";
 import { simpleGit } from "simple-git";
 import {
   getDb,
@@ -22,7 +23,7 @@ import {
   readOne,
   ackDelete,
 } from "@farm/db";
-import { and, eq, ne, desc } from "drizzle-orm";
+import { and, eq, ne, desc, inArray } from "drizzle-orm";
 import {
   loadConfig,
   taskMachine,
@@ -33,17 +34,24 @@ import {
   circuitBreakerTripped,
   protectedFilesTouched,
   deletedTestFiles,
+  deriveHarnessPlan,
+  extractWorkflowRunCommands,
+  harnessScript,
+  parseHarnessOutput,
+  isHarnessRunBroken,
+  newlyBrokenChecks,
+  HARNESS_CHECKS,
 } from "@farm/core";
-import type { DiffFile } from "@farm/core";
+import type { DiffFile, HarnessCheck, HarnessPlan, HarnessRun } from "@farm/core";
 import { MODELS, structured, judgePrompt, validateJudge, isLlmBudgetError } from "@farm/llm";
 import type { JudgeOutput } from "@farm/llm";
-import type { JudgeVerdict } from "@farm/db";
+import type { JudgeVerdict, ParkReason } from "@farm/db";
 import { runJudgeContainer } from "./docker.js";
 import { isAutopilot } from "./settings.js";
-import { mergeToMain, pushMain, openPr } from "./git.js";
+import { mergeToMain, pushMain, deliverToPullRequest, mainHeadSha, withDetachedWorktree, redactSecrets } from "./git.js";
 import { logEvent } from "./events.js";
 import { registerAgent, releaseAgent } from "./agents-registry.js";
-import { enqueueReadyDependents, parkBlockedDependents } from "./dag.js";
+import { enqueueReadyDependents, parkBlockedDependents, lastReplanAt, isSupersededTask } from "./dag.js";
 import { reflectOnFailure, distillSuccess } from "./memory.js";
 import type { JudgeMessage, TaskMessage } from "./types.js";
 
@@ -230,11 +238,27 @@ async function judgeWork(
 ): Promise<void> {
   const cfg = loadConfig();
 
-  // 1) Mechanické kontroly v gVisor kontejneru
-  const run = await runJudgeContainer({ workspaceHostPath: message.worktreeRef, cmd: JUDGE_CMD });
-  const buildOk = exitCode(run.stdout, "BUILD_EXIT") === 0;
-  const testsOk = exitCode(run.stdout, "TEST_EXIT") === 0;
-  const lintOk = exitCode(run.stdout, "LINT_EXIT") === 0;
+  // 1) Mechanické kontroly v gVisor kontejneru.
+  // repo_mode='new' beze změny (JUDGE_CMD). U existujícího repa se příkazy odvodí
+  // z repa samotného a porovnají s baseline nad main — viz runExistingHarness.
+  let harness: ExistingHarness | null = null;
+  let buildOk: boolean;
+  let testsOk: boolean;
+  let lintOk: boolean;
+  if (project.repoMode === "existing") {
+    harness = await runExistingHarness(project, message.worktreeRef);
+    // Rozbitý harness (infrastruktura) → posudek odložit, nic nehodnotit.
+    if (await deferOnBrokenHarness(project, task, message, harness)) return;
+    // Pro LLM i skóre „prošlo" = kandidát kontrolu NErozbil (padala už na main).
+    buildOk = !harness.newlyBroken.includes("build");
+    testsOk = !harness.newlyBroken.includes("tests");
+    lintOk = !harness.newlyBroken.includes("lint");
+  } else {
+    const run = await runJudgeContainer({ workspaceHostPath: message.worktreeRef, cmd: JUDGE_CMD });
+    buildOk = exitCode(run.stdout, "BUILD_EXIT") === 0;
+    testsOk = exitCode(run.stdout, "TEST_EXIT") === 0;
+    lintOk = exitCode(run.stdout, "LINT_EXIT") === 0;
+  }
 
   // 2) Diff proti main
   const { files, diffText, error: diffError } = await computeDiff(message.projectId, message.branch);
@@ -282,19 +306,9 @@ async function judgeWork(
     const emptyCount = (emptyRows[0]?.n ?? 0) + 1;
     const MAX_EMPTY_DIFF = Number(process.env.MAX_EMPTY_DIFF_RETRIES ?? 3);
     if (emptyCount > MAX_EMPTY_DIFF) {
-      await getDb()
-        .update(attempts)
-        .set({ status: "rejected", finishedAt: new Date() })
-        .where(and(eq(attempts.id, message.attemptId), eq(attempts.status, "running")));
-      taskMachine.assert("judging", "parked");
-      await getDb().update(tasks).set({ status: "parked" }).where(eq(tasks.id, task.id));
-      await logEvent({
-        projectId: project.id,
-        taskId: task.id,
-        level: "warn",
-        type: "task_parked_empty_diff",
-        message: `Worker ${MAX_EMPTY_DIFF}× nic nezměnil — zadání je nejspíš už splněné nebo špatně formulované. Vyžaduje pohled člověka.`,
-      });
+      // Žádné „vyžaduje pohled člověka": soudce nad aktuálním kódem rozhodne, jestli
+      // cíl už platí (→ úkol splněn), jinak se úkol vrací plánovači k přeformulování.
+      await resolveEmptyDiff(task, project, message, MAX_EMPTY_DIFF);
       return;
     }
     await logEvent({
@@ -383,6 +397,27 @@ async function judgeWork(
     }
   }
 
+  // Existující repo: kontroly vynucené BEZ OHLEDU na autopilot. Blokují jen ty,
+  // které tahle změna NOVĚ rozbila — co padá už na main, práci workera neshodí.
+  if (harness) {
+    checks = {
+      ...checks,
+      typecheck: !harness.newlyBroken.includes("typecheck"),
+      harness: {
+        packageManager: harness.plan.packageManager,
+        sources: harness.plan.source,
+        baselineSha: harness.baselineSha,
+        newlyBroken: harness.newlyBroken,
+        exits: harness.candidate.exits,
+        baselineExits: harness.baseline?.exits ?? null,
+      },
+    };
+    if (harness.newlyBroken.length > 0) {
+      if (verdict === "approve") verdict = "reject";
+      reasons = `Tahle změna nově rozbila kontroly: ${harness.newlyBroken.join(", ")}.${harnessLogTail(harness)}\n${reasons}`;
+    }
+  }
+
   // Zapiš review
   await getDb().insert(reviews).values({
     attemptId: message.attemptId,
@@ -452,59 +487,73 @@ async function applyDecision(
     case "done": {
       // Merge (nová repa farmy) nebo PR (existující repa uživatele — §9).
       if (project.repoMode === "existing") {
-        const prUrl = await openPr(
-          project.id,
-          message.branch,
-          `farm: ${task.title}`,
-          `Task ${task.id}\n\n${task.doneCondition}`,
-        );
+        /*
+          Otevřený PR NENÍ hotový úkol. Úkol jde `judging → merging` a do `done` ho
+          přepne až merge smyčka (delivery.ts) po potvrzeném sloučení. Až tam se
+          také odblokují závislé úkoly a počítá postup přání.
+
+          Proč pokus uzavírám jako 'succeeded' HNED, a ne až po merge: reconciliation
+          (reconcileStaleAttempts) reapuje jen pokusy úkolů ve stavu 'running' a
+          judging-recovery jen 'judging' — pokus úkolu v 'merging' by tedy nikdo
+          nikdy neuzavřel. Zůstal by viset jako „běžící worker" (dashboard, registr),
+          po převodu na opravu by vedle něj běžel nový pokus a Tester by schválený
+          artefakt nenašel (hledá 'succeeded'). Pokus je hotová a schválená práce;
+          pravdivost doručení drží výhradně stav ÚKOLU (merging vs. done) a
+          is_winner, který nastaví až merge smyčka.
+        */
         await finishAttempt("succeeded");
+        // Selhání otevření PR NEvrací práci k přepracování: úkol přesto jde do
+        // 'merging' a merge smyčka zopakuje jen doručovací krok.
+        await deliverApprovedAttempt(project, task, message.attemptId, message.branch);
+        taskMachine.assert("judging", "merging");
+        await getDb().update(tasks).set({ status: "merging" }).where(eq(tasks.id, task.id));
         await logEvent({
           projectId: project.id,
           taskId: task.id,
-          type: "pr_opened",
-          message: `PR otevřen (existující repo): ${prUrl}`,
-          data: { prUrl },
+          type: "task_merging",
+          message: `Soudce práci schválil: ${task.title} — farma PR sloučí sama, jakmile projde CI a přísná brána.`,
         });
-      } else {
-        // SWARM: rebase-onto-main + fast-forward. Konflikt → úkol zpět workerovi
-        // (jiný paralelní worker mezitím změnil main); NEoznačuj hotovo.
-        const merge = await mergeToMain(project.id, message.branch);
-        if (!merge.ok) {
-          // Nic se nezamergovalo → pokus NENÍ 'succeeded' (kontrakt). 'failed' =
-          // bez penalizace attempts_count (viz níže), práce se zopakuje.
-          await finishAttempt("failed");
-          // BEZ penalizace attempts_count: merge konflikt NENÍ chyba workera (judge
-          // práci schválil) — jiný paralelní merge mezitím změnil main. Penalizace
-          // by v rušném swarmu zaparkovala i opakovaně schvalovanou práci.
-          taskMachine.assert("judging", "queued");
-          await getDb()
-            .update(tasks)
-            .set({ status: "queued" })
-            .where(eq(tasks.id, task.id));
-          await enqueue(QUEUES.tasks, {
-            taskId: task.id,
-            projectId: project.id,
-            wishId: task.wishId,
-            kind: task.kind,
-            isFix: true,
-            note: `Merge do main ${merge.conflict ? "konflikt" : "selhal"} — rebasuj na aktuální main a vyřeš. ${merge.error ?? ""}`,
-          });
-          await logEvent({
-            projectId: project.id,
-            taskId: task.id,
-            level: "warn",
-            type: "merge_conflict",
-            message: `Merge do main selhal (${merge.conflict ? "konflikt" : "chyba"}) — vráceno workerovi k rebasu.`,
-            data: { error: merge.error },
-          });
-          break;
-        }
-        await pushMain(project.id).catch((e) =>
-          console.error("[judge] pushMain selhal (pokračuji):", e),
-        );
-        await finishAttempt("succeeded"); // zamergováno do main → pokus je úspěch
+        await learnFromWin(task, project, diffText);
+        break;
       }
+
+      // SWARM: rebase-onto-main + fast-forward. Konflikt → úkol zpět workerovi
+      // (jiný paralelní worker mezitím změnil main); NEoznačuj hotovo.
+      const merge = await mergeToMain(project.id, message.branch);
+      if (!merge.ok) {
+        // Nic se nezamergovalo → pokus NENÍ 'succeeded' (kontrakt). 'failed' =
+        // bez penalizace attempts_count (viz níže), práce se zopakuje.
+        await finishAttempt("failed");
+        // BEZ penalizace attempts_count: merge konflikt NENÍ chyba workera (judge
+        // práci schválil) — jiný paralelní merge mezitím změnil main. Penalizace
+        // by v rušném swarmu zaparkovala i opakovaně schvalovanou práci.
+        taskMachine.assert("judging", "queued");
+        await getDb()
+          .update(tasks)
+          .set({ status: "queued" })
+          .where(eq(tasks.id, task.id));
+        await enqueue(QUEUES.tasks, {
+          taskId: task.id,
+          projectId: project.id,
+          wishId: task.wishId,
+          kind: task.kind,
+          isFix: true,
+          note: `Merge do main ${merge.conflict ? "konflikt" : "selhal"} — rebasuj na aktuální main a vyřeš. ${merge.error ?? ""}`,
+        });
+        await logEvent({
+          projectId: project.id,
+          taskId: task.id,
+          level: "warn",
+          type: "merge_conflict",
+          message: `Merge do main selhal (${merge.conflict ? "konflikt" : "chyba"}) — vráceno workerovi k rebasu.`,
+          data: { error: merge.error },
+        });
+        break;
+      }
+      await pushMain(project.id).catch((e) =>
+        console.error("[judge] pushMain selhal (pokračuji):", e),
+      );
+      await finishAttempt("succeeded"); // zamergováno do main → pokus je úspěch
       taskMachine.assert("judging", "done");
       await getDb().update(tasks).set({ status: "done" }).where(eq(tasks.id, task.id));
       // Zmergovaný pokus je vítěz (pravdivě: u best-of-N je to nejlepší kandidát,
@@ -522,23 +571,7 @@ async function applyDecision(
       // DAG: odblokuj a zařaď do fronty závislé tasky, jejichž všechny závislosti
       // jsou nyní 'done' (event-driven, žádný spin).
       await enqueueReadyDependents(task.id, task.wishId);
-      // UČENÍ Z VÝHRY: task, který DŘÍV selhal (attemptsCount>0), teď prošel →
-      // destiluj vítězný vzor do paměti (vysoký signál). První průchody přeskočíme
-      // (rutinní, ať to nestojí LLM volání na každý merge).
-      if (task.attemptsCount > 0) {
-        await distillSuccess({
-          projectId: project.id,
-          userId: project.userId,
-          wishId: task.wishId,
-          taskId: task.id,
-          taskTitle: task.title,
-          doneCondition: task.doneCondition,
-          // JEN skutečná dřívější SELHÁNÍ — vylouč právě zapsaný vítězný '[approve]'
-          // review, ať se do „dříve překonaná selhání" nepřilepí ta výhra samotná.
-          priorFailures: (await recentReviewReasons(task.id)).filter((r) => !r.startsWith("[approve]")),
-          diff: diffText,
-        });
-      }
+      await learnFromWin(task, project, diffText);
       // Milníky přání (25/50/75 %). 100 % řeší maybeCompleteWish přes 'wish_done'.
       await reportWishProgress(task.wishId, project);
       await maybeCompleteWish(task.wishId, project);
@@ -561,20 +594,23 @@ async function applyDecision(
     }
     case "park": {
       taskMachine.assert("judging", "parked");
-      await getDb().update(tasks).set({ status: "parked" }).where(eq(tasks.id, task.id));
+      await getDb()
+        .update(tasks)
+        .set({ status: "parked", parkReason: "judge_exhausted", parkedAt: new Date() })
+        .where(eq(tasks.id, task.id));
       await logEvent({
         projectId: project.id,
         taskId: task.id,
         level: "warn",
         type: "task_parked",
-        message: `Task zaparkován: ${task.title} — ${decision.reason}`,
-        data: { reason: decision.reason },
+        message: `Úkol zaparkován: ${task.title} — ${decision.reason}. Farma přání přeplánuje, jakmile doběhne ostatní práce.`,
+        data: { reason: decision.reason, parkReason: "judge_exhausted" },
       });
       // DAG: závislé čekající tasky už nemůžou proběhnout → tranzitivně zaparkuj.
       await parkBlockedDependents(task.id, task.wishId, decision.reason);
       // Když přání už nemá žádnou spustitelnou práci a zbývají jen zablokované úkoly,
-      // zaparkuj CELÉ přání — jinak visí navždy v 'active' a blokuje refill projektu.
-      await maybeParkWish(task.wishId, project);
+      // farma ho PŘEPLÁNUJE (s tvrdým limitem kol) — jinak by viselo v 'active'.
+      await maybeReplanStuckWish(task.wishId, project);
       // REFLEXE: post-mortem selhání → poučení do project_memory (příště se neopakuje).
       await reflectOnFailure({
         projectId: project.id,
@@ -610,40 +646,119 @@ async function applyDecision(
 }
 
 /**
- * Zaparkuj CELÉ přání, když už nemá spustitelnou práci (žádný queued/running/
- * judging task) a aspoň jeden úkol je zablokovaný (parked/failed). Jinak by přání
- * uvázlo v 'active' navždy a blokovalo refill loop projektu (hasOpenWork). 'parked'
- * přání refill nezapočítává → projekt může pokračovat s jinou prací. + alert uživateli.
+ * Přání bez spustitelné práce (žádný queued/running/judging/merging úkol), kde aspoň
+ * jeden úkol uvázl (parked/failed PO posledním přeplánování), farma PŘEPLÁNUJE.
+ * Dřív se celé přání zaparkovalo s „vyžaduje zásah" — a čekalo na člověka navždy.
  */
-async function maybeParkWish(
+export async function maybeReplanStuckWish(
   wishId: string | null,
   project: typeof projects.$inferSelect,
 ): Promise<void> {
   if (!wishId) return;
+  const replanAt = await lastReplanAt(wishId);
   const rows = await getSql()<{ runnable: number; blocked: number }[]>`
     SELECT
-      count(*) FILTER (WHERE status IN ('queued','running','judging'))::int AS runnable,
-      count(*) FILTER (WHERE status IN ('parked','failed'))::int AS blocked
+      count(*) FILTER (WHERE status IN ('queued','running','judging','merging'))::int AS runnable,
+      count(*) FILTER (
+        WHERE status = 'failed'
+           OR (status = 'parked' AND (${replanAt}::timestamptz IS NULL
+               OR COALESCE(parked_at, updated_at) > ${replanAt}::timestamptz))
+      )::int AS blocked
     FROM tasks WHERE wish_id = ${wishId}
   `;
   const runnable = rows[0]?.runnable ?? 0;
   const blocked = rows[0]?.blocked ?? 0;
   if (runnable > 0 || blocked === 0) return;
 
+  await replanWishOrPark({
+    wishId,
+    project,
+    cause: "tasks_blocked",
+    leftoverParkReason: "dependency_cascade",
+    summary: `uvázlo ${blocked} úkolů`,
+  });
+}
+
+/** Kolikrát smí farma jedno přání přeplánovat, než ho odloží (tvrdý limit kol). */
+const MAX_WISH_REPLANS = Number(process.env.MAX_WISH_REPLANS ?? 2);
+
+/**
+ * Automatické pokračování místo „vyžaduje ruční zásah": přání se vrátí plánovači
+ * (active → specifying → new; manager vygeneruje novou verzi specifikace a nový
+ * plán). Zbylé nedokončené úkoly se zaparkují s důvodem a nový plán je nahradí
+ * (isSupersededTask). Po MAX_WISH_REPLANS kolech se přání odloží, aby farma
+ * nepálila rozpočet na něčem, co opakovaně nejde — a projekt pokračuje jinou prací.
+ *
+ * Neběží, dokud v přání něco pracuje (running/judging/merging): přeplánování by
+ * se jinak rozjelo nad rozpracovanou a třeba i úspěšnou prací.
+ */
+export async function replanWishOrPark(input: {
+  wishId: string | null;
+  project: typeof projects.$inferSelect;
+  cause: "empty_diff" | "qa_exhausted" | "tasks_blocked";
+  leftoverParkReason: ParkReason;
+  summary: string;
+}): Promise<"replanned" | "parked" | "skipped"> {
+  const { wishId, project } = input;
+  if (!wishId) return "skipped";
   const wishRows = await getDb().select().from(wishes).where(eq(wishes.id, wishId)).limit(1);
   const wish = wishRows[0];
-  if (!wish || wish.status !== "active") return;
+  if (!wish || wish.status !== "active") return "skipped";
 
-  wishMachine.assert("active", "parked");
-  await getDb().update(wishes).set({ status: "parked" }).where(eq(wishes.id, wishId));
+  const busy = await getDb()
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.wishId, wishId), inArray(tasks.status, ["running", "judging", "merging"])))
+    .limit(1);
+  if (busy.length > 0) return "skipped";
+
+  const roundRows = await getSql()<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM events WHERE wish_id = ${wishId} AND type = 'wish_replanned'
+  `;
+  const rounds = roundRows[0]?.n ?? 0;
+
+  if (rounds >= MAX_WISH_REPLANS) {
+    wishMachine.assert("active", "parked");
+    const parked = await getDb()
+      .update(wishes)
+      .set({ status: "parked" })
+      .where(and(eq(wishes.id, wishId), eq(wishes.status, "active")))
+      .returning({ id: wishes.id });
+    if (parked.length === 0) return "skipped";
+    await logEvent({
+      projectId: project.id,
+      wishId,
+      level: "warn",
+      type: "wish_parked",
+      message: `Přání „${wish.title}" se nepodařilo dokončit ani po ${rounds} přeplánováních (${input.summary}). Farma ho odkládá, aby nepálila rozpočet, a pokračuje jinou prací projektu.`,
+      data: { cause: input.cause, rounds },
+    });
+    return "parked";
+  }
+
+  // Zbylou nedokončenou práci nahradí nový plán.
+  await getDb()
+    .update(tasks)
+    .set({ status: "parked", parkReason: input.leftoverParkReason, parkedAt: new Date() })
+    .where(and(eq(tasks.wishId, wishId), inArray(tasks.status, ["queued", "failed"])));
+
+  // Událost PŘED změnou stavu: její čas je hranice, podle které se staré úkoly
+  // počítají jako nahrazené (isSupersededTask).
   await logEvent({
     projectId: project.id,
     wishId,
     level: "warn",
-    type: "wish_parked",
-    message: `Přání zablokované — všechny zbývající úkoly uvázly (${blocked}). Přání zaparkováno, vyžaduje zásah. Projekt pokračuje jinou prací.`,
-    data: { blocked },
+    type: "wish_replanned",
+    message: `Farma přání „${wish.title}" přeplánuje (kolo ${rounds + 1}/${MAX_WISH_REPLANS}): ${input.summary}.`,
+    data: { cause: input.cause, round: rounds + 1 },
   });
+  wishMachine.assert("active", "specifying");
+  wishMachine.assert("specifying", "new");
+  await getDb()
+    .update(wishes)
+    .set({ status: "new" })
+    .where(and(eq(wishes.id, wishId), eq(wishes.status, "active")));
+  return "replanned";
 }
 
 /**
@@ -653,6 +768,8 @@ async function maybeParkWish(
  * úkolů (data.cascade=true) — jedno reálné selhání blokující podstrom by jinak
  * breaker spustilo falešně.
  */
+const CIRCUIT_BREAKER_PAUSE_HOURS = Number(process.env.CIRCUIT_BREAKER_PAUSE_HOURS ?? 6);
+
 async function maybeTripProjectBreaker(project: typeof projects.$inferSelect): Promise<void> {
   if (project.status !== "active") return;
   const cfg = loadConfig();
@@ -667,20 +784,25 @@ async function maybeTripProjectBreaker(project: typeof projects.$inferSelect): P
   const parkedToday = rows[0]?.n ?? 0;
   if (!circuitBreakerTripped(parkedToday, cfg.circuitBreakerProjectFailures)) return;
 
+  // Časová pauza, ne trvalé zastavení: budget-hold.ts projekt po `resumeAt`
+  // obnoví sám (a jen tehdy, když to dovolí rozpočet a kredity).
+  const hours = CIRCUIT_BREAKER_PAUSE_HOURS;
+  const resumeAt = new Date(Date.now() + hours * 60 * 60_000);
   projectMachine.assert("active", "paused");
   await getDb().update(projects).set({ status: "paused" }).where(eq(projects.id, project.id));
   await logEvent({
     projectId: project.id,
     level: "warn",
     type: "circuit_breaker",
-    message: `Circuit breaker: ${parkedToday} zaparkovaných úkolů dnes — projekt pozastaven.`,
-    data: { parkedToday, threshold: cfg.circuitBreakerProjectFailures },
+    message: `Circuit breaker: ${parkedToday} zaparkovaných úkolů dnes — projekt se na ${hours} h pozastaví a pak se sám obnoví.`,
+    data: { parkedToday, threshold: cfg.circuitBreakerProjectFailures, resumeAt: resumeAt.toISOString() },
   });
   await logEvent({
     projectId: project.id,
     level: "warn",
     type: "project_paused_auto",
-    message: "Projekt automaticky pozastaven (circuit breaker). Obnov ho ručně po kontrole.",
+    message: `Projekt automaticky pozastaven (circuit breaker) na ${hours} h — farma ho pak obnoví sama.`,
+    data: { resumeAt: resumeAt.toISOString(), hours },
   });
 }
 
@@ -708,7 +830,7 @@ async function requeueTask(
  * Poslední ohlášený práh čte z events (idempotence + žádný spam);
  * 100 % neřeší — to je 'wish_done' z maybeCompleteWish.
  */
-async function reportWishProgress(
+export async function reportWishProgress(
   wishId: string | null,
   project: typeof projects.$inferSelect,
 ): Promise<void> {
@@ -764,17 +886,19 @@ async function reportWishProgress(
  * selhání založí opravné tasky (self-healing). Tím se ověří, že to, co agenti
  * postavili, skutečně funguje — funkčně i vizuálně.
  */
-async function maybeCompleteWish(
+export async function maybeCompleteWish(
   wishId: string | null,
   project: typeof projects.$inferSelect,
 ): Promise<void> {
   if (!wishId) return;
-  const remaining = await getDb()
-    .select({ id: tasks.id })
+  // Úkoly nahrazené přeplánováním dokončení nebrání (jinak by přání po přeplánování
+  // nikdy neskončilo). 'merging' dokončení brání — PR ještě není sloučený.
+  const replanAt = await lastReplanAt(wishId);
+  const wishTasks = await getDb()
+    .select({ status: tasks.status, parkReason: tasks.parkReason, parkedAt: tasks.parkedAt, updatedAt: tasks.updatedAt })
     .from(tasks)
-    .where(and(eq(tasks.wishId, wishId), ne(tasks.status, "done")))
-    .limit(1);
-  if (remaining.length > 0) return;
+    .where(eq(tasks.wishId, wishId));
+  if (wishTasks.some((t) => t.status !== "done" && !isSupersededTask(t, replanAt))) return;
   const wishRows = await getDb().select().from(wishes).where(eq(wishes.id, wishId)).limit(1);
   const wish = wishRows[0];
   if (!wish || wish.status !== "active") return;
@@ -893,6 +1017,390 @@ async function computeDiff(
     else if (cols[1]) files.push({ path: cols[1], status: "modified" });
   }
   return { files, diffText };
+}
+
+/** Poučení z úspěchu (sdíleno větví merge i PR). */
+async function learnFromWin(
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  diffText: string,
+): Promise<void> {
+  // UČENÍ Z VÝHRY: task, který DŘÍV selhal (attemptsCount>0), teď prošel →
+  // destiluj vítězný vzor do paměti (vysoký signál). První průchody přeskočíme
+  // (rutinní, ať to nestojí LLM volání na každý merge).
+  if (task.attemptsCount === 0) return;
+  await distillSuccess({
+    projectId: project.id,
+    userId: project.userId,
+    wishId: task.wishId,
+    taskId: task.id,
+    taskTitle: task.title,
+    doneCondition: task.doneCondition,
+    // JEN skutečná dřívější SELHÁNÍ — vylouč právě zapsaný vítězný '[approve]'
+    // review, ať se do „dříve překonaná selhání" nepřilepí ta výhra samotná.
+    priorFailures: (await recentReviewReasons(task.id)).filter((r) => !r.startsWith("[approve]")),
+    diff: diffText,
+  });
+}
+
+/**
+ * Doručovací krok pro existující repo: push + PR (nebo push do už otevřeného PR
+ * úkolu, když jde o opravu po zablokovaném merge). Uloží pr_number/head_sha do
+ * pokusu. Selhání NEvyhazuje — merge smyčka ho zopakuje, schválená práce zůstává.
+ */
+export async function deliverApprovedAttempt(
+  project: typeof projects.$inferSelect,
+  task: typeof tasks.$inferSelect,
+  attemptId: string,
+  branch: string,
+): Promise<{ ok: true; prNumber: number; headSha: string; prUrl: string } | { ok: false; error: string }> {
+  const previous = await getDb()
+    .select({ prNumber: attempts.prNumber })
+    .from(attempts)
+    .where(and(eq(attempts.taskId, task.id), ne(attempts.id, attemptId)))
+    .orderBy(desc(attempts.startedAt))
+    .limit(12);
+  const existingPrNumber = previous.find((a) => a.prNumber !== null)?.prNumber ?? null;
+  try {
+    const pr = await deliverToPullRequest({
+      projectId: project.id,
+      branch,
+      title: `farm: ${task.title}`,
+      body: `Task ${task.id}\n\n${task.doneCondition}`,
+      existingPrNumber,
+    });
+    await getDb()
+      .update(attempts)
+      .set({ prNumber: pr.prNumber, headSha: pr.headSha })
+      .where(eq(attempts.id, attemptId));
+    await logEvent({
+      projectId: project.id,
+      taskId: task.id,
+      type: "pr_opened",
+      message: pr.reused
+        ? `Oprava pushnuta do PR #${pr.prNumber}: ${pr.prUrl}`
+        : `PR #${pr.prNumber} otevřen: ${pr.prUrl}`,
+      data: { prUrl: pr.prUrl, prNumber: pr.prNumber, headSha: pr.headSha, branch: pr.headRef, reused: pr.reused, attemptId },
+    });
+    return { ok: true, prNumber: pr.prNumber, headSha: pr.headSha, prUrl: pr.prUrl };
+  } catch (err) {
+    const error = redactSecrets(String(err));
+    await logEvent({
+      projectId: project.id,
+      taskId: task.id,
+      level: "warn",
+      type: "pr_open_failed",
+      message: "Otevření PR se nepovedlo — farma doručení zopakuje sama, schválená práce zůstává.",
+      data: { error, attemptId },
+    });
+    return { ok: false, error };
+  }
+}
+
+/**
+ * Worker opakovaně nic nezměnil. Soudce nad aktuálním kódem (soubory, na které se
+ * worker odvolává) rozhodne, jestli done_condition už platí:
+ *   ano → úkol splněný bez změny (done, pokus succeeded + vítěz),
+ *   ne  → úkol zaparkovaný s park_reason='empty_diff' a přání jde plánovači
+ *         k přeformulování (replanWishOrPark, s limitem kol).
+ */
+async function resolveEmptyDiff(
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  message: JudgeMessage,
+  maxEmpty: number,
+): Promise<void> {
+  const cur = await getDb()
+    .select({ out: attempts.outputSummary })
+    .from(attempts)
+    .where(eq(attempts.id, message.attemptId))
+    .limit(1);
+  const summary = cur[0]?.out ?? "";
+  const evidence = await citedFileExcerpts(message.worktreeRef, summary);
+  const review = await structured<JudgeOutput>({
+    model: MODELS.judge,
+    messages: judgePrompt({
+      taskTitle: task.title,
+      doneCondition: task.doneCondition,
+      specMd: await latestSpecMd(task.wishId),
+      diff:
+        "NO CODE CHANGE WAS MADE. The worker claims the done condition ALREADY HOLDS on the main branch.\n" +
+        "Approve ONLY if the file excerpts below prove it; otherwise reject.\n\n" +
+        `WORKER SUMMARY:\n${summary.slice(0, 4000)}\n\nFILES CITED BY THE WORKER (current content):\n${evidence || "(none)"}`,
+      buildOk: true,
+      testsOk: true,
+      lintOk: true,
+      protectedTouched: [],
+      deletedTests: [],
+      incremental: true,
+    }),
+    validate: validateJudge,
+    metadata: { userId: project.userId, projectId: project.id, taskId: task.id, scope: "system" },
+  });
+  const doneMet = (review.data.checks as Record<string, unknown> | undefined)?.done_condition_met;
+  const satisfied = review.data.verdict === "approve" && doneMet !== false;
+
+  await getDb().insert(reviews).values({
+    attemptId: message.attemptId,
+    judgeModel: MODELS.judge,
+    verdict: satisfied ? "approve" : "reject",
+    checks: { ...(review.data.checks ?? {}), emptyDiff: true },
+    reasons: `[beze změny] ${review.data.reasons}`,
+  });
+
+  if (satisfied) {
+    attemptMachine.assert("running", "succeeded");
+    await getDb()
+      .update(attempts)
+      .set({ status: "succeeded", finishedAt: new Date(), isWinner: true })
+      .where(and(eq(attempts.id, message.attemptId), eq(attempts.status, "running")));
+    taskMachine.assert("judging", "done");
+    await getDb().update(tasks).set({ status: "done" }).where(eq(tasks.id, task.id));
+    await logEvent({
+      projectId: project.id,
+      taskId: task.id,
+      type: "task_done",
+      message: `Úkol už v kódu platí — soudce to ověřil a farma ho uzavřela bez změny: ${task.title}`,
+      data: { alreadySatisfied: true },
+    });
+    await enqueueReadyDependents(task.id, task.wishId);
+    await reportWishProgress(task.wishId, project);
+    await maybeCompleteWish(task.wishId, project);
+    return;
+  }
+
+  await getDb()
+    .update(attempts)
+    .set({ status: "rejected", finishedAt: new Date() })
+    .where(and(eq(attempts.id, message.attemptId), eq(attempts.status, "running")));
+  taskMachine.assert("judging", "parked");
+  await getDb()
+    .update(tasks)
+    .set({ status: "parked", parkReason: "empty_diff", parkedAt: new Date() })
+    .where(eq(tasks.id, task.id));
+  await logEvent({
+    projectId: project.id,
+    taskId: task.id,
+    level: "warn",
+    type: "task_parked_empty_diff",
+    message: `Worker ${maxEmpty}× nic nezměnil a soudce nepotvrdil, že cíl už v kódu platí — farma úkol vrací plánovači k přeformulování.`,
+    data: { reason: review.data.reasons?.slice(0, 500) ?? "", parkReason: "empty_diff" },
+  });
+  await parkBlockedDependents(task.id, task.wishId, "empty_diff");
+  await replanWishOrPark({
+    wishId: task.wishId,
+    project,
+    cause: "empty_diff",
+    leftoverParkReason: "empty_diff",
+    summary: `úkol „${task.title}" opakovaně nevedl k žádné změně`,
+  });
+}
+
+/**
+ * Výňatky souborů, na které se worker ve shrnutí odvolává (cesta, případně :řádek).
+ * Jen uvnitř worktree — cesta mimo (`..`, absolutní) se ignoruje.
+ */
+async function citedFileExcerpts(root: string, summary: string): Promise<string> {
+  const paths = new Set<string>();
+  for (const m of summary.matchAll(/([A-Za-z0-9_@./-]+\.[A-Za-z0-9]{1,8})(?::(\d+))?/g)) {
+    const p = (m[1] ?? "").replace(/^\.\//, "");
+    if (!p || isAbsolute(p) || p.includes("..")) continue;
+    paths.add(p);
+    if (paths.size >= 5) break;
+  }
+  const parts: string[] = [];
+  for (const p of paths) {
+    const abs = join(root, p);
+    const rel = relative(root, abs);
+    if (rel.startsWith("..") || isAbsolute(rel)) continue;
+    try {
+      const text = await fs.readFile(abs, "utf8");
+      parts.push(`--- ${p} ---\n${text.slice(0, 3000)}`);
+    } catch {
+      /* neexistující cesta = worker se odvolává na něco, co není */
+    }
+  }
+  return parts.join("\n\n");
+}
+
+// --- Kontroly existujícího repa (build/testy/lint/typecheck) --------------------
+
+interface ExistingHarness {
+  plan: HarnessPlan;
+  candidate: HarnessRun;
+  /** Zdravý běh nad main; null = nešel změřit (pak se blokuje každá padající kontrola). */
+  baseline: HarnessRun | null;
+  baselineSha: string | null;
+  newlyBroken: HarnessCheck[];
+  /** Harness nešel spustit (infrastruktura) — nehodnotit, odložit. */
+  broken: boolean;
+}
+
+interface BaselineResult {
+  plan: HarnessPlan;
+  run: HarnessRun;
+}
+
+/**
+ * Baseline nad main, cachovaná na běh orchestrátoru podle (projekt, SHA main,
+ * env_recipe). Main se mění jen merge — mezi merge stačí změřit jednou; souběžné
+ * judge sloty sdílí tentýž slib. Rozbitý nebo nezměřený běh se necachuje.
+ */
+const baselineCache = new Map<string, Promise<BaselineResult | null>>();
+const BASELINE_CACHE_MAX = 50;
+
+async function loadHarnessPlan(root: string, envRecipe: Record<string, unknown> | null | undefined): Promise<HarnessPlan> {
+  let rootFiles: string[] = [];
+  try {
+    rootFiles = await fs.readdir(root);
+  } catch {
+    /* prázdný plán */
+  }
+  let scripts: Record<string, string> = {};
+  let packageManagerField: string | null = null;
+  try {
+    const pkg = JSON.parse(await fs.readFile(join(root, "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+      packageManager?: unknown;
+    };
+    scripts = pkg.scripts ?? {};
+    packageManagerField = typeof pkg.packageManager === "string" ? pkg.packageManager : null;
+  } catch {
+    /* repo bez package.json */
+  }
+  const workflowRuns: string[] = [];
+  try {
+    const dir = join(root, ".github", "workflows");
+    for (const f of (await fs.readdir(dir)).filter((n) => /\.ya?ml$/.test(n)).sort()) {
+      workflowRuns.push(...extractWorkflowRunCommands(await fs.readFile(join(dir, f), "utf8")));
+    }
+  } catch {
+    /* repo bez workflow */
+  }
+  return deriveHarnessPlan({ rootFiles, packageManagerField, scripts, workflowRuns, envRecipe });
+}
+
+async function baselineHarness(
+  project: typeof projects.$inferSelect,
+): Promise<(BaselineResult & { sha: string }) | null> {
+  const sha = await mainHeadSha(project.id);
+  if (!sha) return null;
+  const key = `${project.id}:${sha}:${JSON.stringify(project.envRecipe ?? {})}`;
+  let pending = baselineCache.get(key);
+  if (!pending) {
+    pending = withDetachedWorktree(project.id, sha, async (path) => {
+      const plan = await loadHarnessPlan(path, project.envRecipe);
+      const run = await runJudgeContainer({ workspaceHostPath: path, cmd: harnessScript(plan) });
+      return { plan, run: parseHarnessOutput(run.stdout) };
+    }).catch((err) => {
+      console.error(`[judge] baseline nad main (${sha.slice(0, 8)}) selhala:`, redactSecrets(String(err)));
+      return null;
+    });
+    baselineCache.set(key, pending);
+    if (baselineCache.size > BASELINE_CACHE_MAX) {
+      const oldest = baselineCache.keys().next().value;
+      if (oldest !== undefined && oldest !== key) baselineCache.delete(oldest);
+    }
+  }
+  const res = await pending;
+  if (!res || isHarnessRunBroken(res.run)) baselineCache.delete(key);
+  return res ? { ...res, sha } : null;
+}
+
+async function runExistingHarness(
+  project: typeof projects.$inferSelect,
+  worktreePath: string,
+): Promise<ExistingHarness> {
+  const base = await baselineHarness(project);
+  // Plán kontrol se bere z MAIN, ne z větve workera — worker si nesmí přepsat
+  // harness, kterým je souzen (stejná zásada jako config ráčna). Bez baseline
+  // (nešla změřit) z větve, ať se aspoň něco kontroluje.
+  const plan = base?.plan ?? (await loadHarnessPlan(worktreePath, project.envRecipe));
+  const run = await runJudgeContainer({ workspaceHostPath: worktreePath, cmd: harnessScript(plan) });
+  const candidate = parseHarnessOutput(run.stdout);
+  const baseline = base && !isHarnessRunBroken(base.run) ? base.run : null;
+  const noOutput = HARNESS_CHECKS.every((c) => candidate.exits[c] === -1);
+  // Vše červené u kandidáta, ale main je zdravý → rozbil to kandidát (reject),
+  // ne infrastruktura. Porucha harnessu = žádný výstup, nebo červené i bez zdravé baseline.
+  const broken = noOutput || (isHarnessRunBroken(candidate) && baseline === null);
+  return {
+    plan,
+    candidate,
+    baseline,
+    baselineSha: base?.sha ?? null,
+    newlyBroken: broken ? [] : newlyBrokenChecks(candidate, baseline),
+    broken,
+  };
+}
+
+/** Kolik rozbitých běhů harnessu po sobě zastaví schvalování v projektu. */
+const HARNESS_BROKEN_AFTER = Math.max(1, Number(process.env.JUDGE_HARNESS_BROKEN_AFTER ?? 3));
+
+/**
+ * Fail-closed bez pádu orchestrátoru: když harness nejde spustit, posudek se
+ * NEzapíše (žádný approve naslepo, žádný reject za cizí chybu) a judge zpráva se
+ * vrátí do fronty s odstupem. Po HARNESS_BROKEN_AFTER bězích po sobě se zapíše
+ * `judge_harness_broken` a odstup se prodlouží — každý další posudek v projektu
+ * je pak zároveň sonda, a jakmile kontroly zase běží, schvalování se samo obnoví.
+ * Vrací true, když byl posudek odložen.
+ */
+async function deferOnBrokenHarness(
+  project: typeof projects.$inferSelect,
+  task: typeof tasks.$inferSelect,
+  message: JudgeMessage,
+  harness: ExistingHarness,
+): Promise<boolean> {
+  const last = await getSql()<{ type: string; streak: number | null }[]>`
+    SELECT type, (data->>'streak')::int AS streak FROM events
+    WHERE project_id = ${project.id} AND type IN ('judge_harness_run_broken', 'judge_harness_ok')
+    ORDER BY ts DESC LIMIT 1
+  `;
+  const prevStreak = last[0]?.type === "judge_harness_run_broken" ? (last[0].streak ?? 0) : 0;
+  if (!harness.broken) {
+    if (prevStreak > 0) {
+      await logEvent({
+        projectId: project.id,
+        taskId: task.id,
+        type: "judge_harness_ok",
+        message: "Kontroly projektu zase běží — farma obnovuje schvalování.",
+        data: { previousStreak: prevStreak },
+      });
+    }
+    return false;
+  }
+  const streak = prevStreak + 1;
+  const stopped = streak >= HARNESS_BROKEN_AFTER;
+  const delaySec = stopped ? 30 * 60 : 5 * 60;
+  await logEvent({
+    projectId: project.id,
+    taskId: task.id,
+    level: "warn",
+    type: "judge_harness_run_broken",
+    message: `Kontroly projektu nešly spustit (${streak}× po sobě) — posudek odložen o ${Math.round(delaySec / 60)} min, hotová práce zůstává.`,
+    data: { streak, install: harness.candidate.install, exits: harness.candidate.exits },
+  });
+  if (streak === HARNESS_BROKEN_AFTER) {
+    await logEvent({
+      projectId: project.id,
+      taskId: task.id,
+      level: "error",
+      type: "judge_harness_broken",
+      message: `Kontroly projektu ${streak}× po sobě nešly spustit — farma v projektu nic neschválí a každých 30 min je sama zkusí znovu.`,
+      data: { streak },
+    });
+  }
+  await enqueue(QUEUES.judge, message, delaySec);
+  return true;
+}
+
+function harnessLogTail(harness: ExistingHarness): string {
+  const parts = harness.newlyBroken
+    .map((check) => {
+      const log = harness.candidate.logs[check];
+      return log ? `\n--- ${check} (konec logu) ---\n${log.slice(-800)}` : "";
+    })
+    .filter((s) => s.length > 0);
+  return parts.join("");
 }
 
 /** Vytáhne exit kód z výstupu (řádek `NAME_EXIT=<n>`). Chybějící → -1. */
