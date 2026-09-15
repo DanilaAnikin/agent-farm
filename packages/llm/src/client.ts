@@ -41,6 +41,7 @@ export interface CallMetadata {
   userId?: string;
   projectId?: string;
   taskId?: string;
+  wishId?: string;
   scope?: "task" | "attempt" | "media" | "system";
 }
 
@@ -119,6 +120,15 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
       project_id: opts.metadata.projectId,
       task_id: opts.metadata.taskId,
       scope: opts.metadata.scope,
+      // LiteLLM ukládá do LiteLLM_SpendLogs.metadata jen `spend_logs_metadata`;
+      // ostatní klíče výše zahodí. spend-sync z něj přiřadí systémovou útratu
+      // (manager, judge, refill) k projektu.
+      spend_logs_metadata: {
+        projectId: opts.metadata.projectId ?? null,
+        wishId: opts.metadata.wishId ?? null,
+        taskId: opts.metadata.taskId ?? null,
+        scope: opts.metadata.scope ?? null,
+      },
     };
   }
 

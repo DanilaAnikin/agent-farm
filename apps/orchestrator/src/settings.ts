@@ -5,9 +5,10 @@
 import { getDb, farmSettings, profiles, projects, wishes } from "@farm/db";
 import { getPlan, planCaps, effectivePlanKey } from "@farm/billing";
 import { eq } from "drizzle-orm";
-import { loadConfig } from "@farm/core";
-import type { CapSet } from "@farm/core";
-import { sumFarmMonth, sumFarmToday } from "./cost.js";
+import { loadConfig, farmRunDecision, isGuardIdleReason } from "@farm/core";
+import type { CapSet, FarmIdleReason } from "@farm/core";
+import { guardStatus, isGuardRequired, sumFarmMonth, sumFarmToday } from "./cost.js";
+import { logEventDeduped } from "./events.js";
 
 /** Vrátí hodnotu nastavení z farm_settings (nebo fallback, když chybí). */
 export async function getSetting<T = unknown>(key: string, fallback: T): Promise<T> {
@@ -56,8 +57,12 @@ const SPEND_TTL_MS = 5_000;
 let spendCache: {
   at: number;
   blocked: null | { scope: "den" | "měsíc"; spent: number; cap: number };
+  /** Hlídač nedostupný/nepřipravený — má přednost před `blocked`. */
+  guardStop: null | { reason: FarmIdleReason; error?: string };
 } | null = null;
 let lastSpendLogAt = 0;
+/** Od kdy farma stojí na hlídači (pro `data.since` v události); null = nestojí. */
+let guardStopSince: string | null = null;
 // Sentinel místo `null`: `null` je platný stav („nic neblokuje") a kdyby s ním
 // paměť startovala, první vyhodnocení po startu by se rovnalo výchozímu stavu
 // a nic by se nezapsalo — v tabulce by zůstal viset marker z MINULÉHO běhu.
@@ -80,8 +85,8 @@ function capFrom(raw: unknown, fallback: number): number {
  * dashboard tak umí odlišit „stojí to na stropu" od „poskytovatel je dole".
  * Zapisuje se jen při ZMĚNĚ stavu, ne při každé iteraci.
  */
-async function markBudgetBlock(state: string | false): Promise<void> {
-  if (state === lastMarkerState) return;
+async function markBudgetBlock(state: string | false): Promise<boolean> {
+  if (state === lastMarkerState) return false;
   lastMarkerState = state;
   try {
     // `false`, ne `null`: sloupec je NOT NULL a drizzle překládá JS `null` na SQL
@@ -95,6 +100,50 @@ async function markBudgetBlock(state: string | false): Promise<void> {
     // Neviditelnost nesmí zastavit rozhodování o penězích — ale nesmí být ani
     // tichá. Zapisuje se jen při změně stavu, takže tohle nezaplaví log.
     console.warn("[rozpočet] zápis budget_block selhal:", String(err).slice(0, 200));
+  }
+  return true;
+}
+
+type SpendBlock = { scope: "den" | "měsíc"; spent: number; cap: number };
+type GuardStop = { reason: FarmIdleReason; error?: string };
+
+/**
+ * Jedno vyhodnocení útraty a hlídače. NIKDY nevyhodí: každá chyba při čtení
+ * peněz se překládá na „stůj" (fail closed), ne na „běž" a ne na výjimku.
+ */
+async function evaluateSpend(): Promise<{ blocked: SpendBlock | null; guardStop: GuardStop | null }> {
+  const required = isGuardRequired();
+  // Stav hlídače jedním dotazem bez výjimky. Když povinný není, rozhodnutí na něm
+  // nezávisí a dotaz se neposílá (tabulky hlídače nemusí vůbec existovat).
+  const guard = required ? await guardStatus() : { ready: null, error: undefined };
+  const guardDecision = farmRunDecision({ required, ready: guard.ready, error: guard.error });
+  if (!guardDecision.run && isGuardIdleReason(guardDecision.reason)) {
+    return { blocked: null, guardStop: { reason: guardDecision.reason, error: guard.error } };
+  }
+
+  try {
+    const cfg = loadConfig();
+    const [rawMonthCap, rawDayCap, month, day] = await Promise.all([
+      getSetting<unknown>("farm_monthly_cap_usd", 20),
+      getSetting<unknown>("farm_daily_cap_usd", cfg.farmDailyCapUsd),
+      sumFarmMonth(),
+      sumFarmToday(),
+    ]);
+    const monthCap = capFrom(rawMonthCap, 20);
+    const dayCap = capFrom(rawDayCap, cfg.farmDailyCapUsd);
+
+    // Měsíční strop se testuje první: je to nejtvrdší hranice a vyčerpaný měsíc
+    // nemá smysl přebíjet tím, že dnešní okno je zrovna prázdné.
+    let blocked: SpendBlock | null = null;
+    if (month >= monthCap) blocked = { scope: "měsíc", spent: month, cap: monthCap };
+    else if (day >= dayCap) blocked = { scope: "den", spent: day, cap: dayCap };
+    return { blocked, guardStop: null };
+  } catch (err) {
+    // Mezi guardStatus a součty se hlídač mohl změnit (guardedSpend hází) nebo
+    // spadla DB. Pořád platí: bez spolehlivého čísla se neutrácí.
+    const error = String(err).slice(0, 200);
+    const reason: FarmIdleReason = /initialization required/i.test(error) ? "guard_not_ready" : "guard_unreachable";
+    return { blocked: null, guardStop: { reason, error } };
   }
 }
 
@@ -122,24 +171,31 @@ export async function shouldFarmRun(): Promise<boolean> {
 
   const now = Date.now();
   if (!spendCache || now - spendCache.at >= SPEND_TTL_MS) {
-    const cfg = loadConfig();
-    const [rawMonthCap, rawDayCap, month, day] = await Promise.all([
-      getSetting<unknown>("farm_monthly_cap_usd", 20),
-      getSetting<unknown>("farm_daily_cap_usd", cfg.farmDailyCapUsd),
-      sumFarmMonth(),
-      sumFarmToday(),
-    ]);
-    const monthCap = capFrom(rawMonthCap, 20);
-    const dayCap = capFrom(rawDayCap, cfg.farmDailyCapUsd);
-
-    // Měsíční strop se testuje první: je to nejtvrdší hranice a vyčerpaný měsíc
-    // nemá smysl přebíjet tím, že dnešní okno je zrovna prázdné.
-    let blocked: { scope: "den" | "měsíc"; spent: number; cap: number } | null = null;
-    if (month >= monthCap) blocked = { scope: "měsíc", spent: month, cap: monthCap };
-    else if (day >= dayCap) blocked = { scope: "den", spent: day, cap: dayCap };
-
-    spendCache = { at: now, blocked };
+    spendCache = { at: now, ...(await evaluateSpend()) };
   }
+
+  // Hlídač nedostupný / nepřipravený: FAIL CLOSED, ale bez výjimky. Dřív tady
+  // `guardedSpend` hodila chybu a všech ~16 smyček ji hlásilo jako pád — farma
+  // sice nic neutrácela, jenže navenek to vypadalo jako rozbitý proces a důvod
+  // nečinnosti nebyl nikde. Teď se stojí tiše a viditelně (marker + událost).
+  const guardStop = spendCache.guardStop;
+  if (guardStop) {
+    const changed = await markBudgetBlock(guardStop.reason);
+    if (changed) {
+      guardStopSince ??= new Date(now).toISOString();
+      await logEventDeduped("farm_guard_not_ready", guardStop.reason, {
+        level: "warn",
+        message:
+          guardStop.reason === "guard_not_ready"
+            ? "Rozpočtový hlídač LiteLLM není připravený — farma nezadává žádnou placenou práci."
+            : "Rozpočtový hlídač LiteLLM je nedostupný — farma nezadává žádnou placenou práci.",
+        data: { since: guardStopSince, reason: guardStop.reason, error: guardStop.error ?? null },
+      });
+      console.warn(`[rozpočet] Hlídač: ${guardStop.reason}${guardStop.error ? ` (${guardStop.error})` : ""} — farma stojí.`);
+    }
+    return false;
+  }
+  guardStopSince = null;
 
   const blocked = spendCache.blocked;
   if (!blocked) {

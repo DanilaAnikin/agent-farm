@@ -8,6 +8,50 @@ import { eq } from "drizzle-orm";
 import type { CostScope } from "@farm/db";
 import type { SpendSnapshot } from "@farm/core";
 
+/** Vyžaduje nasazení rozpočtový hlídač LiteLLM? (Jen čtení env, nic se tu nemění.) */
+export function isGuardRequired(): boolean {
+  return process.env.FARM_BUDGET_GUARD_REQUIRED === "true";
+}
+
+export interface GuardStatus {
+  /** `true` připraven, `false` hlídač sám hlásí nepřipravenost, `null` nevíme (chyba/chybí řádek). */
+  ready: boolean | null;
+  dayUsd: number | null;
+  monthUsd: number | null;
+  error?: string;
+}
+
+/**
+ * Stav hlídače jedním SELECTem, BEZ výjimky.
+ *
+ * `guardedSpend` při nepřipraveném hlídači hází — to je správně pro volající,
+ * kteří s číslem počítají. Smyčky se ale potřebují jen rozhodnout „teď ne"
+ * a zapsat proč; výjimka se u nich tvářila jako pád všech šestnácti smyček.
+ * Chyba se proto vrací jako `ready:null` a rozhodne `farmRunDecision` (fail closed).
+ */
+export async function guardStatus(): Promise<GuardStatus> {
+  try {
+    const rows = await getSql()<{ day_usd: number | null; month_usd: number | null; ready: boolean | null }[]>`
+      SELECT t.day_usd::float8, t.month_usd::float8, m.ready
+      FROM public.farm_budget_totals t CROSS JOIN public.farm_budget_guard_meta m
+      WHERE m.singleton = true
+    `;
+    const row = rows[0];
+    if (!row) return { ready: null, dayUsd: null, monthUsd: null, error: "hlídač nemá řádek stavu" };
+    const day = Number(row.day_usd);
+    const month = Number(row.month_usd);
+    const totalsOk = Number.isFinite(day) && day >= 0 && Number.isFinite(month) && month >= 0;
+    return {
+      ready: row.ready === true ? true : row.ready === false ? false : null,
+      dayUsd: Number.isFinite(day) ? day : null,
+      monthUsd: Number.isFinite(month) ? month : null,
+      ...(totalsOk ? {} : { error: "hlídač vrátil nesmyslné součty" }),
+    };
+  } catch (err) {
+    return { ready: null, dayUsd: null, monthUsd: null, error: String(err).slice(0, 200) };
+  }
+}
+
 /** Includes money reserved by in-flight proxy requests. Missing guard data fails closed. */
 async function guardedSpend(window: "day" | "month", ledger: number): Promise<number> {
   if (process.env.FARM_BUDGET_GUARD_REQUIRED !== "true") return ledger;
