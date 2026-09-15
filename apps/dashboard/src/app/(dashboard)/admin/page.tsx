@@ -15,7 +15,7 @@ import { UserRow } from "@/components/admin/UserRow";
 import { RealtimeRefresh } from "@/components/RealtimeRefresh";
 import { AGENT_ROLE_META, AGENT_STATUS_META } from "@/lib/constants";
 import { capFromSetting, farmState, isFarmPaused, parsePauseSource, pauseLabel } from "@/lib/farm-state";
-import { getBudgetSnapshot } from "@/lib/server/farm-state";
+import { getBudgetSnapshot, getFarmRunState } from "@/lib/server/farm-state";
 import {
   AGENT_HIDE_AFTER_MS,
   agentHealthSummary,
@@ -111,6 +111,9 @@ export default async function AdminPage() {
       ]),
     getBudgetSnapshot(),
   ]);
+  // Stejný zdroj stavu jako hlavička a velín — jinak tu stálo „Běží“, zatímco
+  // hlavička hlásila „Farma čeká na rozpočet“.
+  const run = await getFarmRunState();
 
   const profiles = (profilesRes.data as ProfileRow[] | null) ?? [];
   const invites = (invitesRes.data as InviteRow[] | null) ?? [];
@@ -125,6 +128,7 @@ export default async function AdminPage() {
     ((settingsRes.data as { key: string; value: unknown }[] | null) ?? []).map((s) => [s.key, s.value]),
   );
   const pauseInput = {
+    ...run.state,
     owner_pause: settings.get("owner_pause"),
     global_pause: settings.get("global_pause"),
     pause_source: settings.get("pause_source"),
@@ -180,7 +184,12 @@ export default async function AdminPage() {
           <CardHeader title="Zdraví služeb" description="Rychlý přehled běhu farmy." />
           <CardBody>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <Stat label="Stav farmy" value={farmaStoji ? "Stojí" : "Běží"} hint={stav.title} tone={farmaStoji ? "warn" : "ok"} />
+              <Stat
+                label="Stav farmy"
+                value={farmaStoji ? "Stojí" : stav.code === "budget_wait" ? "Čeká na rozpočet" : "Běží"}
+                hint={stav.code === "budget_wait" ? stav.detail : stav.title}
+                tone={farmaStoji || stav.code === "budget_wait" ? "warn" : "ok"}
+              />
               <Stat label="Zdroj pauzy" value={<span className="text-base">{zdrojPauzy}</span>} />
               <Stat
                 label="Dnešní útrata farmy"
