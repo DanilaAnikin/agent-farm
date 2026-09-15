@@ -3,3 +3,4 @@ export * from "./schema.js";
 export * from "./client.js";
 export * from "./pgmq.js";
 export * from "./pause.js";
+export * from "./suggestions.js";

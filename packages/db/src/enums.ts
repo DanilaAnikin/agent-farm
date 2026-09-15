@@ -23,7 +23,8 @@ export type RepoMode = (typeof REPO_MODES)[number];
 export const PROJECT_STATUSES = ["active", "paused", "budget_hold", "stopped"] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
-export const WISH_SOURCES = ["dashboard", "telegram", "voice"] as const;
+// 'autopilot' = přání, které farma zadala sama z vlastního návrhu (suggestion intake).
+export const WISH_SOURCES = ["dashboard", "telegram", "voice", "autopilot"] as const;
 export type WishSource = (typeof WISH_SOURCES)[number];
 
 export const WISH_STATUSES = [
@@ -94,7 +95,8 @@ export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "expired"] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
-export const DECIDED_VIA = ["dashboard", "telegram"] as const;
+// 'autopilot' = rozhodla farma sama (např. specifikace schválená autopilotem).
+export const DECIDED_VIA = ["dashboard", "telegram", "autopilot"] as const;
 export type DecidedVia = (typeof DECIDED_VIA)[number];
 
 export const COST_SCOPES = ["task", "attempt", "media", "system"] as const;

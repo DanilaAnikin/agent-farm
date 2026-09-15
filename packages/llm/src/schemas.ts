@@ -287,6 +287,12 @@ export interface StrategySuggestion {
   title: string;
   description: string;
   rationale: string;
+  /**
+   * POVINNÉ: konkrétní soubor nebo fakt z repozitáře, o který se návrh opírá.
+   * Návrhy bez dokladu byly zdrojem halucinací (FastAPI, Netlify tam, kde nic
+   * takového není) — volající je zahazuje už při parsování (`withEvidence`).
+   */
+  evidence: string;
 }
 export interface StrategyOutput {
   suggestions: StrategySuggestion[];
@@ -295,19 +301,43 @@ export interface StrategyOutput {
 /** Množina povolených kindů (lowercase) pro lenient kontrolu. */
 const SUGGESTION_KIND_SET = new Set<string>(SUGGESTION_KINDS as readonly string[]);
 
-export function validateStrategy(data: unknown): true | string {
-  const d = data as StrategyOutput;
-  if (!d || !Array.isArray(d.suggestions)) return "suggestions must be an array";
-  if (d.suggestions.length === 0) return "suggestions must be a non-empty array";
-  for (const s of d.suggestions) {
+/** Má návrh neprázdný doklad z repozitáře? */
+export function hasEvidence(s: { evidence?: unknown } | null | undefined): boolean {
+  return typeof s?.evidence === "string" && s.evidence.trim().length >= 3;
+}
+
+/** Ponechá jen návrhy, které citují soubor nebo fakt z repa. Ostatní se zahazují. */
+export function withEvidence<T extends { evidence?: unknown }>(list: readonly T[]): T[] {
+  return list.filter((s) => hasEvidence(s));
+}
+
+/**
+ * Společná kontrola návrhů. Jednotlivý návrh bez `evidence` validaci neshodí
+ * (celá dávka by jinak po retry propadla) — zahodí ho volající. Když ale doklad
+ * nemá ANI JEDEN, model kontrakt ignoroval a dostane opravný pokus.
+ */
+function validateSuggestionList(list: unknown): true | string {
+  if (!Array.isArray(list)) return "suggestions must be an array";
+  if (list.length === 0) return "suggestions must be a non-empty array";
+  for (const s of list as StrategySuggestion[]) {
     if (!s || typeof s.title !== "string" || !s.title.trim())
       return "each suggestion needs a non-empty title";
     if (typeof s.description !== "string" || s.description.trim().length < 10)
       return "each suggestion needs a concrete description (>=10 chars)";
     if (typeof s.kind !== "string" || !SUGGESTION_KIND_SET.has(s.kind.trim().toLowerCase()))
       return `each suggestion.kind must be one of ${SUGGESTION_KINDS.join("|")}`;
+    if (s.evidence !== undefined && typeof s.evidence !== "string")
+      return "suggestion.evidence must be a string";
   }
+  if (!(list as StrategySuggestion[]).some((s) => hasEvidence(s)))
+    return 'each suggestion needs "evidence": a concrete file path or repository fact it is based on';
   return true;
+}
+
+export function validateStrategy(data: unknown): true | string {
+  const d = data as StrategyOutput;
+  if (!d) return "suggestions must be an array";
+  return validateSuggestionList(d.suggestions);
 }
 
 // --- Supervisor (portfolio všech projektů → cross-project návrhy) ------------
@@ -322,7 +352,9 @@ export interface SupervisorSuggestion {
   title: string;
   description: string;
   rationale: string;
-  /** Volitelné: který projekt se návrhu týká (undefined = skutečně cross-project). */
+  /** POVINNÉ: soubor nebo fakt z repa, o který se návrh opírá (viz StrategySuggestion). */
+  evidence: string;
+  /** Který projekt se návrhu týká. Bez něj návrh intake zahodí (práce napříč projekty se nezakládá). */
   projectName?: string;
 }
 export interface SupervisorOutput {
@@ -331,18 +363,32 @@ export interface SupervisorOutput {
 
 export function validateSupervisor(data: unknown): true | string {
   const d = data as SupervisorOutput;
-  if (!d || !Array.isArray(d.suggestions)) return "suggestions must be an array";
-  if (d.suggestions.length === 0) return "suggestions must be a non-empty array";
+  if (!d) return "suggestions must be an array";
+  const base = validateSuggestionList(d.suggestions);
+  if (base !== true) return base;
   for (const s of d.suggestions) {
-    if (!s || typeof s.title !== "string" || !s.title.trim())
-      return "each suggestion needs a non-empty title";
-    if (typeof s.description !== "string" || s.description.trim().length < 10)
-      return "each suggestion needs a concrete description (>=10 chars)";
-    if (typeof s.kind !== "string" || !SUGGESTION_KIND_SET.has(s.kind.trim().toLowerCase()))
-      return `each suggestion.kind must be one of ${SUGGESTION_KINDS.join("|")}`;
     if (s.projectName !== undefined && typeof s.projectName !== "string")
       return "suggestion.projectName must be a string when present";
   }
+  return true;
+}
+
+// --- Sémantická deduplikace práce (jedno levné volání) -----------------------
+/**
+ * Výstup levného modelu: index položky ze seznamu existující práce, která je
+ * TOTOŽNÁ s kandidátem, nebo null. Rozsah indexu kontroluje volající (zná délku).
+ */
+export interface WorkDedupOutput {
+  match: number | null;
+  reason?: string;
+}
+
+export function validateWorkDedup(data: unknown): true | string {
+  const d = data as WorkDedupOutput;
+  if (!d || !("match" in d)) return 'return {"match": <index> | null}';
+  if (d.match === null) return true;
+  if (typeof d.match !== "number" || !Number.isInteger(d.match) || d.match < 0)
+    return "match must be a non-negative integer index from the list, or null";
   return true;
 }
 

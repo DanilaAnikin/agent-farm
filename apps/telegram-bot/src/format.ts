@@ -36,8 +36,34 @@ export const ATTENTION_TYPES = [
 /** Předpřipravený digest ('report' s data.text) — pošleme přímo. */
 export const DIGEST_TYPES = ["report"] as const;
 
-/** Proaktivní návrhy farmy „co dál" — pushované vlastníkovi (univerzální, jakýkoliv cíl). */
-export const PROACTIVE_TYPES = ["suggestion_new"] as const;
+/**
+ * Proaktivní návrhy farmy „co dál" — pushované vlastníkovi. Návrh už na nikoho
+ * nečeká: farma ho sama zadá (suggestion_converted), nebo s důvodem zahodí
+ * (to se nepushuje, je to šum — je vidět v /navrhy).
+ */
+export const PROACTIVE_TYPES = ["suggestion_new", "suggestion_converted"] as const;
+
+/** Česky, proč farma o návrhu rozhodla tak, jak rozhodla (suggestions.decided_reason). */
+const SUGGESTION_REASON_LABEL: Record<string, string> = {
+  converted: "zadáno jako přání",
+  duplicate: "stejná práce už existuje",
+  project_paused: "projekt je pozastavený",
+  cross_project: "týká se víc projektů najednou",
+  no_project: "nepatří k žádnému projektu",
+  owner_dismissed: "zahodil vlastník",
+};
+
+export function suggestionReasonLabel(reason: string | null | undefined): string {
+  if (!reason) return "bez uvedeného důvodu";
+  return SUGGESTION_REASON_LABEL[reason] ?? reason;
+}
+
+/** České množné číslo celého čísla přes Intl.PluralRules (1 návrh, 2 návrhy, 5 návrhů). */
+export function czPlural(n: number, forms: readonly [string, string, string]): string {
+  const cat = new Intl.PluralRules("cs").select(n);
+  const form = cat === "one" ? forms[0] : cat === "few" ? forms[1] : forms[2];
+  return `${n} ${form}`;
+}
 
 /** Všechny typy, které reporter sleduje v events. */
 export const ALL_REPORT_TYPES: readonly string[] = [
@@ -250,8 +276,16 @@ export function formatReport(e: ReportEvent): string | null {
       const what = title ? `${emoji} ${escapeHtml(trim(title, 120))}` : "něco dalšího";
       // Projektový návrh vs. návrh napříč projekty (projectName == null).
       return e.projectName
-        ? `💡 ${proj}: Farma navrhuje — ${what}`
-        : `💡 Farma navrhuje (napříč projekty) — ${what}`;
+        ? `💡 ${proj}: nový nápad farmy — ${what}. Farma o něm rozhodne sama.`
+        : `💡 Nový nápad farmy (napříč projekty) — ${what}. Farma o něm rozhodne sama.`;
+    }
+    case "suggestion_converted": {
+      const title = str(e.data, "title");
+      const source = str(e.data, "source");
+      const what = title ? `„${escapeHtml(trim(title, 120))}“` : "nové přání";
+      return source === "autopilot"
+        ? `🤖 ${proj}: farma sama zadala přání ${what}.`
+        : `▶️ ${proj}: návrh ${what} zadán ručně.`;
     }
 
     // --- předpřipravený digest ---

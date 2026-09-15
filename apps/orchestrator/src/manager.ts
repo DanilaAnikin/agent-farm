@@ -4,7 +4,7 @@
  * Respektuje wishMachine (OVERVIEW §7).
  */
 import { getDb, getSql, wishes, specs, tasks, projects, approvals, QUEUES, enqueue } from "@farm/db";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, isNull } from "drizzle-orm";
 import { loadConfig, taskDedupKey, isDuplicate, wishMachine } from "@farm/core";
 import {
   MODELS,
@@ -25,10 +25,17 @@ import { profiles } from "@farm/db";
 import { logEvent } from "./events.js";
 import { isAutopilot } from "./settings.js";
 import { registerAgent, releaseAgent } from "./agents-registry.js";
-import { assembleBrief, addMemory } from "./memory.js";
+import { assembleBrief, addMemory, ensureProjectIdentity } from "./memory.js";
 import type { TaskMessage } from "./types.js";
 import { gatherRepoState } from "./repo-state.js";
 import { ensureRepo } from "./git.js";
+import { checkTaskTitleLanguage } from "./refill.js";
+import { runStuckPolicyOnce } from "./stuck-policy.js";
+
+/** Kolik plánovacích selhání v 6h okně stačí na plan_stuck (bez předchozí re-specifikace). */
+const MAX_PLAN_FAILS = 5;
+/** Jak dlouho zpátky se hledá předchozí re-specifikace přání (viz stuck-policy.ts). */
+const RESPEC_LOOKBACK_H = 24 * 7;
 
 /**
  * Concierge naváděcí zpráva pro spec: manager NIKDY neblokuje na člověku,
@@ -83,6 +90,9 @@ export async function runManagerOnce(): Promise<void> {
   // Manager tluče srdcem do registru flotily (globální řádek, project_id NULL).
   const agentId = await registerAgent({ role: "manager", model: MODELS.manager });
   try {
+    // Politika uvázlých přání: vlastní interval 30 min, uvnitř pausable smyčky
+    // (re-specifikace i poučení stojí tokeny). Selhání nesmí zastavit managera.
+    await runStuckPolicyOnce().catch((err) => console.error("[manager] politika uvázlých přání selhala:", err));
     await specifyNewWishes();
     await planApprovedSpecs();
   } finally {
@@ -110,6 +120,9 @@ async function specifyNewWishes(): Promise<void> {
       if (!project || project.status !== "active") continue;
 
       await ensureRepo(project);
+      // Ověřená identita projektu (README, package.json, nasazení) jde do specifikace
+      // před fakta z repa — i re-specifikace uvázlého přání tak stojí na realitě.
+      const identity = await ensureProjectIdentity(project);
 
       // new → specifying
       wishMachine.assert("new", "specifying");
@@ -123,7 +136,7 @@ async function specifyNewWishes(): Promise<void> {
           wishDescription: wish.description,
           projectKind: project.kind,
           profile,
-          repoContext: await gatherRepoState(project.id),
+          repoContext: [identity, await gatherRepoState(project.id)].filter(Boolean).join("\n\n"),
         }),
         conciergeSpecGuidance(project.managerNote),
       ];
@@ -173,6 +186,10 @@ async function specifyNewWishes(): Promise<void> {
         .returning({ id: specs.id });
       const specId = inserted[0]?.id;
 
+      // Autopilot = projects.trust_mode NEBO globální farm_settings.autopilot (viz
+      // settings.isAutopilot). Globální klíč `autopilot` zapíná majitel; nové projekty
+      // mají trust_mode ve výchozím stavu true (migrace 0016), existující řádky se
+      // nepřepisují. Ruční schválení zůstává jen jako nouzová cesta (planApprovedSpecs).
       if (await isAutopilot(project.trustMode)) {
         // autopilot: naplánuj JEŠTĚ ve 'specifying' a teprve PO úspěchu aktivuj —
         // fallible planWith tak nenechá přání viset v 'active' s 0 tasky (strand).
@@ -180,6 +197,7 @@ async function specifyNewWishes(): Promise<void> {
         await planWish(wish.id);
         wishMachine.assert("specifying", "active");
         await getDb().update(wishes).set({ status: "active" }).where(eq(wishes.id, wish.id));
+        await recordAutopilotApproval(project, wish.id, specId ?? null);
         await logEvent({
           projectId: project.id,
           wishId: wish.id,
@@ -225,9 +243,12 @@ async function specifyNewWishes(): Promise<void> {
       // RECOVERY: přání uvázlé ve 'specifying' vrať na 'new', ať se znovu
       // zaspecifikuje (jinak visí navždy — žádná smyčka 'specifying' nezpracovává).
       // Bound proti nekonečné smyčce + credit-burnu: po opakovaných selháních
-      // nech ve 'specifying' + hlasitý alert (zastaví retry, vyžaduje zásah).
+      // nech ve 'specifying' a zapiš spec_stuck — dořeší ho politika uvázlých přání
+      // (jedna re-specifikace, pak uzavření). Po re-specifikaci stačí JEDNO selhání:
+      // druhé kolo pěti pokusů by jen pálilo tokeny.
       const fails = await recentEventCount(wish.id, "spec_failed", 6);
-      if (fails < 5) {
+      const afterRespec = (await recentEventCount(wish.id, "wish_respec_attempt", RESPEC_LOOKBACK_H)) > 0;
+      if (fails < 5 && !afterRespec) {
         await getDb()
           .update(wishes)
           .set({ status: "new" })
@@ -238,7 +259,10 @@ async function specifyNewWishes(): Promise<void> {
           projectId: wish.projectId,
           level: "error",
           type: "spec_stuck",
-          message: "Specifikace přání opakovaně selhává — zastavuji automatické pokusy, vyžaduje ruční zásah.",
+          message: afterRespec
+            ? "Specifikace selhala i po nové specifikaci — farma přání uzavře a zapíše poučení."
+            : "Specifikace přání opakovaně selhává — farma ji po 12 hodinách zkusí jednou znovu, jinak přání uzavře.",
+          data: { afterRespec },
         });
       }
     }
@@ -254,31 +278,103 @@ async function recentEventCount(wishId: string, type: string, hours: number): Pr
   return rows[0]?.n ?? 0;
 }
 
-/** Schválené spec approvaly → naplánuj přání, pokud ještě čeká. */
-async function planApprovedSpecs(): Promise<void> {
-  const rows = await getDb()
-    .select()
-    .from(approvals)
-    .where(and(eq(approvals.type, "spec"), eq(approvals.status, "approved")))
-    .limit(10);
+/**
+ * Autopilot schválil specifikaci sám: zapiš `specs.approved_at` a approval
+ * s decided_via='autopilot'. Bez toho 81 specifikací bez approved_at UI značkovalo
+ * jako „Návrh", i když podle nich farma dávno pracovala. Defenzivní — přání už je
+ * aktivní a zápis evidence ho nesmí shodit.
+ */
+async function recordAutopilotApproval(
+  project: typeof projects.$inferSelect,
+  wishId: string,
+  specId: string | null,
+): Promise<void> {
+  try {
+    const now = new Date();
+    if (specId) {
+      await getDb()
+        .update(specs)
+        .set({ approvedAt: now })
+        .where(and(eq(specs.id, specId), isNull(specs.approvedAt)));
+    }
+    await getDb()
+      .insert(approvals)
+      .values({
+        userId: project.userId,
+        projectId: project.id,
+        type: "spec",
+        status: "approved",
+        payload: { wishId, specId },
+        requestedBy: "orchestrator",
+        decidedVia: "autopilot",
+        decidedAt: now,
+      });
+  } catch (err) {
+    console.error(`[manager] zápis autopilotního schválení wish ${wishId} selhal (pokračuji):`, err);
+  }
+}
 
-  for (const approval of rows) {
-    const wishId = (approval.payload as { wishId?: string }).wishId;
-    if (!wishId) continue;
+/** Nejnovější specifikace přání dostane approved_at (ruční schválení prošlo do plánu). */
+async function markLatestSpecApproved(wishId: string): Promise<void> {
+  await getSql()`
+    UPDATE specs SET approved_at = now()
+    WHERE id = (SELECT id FROM specs WHERE wish_id = ${wishId} ORDER BY version DESC LIMIT 1)
+      AND approved_at IS NULL
+  `;
+}
+
+/**
+ * Ručně schválené specifikace → naplánuj přání. Nouzová cesta vedle autopilotu,
+ * ale NESMÍ blokovat:
+ *  - dřív se bralo prvních 10 schválených approvals bez ohledu na stav přání, takže
+ *    nové schválení se za historickými do okna nikdy nedostalo;
+ *  - schválení z dashboardu přepínalo přání rovnou na 'active' bez úkolů a tahle
+ *    smyčka ho přeskočila (čekala 'awaiting_spec_approval') → přání uvázlo navždy.
+ * Teď se berou jen přání, která plán opravdu potřebují: čekající na schválení, nebo
+ * aktivní bez jediného úkolu. Na 'active' se přechází až PO úspěšném naplánování.
+ */
+async function planApprovedSpecs(): Promise<void> {
+  const rows = await getSql()<{ wish_id: string }[]>`
+    SELECT DISTINCT ON (w.id) w.id AS wish_id
+    FROM approvals a
+    JOIN wishes w ON w.id::text = a.payload->>'wishId'
+    JOIN projects p ON p.id = w.project_id
+    WHERE a.type = 'spec'
+      AND a.status = 'approved'
+      AND coalesce(a.decided_via, '') <> 'autopilot'
+      AND p.status = 'active'
+      AND (
+        w.status = 'awaiting_spec_approval'
+        OR (w.status = 'active' AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.wish_id = w.id))
+      )
+    ORDER BY w.id, a.created_at DESC
+    LIMIT 10
+  `;
+
+  for (const row of rows) {
+    const wishId = row.wish_id;
     const wishRows = await getDb().select().from(wishes).where(eq(wishes.id, wishId)).limit(1);
     const wish = wishRows[0];
-    if (!wish || wish.status !== "awaiting_spec_approval") continue;
+    if (!wish || (wish.status !== "awaiting_spec_approval" && wish.status !== "active")) continue;
 
     // Bound: po opakovaných selháních plánu přestaň zkoušet (jinak každý tick pálí
-    // kredit architektem). Hlasitý alert místo tichého spinu.
-    if ((await recentEventCount(wishId, "plan_failed", 6)) >= 5) {
-      await logEvent({
-        wishId,
-        projectId: wish.projectId,
-        level: "error",
-        type: "plan_stuck",
-        message: "Plánování přání opakovaně selhává — zastavuji automatické pokusy, vyžaduje ruční zásah.",
-      });
+    // kredit architektem). Po re-specifikaci stačí jedno selhání. plan_stuck se
+    // zapisuje nejvýš jednou za 6 h (smyčka běží á 5 s) a dořeší ho stuck-policy.ts.
+    const planFails = await recentEventCount(wishId, "plan_failed", 6);
+    const afterRespec = (await recentEventCount(wishId, "wish_respec_attempt", RESPEC_LOOKBACK_H)) > 0;
+    if (planFails >= MAX_PLAN_FAILS || (afterRespec && planFails >= 1)) {
+      if ((await recentEventCount(wishId, "plan_stuck", 6)) === 0) {
+        await logEvent({
+          wishId,
+          projectId: wish.projectId,
+          level: "error",
+          type: "plan_stuck",
+          message: afterRespec
+            ? "Plánování selhalo i po nové specifikaci — farma přání uzavře a zapíše poučení."
+            : "Plánování přání opakovaně selhává — farma ho po 12 hodinách zkusí jednou znovu specifikovat, jinak ho uzavře.",
+          data: { afterRespec },
+        });
+      }
       continue;
     }
 
@@ -287,14 +383,28 @@ async function planApprovedSpecs(): Promise<void> {
       // fallible plán tak nenechá přání viset v 'active' s 0 tasky. Při selhání
       // zůstane 'awaiting_spec_approval' (approval je 'approved') → přeplánuje se příště.
       await planWish(wishId);
-      wishMachine.assert("awaiting_spec_approval", "active");
-      await getDb().update(wishes).set({ status: "active" }).where(eq(wishes.id, wishId));
-      await logEvent({
-        projectId: wish.projectId,
-        wishId,
-        type: "wish_activated",
-        message: `Spec schválena, přání aktivováno: ${wish.title}`,
-      });
+      await markLatestSpecApproved(wishId);
+      if (wish.status === "awaiting_spec_approval") {
+        wishMachine.assert("awaiting_spec_approval", "active");
+        await getDb()
+          .update(wishes)
+          .set({ status: "active" })
+          .where(and(eq(wishes.id, wishId), eq(wishes.status, "awaiting_spec_approval")));
+        await logEvent({
+          projectId: wish.projectId,
+          wishId,
+          type: "wish_activated",
+          message: `Spec schválena, přání aktivováno: ${wish.title}`,
+        });
+      } else {
+        await logEvent({
+          projectId: wish.projectId,
+          wishId,
+          type: "wish_activated",
+          message: `Schválené přání bez úkolů dostalo plán: ${wish.title}`,
+          data: { recoveredActiveWithoutTasks: true },
+        });
+      }
     } catch (err) {
       if (isLlmBudgetError(err)) continue;
       console.error(`[manager] plánování wish ${wishId} selhalo:`, err);
@@ -521,6 +631,7 @@ async function architectWish(
       .returning({ id: tasks.id });
     const taskId = inserted[0]?.id;
     if (!taskId) continue;
+    await checkTaskTitleLanguage({ projectId: project.id, wishId: wish.id, taskId, title: t.title });
     keyToId.set(t.key, taskId);
     taskById.set(taskId, { kind: t.kind, dependsOnKeys: Array.isArray(t.depends_on) ? t.depends_on : [] });
   }
@@ -653,6 +764,7 @@ async function planWishFallback(
       .returning({ id: tasks.id });
     const taskId = inserted[0]?.id;
     if (!taskId) continue;
+    await checkTaskTitleLanguage({ projectId: project.id, wishId: wish.id, taskId, title: t.title });
 
     const msg: TaskMessage = {
       taskId,

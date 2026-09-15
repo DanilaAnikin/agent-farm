@@ -23,10 +23,13 @@ const PROJECT: Record<ProjectStatus, ProjectStatus[]> = {
   stopped: ["active"],
 };
 
+// "parked" z new/specifying/awaiting_spec_approval = politika uvázlých přání
+// (orchestrator stuck-policy.ts): přání, které ani po jedné re-specifikaci nejde
+// specifikovat/naplánovat, farma sama uzavře místo věčného „vyžaduje ruční zásah".
 const WISH: Record<WishStatus, WishStatus[]> = {
-  new: ["specifying"],
-  specifying: ["awaiting_spec_approval", "active", "new"], // "new" = recovery při selhání specifikace/plánu
-  awaiting_spec_approval: ["active", "specifying", "new"], // schváleno / vráceno k přepracování / reject
+  new: ["specifying", "parked"],
+  specifying: ["awaiting_spec_approval", "active", "new", "parked"], // "new" = recovery při selhání specifikace/plánu
+  awaiting_spec_approval: ["active", "specifying", "new", "parked"], // schváleno / vráceno k přepracování / reject
   active: ["done", "parked", "specifying"],
   done: [],
   parked: ["active"], // znovu otevře jen člověk

@@ -62,14 +62,14 @@ export interface ProjectRow {
   repoUrl: string | null;
 }
 
-interface GithubCreds {
+export interface GithubCreds {
   /** null = žádné GitHub credentials (OK pro repo_mode='none' / lokální běh). */
   token: string | null;
   owner?: string | null;
 }
 
 /** Získá GitHub token+owner: per-user PAT z connections, jinak admin PAT z env. */
-async function githubCredsForUser(userId: string): Promise<GithubCreds> {
+export async function githubCredsForUser(userId: string): Promise<GithubCreds> {
   const rows = await getDb()
     .select({ enc: connections.encryptedCredentials })
     .from(connections)
@@ -457,7 +457,7 @@ async function loadProject(projectId: string): Promise<ProjectRow> {
   return p as ProjectRow;
 }
 
-function parseGithubUrl(url: string): { owner: string; repo: string } {
+export function parseGithubUrl(url: string): { owner: string; repo: string } {
   const m = url.match(/github\.com[/:]([^/]+)\/([^/.]+)(\.git)?/);
   if (!m || !m[1] || !m[2]) throw new Error(`Nelze rozparsovat GitHub URL: ${url}`);
   return { owner: m[1], repo: m[2] };
