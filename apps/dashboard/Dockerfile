@@ -18,7 +18,7 @@ WORKDIR /repo
 COPY --from=deps /repo ./
 COPY . .
 # Předsestav @farm/* balíčky (dist), pak Next build.
-RUN pnpm --filter "@farm/db" --filter "@farm/storage" --filter "@farm/core" --filter "@farm/llm" run build || true
+RUN pnpm --filter "@farm/db" --filter "@farm/storage" --filter "@farm/core" --filter "@farm/llm" --filter "@farm/billing" run build || true
 RUN pnpm --filter "@farm/dashboard" run build
 
 # --- runner: minimální runtime -----------------------------------------------
