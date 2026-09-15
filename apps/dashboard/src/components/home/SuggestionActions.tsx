@@ -2,56 +2,90 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { acceptSuggestion, dismissSuggestion } from "@/app/actions/suggestions";
+import { convertSuggestionToWish } from "@/app/actions/suggestions";
 import { Button } from "@/components/ui/Button";
+import { FormMessage } from "@/components/ui/FormMessage";
+
+export interface SuggestionTargetProject {
+  id: string;
+  name: string;
+  status: string;
+}
 
 /**
- * Přijmout / Zahodit návrh farmy. Přijetí projektového návrhu založí přání;
- * návrh napříč projekty se jen označí jako přijatý (zadáš ho do konkrétního
- * projektu ručně).
+ * Jediná ruční korekce u rozhodnutí farmy: návrh bez cílového projektu
+ * („napříč projekty") farma zadat nemůže, člověk mu projekt doplní.
+ * Schvalovací tlačítka Přijmout/Zahodit zmizela — o návrzích rozhoduje farma.
  */
 export function SuggestionActions({
   suggestionId,
-  crossProject = false,
+  projects,
 }: {
   suggestionId: string;
-  crossProject?: boolean;
+  projects: SuggestionTargetProject[];
 }) {
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  const [open, setOpen] = useState(false);
+  const aktivni = projects.filter((p) => p.status === "active");
+  const [target, setTarget] = useState<string>(aktivni[0]?.id ?? projects[0]?.id ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
 
-  function decide(kind: "accept" | "dismiss") {
-    setError(null);
-    startTransition(async () => {
-      const res =
-        kind === "accept"
-          ? await acceptSuggestion(suggestionId)
-          : await dismissSuggestion(suggestionId);
-      if (!res.ok) {
-        setError(res.message ?? "Akce selhala.");
-        return;
-      }
-      router.refresh();
-    });
+  if (projects.length === 0) return null;
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+        Zadat do projektu…
+      </Button>
+    );
   }
+
+  const vybrany = projects.find((p) => p.id === target);
 
   return (
     <div className="flex flex-col items-end gap-1.5">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <select
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          aria-label="Cílový projekt"
+          className="ring-focus h-8 rounded-[--radius-sm] border border-[--color-border] bg-[--color-surface-2] px-2 text-xs text-[--color-fg] focus:outline-none"
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+              {p.status !== "active" ? " (pozastaveno)" : ""}
+            </option>
+          ))}
+        </select>
+        <Button size="sm" variant="secondary" disabled={pending} onClick={() => setOpen(false)}>
+          Zpět
+        </Button>
         <Button
           size="sm"
-          variant="secondary"
           loading={pending}
-          onClick={() => decide("dismiss")}
+          disabled={!target}
+          onClick={() => {
+            setError(null);
+            startTransition(async () => {
+              const res = await convertSuggestionToWish(suggestionId, target);
+              if (!res.ok) {
+                setError(res.message ?? "Zadání se nepodařilo.");
+                return;
+              }
+              if (res.link) router.push(res.link);
+              router.refresh();
+            });
+          }}
         >
-          Zahodit
-        </Button>
-        <Button size="sm" loading={pending} onClick={() => decide("accept")}>
-          {crossProject ? "Přijmout" : "Přijmout → přání"}
+          Zadat
         </Button>
       </div>
-      {error ? <span className="text-xs text-[--color-danger]">{error}</span> : null}
+      {vybrany && vybrany.status !== "active" ? (
+        <span className="text-[11px] text-[--color-muted]">Projekt je pozastavený — přání počká.</span>
+      ) : null}
+      {error ? <FormMessage tone="error">{error}</FormMessage> : null}
     </div>
   );
 }

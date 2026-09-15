@@ -80,7 +80,8 @@ export function TaskDag({ tasks }: { tasks: DagTask[] }) {
           <div key={idx}>
             <div className="mb-2 flex items-center gap-2">
               <span className="text-[11px] font-medium uppercase tracking-wide text-[--color-faint]">
-                {idx === 0 ? "Start · bez závislostí" : `Vlna ${idx + 1}`}
+                {/* Vlny se číslují od 1 včetně startu — dřív šla po „Start" rovnou „Vlna 2". */}
+                {idx === 0 ? "Vlna 1 · bez závislostí" : `Vlna ${idx + 1}`}
               </span>
               <span className="h-px flex-1 bg-[--color-border]" />
             </div>

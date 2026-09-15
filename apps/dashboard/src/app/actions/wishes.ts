@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { projectLimitError } from "@/lib/plan-limits";
+import { farmBudgetDefaults } from "@/app/actions/project-defaults";
 import type { ActionResult } from "@/app/actions/types";
 import type { WishSource } from "@/lib/types";
 
@@ -34,6 +35,8 @@ export async function createWishFromText(input: {
   if (!input.projectId || !text) return { ok: false, message: "Zadej instrukci pro farmu." };
 
   const { title, description } = deriveTitleDescription(text);
+  // Rozpočet přání = denní strop farmy (dřív natvrdo 20 US$ = celý měsíc farmy).
+  const defaults = await farmBudgetDefaults(supabase);
   const { data, error } = await supabase
     .from("wishes")
     .insert({
@@ -41,7 +44,7 @@ export async function createWishFromText(input: {
       title,
       description,
       source: input.source ?? "dashboard",
-      budget_usd: 20,
+      budget_usd: defaults.wishBudgetUsd,
       status: "new",
     })
     .select("id")
@@ -50,13 +53,14 @@ export async function createWishFromText(input: {
   if (error) return { ok: false, message: "Založení přání selhalo: " + error.message };
   revalidatePath("/projects");
   revalidatePath(`/projects/${input.projectId}`);
-  return { ok: true, id: data.id };
+  return { ok: true, id: data.id, link: `/projects/${input.projectId}/wishes/${data.id}` };
 }
 
 /**
  * Command-center vstup „Řekni farmě, co má udělat": buď přání do vybraného
  * projektu, nebo (když projectId chybí) rovnou založí nový projekt a přání v něm.
- * Vrací id CÍLOVÉHO PROJEKTU (velín na něj přesměruje).
+ * Vrací id NOVÉHO PŘÁNÍ a `link` na jeho detail — velín přesměruje rovnou tam,
+ * ne na projekt, kde nové přání (stav `new`) dřív nebylo vidět.
  */
 export async function submitFarmWish(input: {
   projectId?: string;
@@ -73,8 +77,9 @@ export async function submitFarmWish(input: {
   if (!text) return { ok: false, message: "Napiš, co má farma udělat." };
 
   let projectId = (input.projectId ?? "").trim();
+  const defaults = await farmBudgetDefaults(supabase);
 
-  // Bez projektu → založíme nový (výchozí code projekt s rozumnými defaulty).
+  // Bez projektu → založíme nový (výchozí code projekt, rozpočty odvozené z farmy).
   if (!projectId) {
     const name = (input.newProjectName ?? "").trim();
     if (!name) return { ok: false, message: "Vyber projekt nebo zadej název nového." };
@@ -89,9 +94,10 @@ export async function submitFarmWish(input: {
         kind: "code",
         repo_mode: "new",
         env_recipe: {},
-        trust_mode: false,
-        monthly_budget_usd: 200,
-        daily_cap_usd: 3,
+        // Autonomní farma: specifikace se schvalují samy.
+        trust_mode: true,
+        monthly_budget_usd: defaults.projectMonthlyUsd,
+        daily_cap_usd: defaults.projectDailyUsd,
       })
       .select("id")
       .single<{ id: string }>();
@@ -100,19 +106,25 @@ export async function submitFarmWish(input: {
   }
 
   const { title, description } = deriveTitleDescription(text);
-  const { error: wishErr } = await supabase.from("wishes").insert({
-    project_id: projectId,
-    title,
-    description,
-    source: "dashboard",
-    budget_usd: 20,
-    status: "new",
-  });
-  if (wishErr) return { ok: false, message: "Založení přání selhalo: " + wishErr.message };
+  const { data: wish, error: wishErr } = await supabase
+    .from("wishes")
+    .insert({
+      project_id: projectId,
+      title,
+      description,
+      source: "dashboard",
+      budget_usd: defaults.wishBudgetUsd,
+      status: "new",
+    })
+    .select("id")
+    .single<{ id: string }>();
+  if (wishErr || !wish) {
+    return { ok: false, message: "Založení přání selhalo: " + (wishErr?.message ?? "neznámá chyba") };
+  }
 
   revalidatePath("/projects");
   revalidatePath(`/projects/${projectId}`);
-  return { ok: true, id: projectId };
+  return { ok: true, id: wish.id, link: `/projects/${projectId}/wishes/${wish.id}` };
 }
 
 // Vytvoření textového přání (type-aware detaily jdou do description/meta).
@@ -129,7 +141,11 @@ export async function createWish(formData: FormData): Promise<ActionResult> {
 
   const description = String(formData.get("description") ?? "").trim();
   const source = (String(formData.get("source") ?? "dashboard") as WishSource) || "dashboard";
-  const budget = Number(formData.get("budget_usd") ?? 20);
+  const defaults = await farmBudgetDefaults(supabase);
+  const budgetRaw = String(formData.get("budget_usd") ?? "").trim().replace(",", ".");
+  const budgetNum = budgetRaw === "" ? Number.NaN : Number(budgetRaw);
+  // Prázdné, záporné nebo nesmyslné → denní strop farmy (dřív natvrdo 20 US$).
+  const budget = Number.isFinite(budgetNum) && budgetNum > 0 ? budgetNum : defaults.wishBudgetUsd;
 
   // Type-aware pole se serializují do description jako strukturovaná hlavička,
   // aby je manager viděl v promptu (bez rozšiřování schématu).
@@ -149,7 +165,7 @@ export async function createWish(formData: FormData): Promise<ActionResult> {
       title,
       description: fullDescription,
       source,
-      budget_usd: Number.isFinite(budget) ? budget : 20,
+      budget_usd: budget,
       status: "new",
     })
     .select("id")
@@ -291,10 +307,19 @@ export async function retryTask(input: {
   // úkol hned zase zaparkoval, protože attemptsCount už překročil maxAttempts).
   // Vlastní znovuzařazení do fronty řeší reconciliation sweep orchestrátoru
   // (dashboard nemá přístup k pgmq) — přečte i případnou retry poznámku z eventu.
+  // parked → queued a failed → queued jsou jediné legální cesty zpět do fronty
+  // (viz taskMachine); důvod zaparkování se tím ruší.
   const { data: updated, error } = await supabase
     .from("tasks")
-    .update({ status: "queued", attempts_count: 0, updated_at: new Date().toISOString() })
+    .update({
+      status: "queued",
+      attempts_count: 0,
+      park_reason: null,
+      parked_at: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", input.taskId)
+    .in("status", ["parked", "failed"])
     .select("id");
   if (error) return { ok: false, message: error.message };
   if (!updated || updated.length === 0)
@@ -314,28 +339,42 @@ export async function retryTask(input: {
   return { ok: true };
 }
 
+/**
+ * Zrušení úkolu majitelem. Dřív se zapisoval přechod parked → failed, který
+ * stavový automat NEPOVOLUJE (z parked vede jen queued) — orchestrátor by ho
+ * odmítl. Zrušený úkol proto zůstává `parked` s důvodem `owner_cancelled`:
+ * nepočítá se jako porucha a farma ho sama znovu nespustí.
+ */
 export async function cancelTask(input: {
   taskId: string;
   projectId: string;
   wishId: string;
 }): Promise<ActionResult> {
   const supabase = await createClient();
+  const nowIso = new Date().toISOString();
   const { data: updated, error } = await supabase
     .from("tasks")
-    .update({ status: "failed", updated_at: new Date().toISOString() })
+    .update({
+      status: "parked",
+      park_reason: "owner_cancelled",
+      parked_at: nowIso,
+      updated_at: nowIso,
+    })
     .eq("id", input.taskId)
+    // parked → parked (jen důvod) a failed → parked jsou legální; běžící úkol se nezruší.
+    .in("status", ["parked", "failed"])
     .select("id");
   if (error) return { ok: false, message: error.message };
   if (!updated || updated.length === 0)
-    return { ok: false, message: "Úkol nenalezen nebo k němu nemáš přístup." };
+    return { ok: false, message: "Úkol nenalezen, k němu nemáš přístup, nebo už není zaparkovaný." };
 
   await supabase.from("events").insert({
     project_id: input.projectId,
     wish_id: input.wishId,
     task_id: input.taskId,
-    level: "warn",
+    level: "info",
     type: "task_cancelled",
-    message: "Úkol ručně zrušen uživatelem.",
+    message: "Úkol zrušen majitelem (zůstává zaparkovaný, farma ho znovu nespustí).",
   });
 
   revalidatePath(`/projects/${input.projectId}/wishes/${input.wishId}`);

@@ -3,6 +3,7 @@ import { FlaskConical } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatDate, formatRelative, formatUsd } from "@/lib/format";
+import { plural } from "@/lib/plural";
 import { QaStatusBadge, type QaStatus } from "./QaStatusBadge";
 import { QaScreenshot } from "./QaScreenshot";
 
@@ -79,7 +80,7 @@ export async function QaReport({ wishId }: { wishId: string }) {
     return (
       <EmptyState
         icon={<FlaskConical className="size-5" />}
-        title="Zatím žádné QA běhy"
+        title="Zatím žádné testovací běhy"
         description="Jakmile agenti dokončí práci, Tester přání otestuje end-to-end — proklik, screenshoty a ověření každého akceptačního kritéria."
       />
     );
@@ -188,8 +189,8 @@ export async function QaReport({ wishId }: { wishId: string }) {
                 <QaStatusBadge status={run.status} dot />
                 {scenarios.length > 0 ? (
                   <span className="text-xs text-[--color-muted]">
-                    {passed}/{scenarios.length} scénářů OK
-                    {failed > 0 ? ` · ${failed} ${czProblems(failed)}` : ""}
+                    {passed}/{scenarios.length} scénářů prošlo
+                    {failed > 0 ? ` · ${failed} ${plural(failed, PROBLEM)}` : ""}
                   </span>
                 ) : null}
               </div>
@@ -269,10 +270,10 @@ export async function QaReport({ wishId }: { wishId: string }) {
             {/* screenshoty nepřiřazené ke konkrétnímu scénáři */}
             {extraShots.length > 0 ? (
               <div className="border-t border-[--color-border] px-4 py-3">
-                <p className="mb-2 text-xs text-[--color-muted]">Další screenshoty</p>
+                <p className="mb-2 text-xs text-[--color-muted]">Další snímky obrazovky</p>
                 <div className="flex flex-wrap gap-2">
                   {extraShots.map((s) => (
-                    <QaScreenshot key={s.assetId} url={s.url} label="QA screenshot" />
+                    <QaScreenshot key={s.assetId} url={s.url} label="Snímek z testu" />
                   ))}
                 </div>
               </div>
@@ -284,8 +285,4 @@ export async function QaReport({ wishId }: { wishId: string }) {
   );
 }
 
-function czProblems(n: number): string {
-  if (n === 1) return "problém";
-  if (n >= 2 && n <= 4) return "problémy";
-  return "problémů";
-}
+const PROBLEM = ["problém", "problémy", "problémů"] as const;
