@@ -72,7 +72,7 @@ export function VoiceRecorder({
   }
 
   return (
-    <div className="rounded-lg border border-[--color-border] bg-[--color-surface-2] p-4">
+    <div className="rounded-lg border border-(--color-border) bg-(--color-surface-2) p-4">
       <div className="flex items-center gap-3">
         {state === "recording" ? (
           <Button variant="danger" size="sm" onClick={stop} type="button">
@@ -91,8 +91,8 @@ export function VoiceRecorder({
           </Button>
         )}
         {state === "recording" ? (
-          <span className="flex items-center gap-2 text-sm text-[--color-danger]">
-            <span className="h-2 w-2 rounded-full bg-[--color-danger] animate-farm-pulse" />
+          <span className="flex items-center gap-2 text-sm text-(--color-danger)">
+            <span className="h-2 w-2 rounded-full bg-(--color-danger) animate-farm-pulse" />
             Nahrávám…
           </span>
         ) : null}
@@ -101,7 +101,7 @@ export function VoiceRecorder({
         <p
           role={state === "error" ? "alert" : "status"}
           aria-live={state === "error" ? "assertive" : "polite"}
-          className={"mt-2 text-xs " + (state === "error" ? "text-[--color-danger]" : "text-[--color-ok]")}
+          className={"mt-2 text-xs " + (state === "error" ? "text-(--color-danger)" : "text-(--color-ok)")}
         >
           {message}
         </p>

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Field, Input, Select, Textarea } from "@/components/ui/Field";
 import { VoiceRecorder } from "@/components/wishes/VoiceRecorder";
+import { formatUsd } from "@/lib/format";
 import type { ProjectKind } from "@/lib/types";
 
 interface Template {
@@ -31,7 +32,7 @@ const TEMPLATES: Template[] = [
     label: "Vylepši existující",
     kind: "code",
     title: "Vylepši existující aplikaci",
-    description: "Co konkrétně zlepšit? (výkon, UX, nová featura, bug…) Farma pracuje na branchi a otevře PR.",
+    description: "Co konkrétně zlepšit? (výkon, UX, nová funkce, chyba…) Farma pracuje ve vlastní větvi a otevře pull request.",
   },
   {
     id: "series",
@@ -46,10 +47,13 @@ export function NewWishForm({
   projectId,
   projectKind,
   userId,
+  farmCaps,
 }: {
   projectId: string;
   projectKind: ProjectKind;
   userId: string;
+  /** Stropy farmy — výchozí rozpočet přání = denní strop farmy (dřív natvrdo 20 US$). */
+  farmCaps: { dailyUsd: number; monthlyUsd: number };
 }) {
   const router = useRouter();
   const [wishType, setWishType] = useState<"code" | "content">(
@@ -59,6 +63,9 @@ export function NewWishForm({
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // Obsahové šablony (reely) jen u obsahových a smíšených projektů, kódové jen u kódu a smíšených.
+  const templates = TEMPLATES.filter((t) => projectKind === "mixed" || t.kind === projectKind);
 
   function applyTemplate(t: Template) {
     setWishType(t.kind);
@@ -87,12 +94,12 @@ export function NewWishForm({
           <CardBody>
             {/* Šablony */}
             <div className="mb-5 flex flex-wrap gap-2">
-              {TEMPLATES.map((t) => (
+              {templates.map((t) => (
                 <button
                   key={t.id}
                   type="button"
                   onClick={() => applyTemplate(t)}
-                  className="rounded-lg border border-[--color-border-strong] bg-[--color-surface-2] px-3 py-1.5 text-xs text-[--color-muted] hover:text-[--color-fg]"
+                  className="rounded-lg border border-(--color-border-strong) bg-(--color-surface-2) px-3 py-1.5 text-xs text-(--color-muted) hover:text-(--color-fg)"
                 >
                   {t.label}
                 </button>
@@ -139,10 +146,10 @@ export function NewWishForm({
 
               {wishType === "code" ? (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <Field label="Repo URL" htmlFor="repo_url" hint="volitelné">
+                  <Field label="URL repozitáře" htmlFor="repo_url" hint="volitelné">
                     <Input id="repo_url" name="repo_url" placeholder="https://github.com/…" />
                   </Field>
-                  <Field label="Branch" htmlFor="branch" hint="volitelné">
+                  <Field label="Větev" htmlFor="branch" hint="volitelné">
                     <Input id="branch" name="branch" placeholder="main" />
                   </Field>
                 </div>
@@ -170,11 +177,23 @@ export function NewWishForm({
                 </>
               )}
 
-              <Field label="Rozpočet přání (USD)" htmlFor="budget_usd">
-                <Input id="budget_usd" name="budget_usd" type="number" step="1" defaultValue={20} className="max-w-40" />
+              <Field
+                label="Rozpočet přání (US$)"
+                htmlFor="budget_usd"
+                hint={`farma: ${formatUsd(farmCaps.dailyUsd, "cap")}/den · ${formatUsd(farmCaps.monthlyUsd, "cap")}/měsíc`}
+              >
+                <Input
+                  id="budget_usd"
+                  name="budget_usd"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  defaultValue={farmCaps.dailyUsd}
+                  className="max-w-40"
+                />
               </Field>
 
-              {error ? <p role="alert" className="text-xs text-[--color-danger]">{error}</p> : null}
+              {error ? <p role="alert" className="text-xs text-(--color-danger)">{error}</p> : null}
 
               <div className="flex justify-end">
                 <Button type="submit" loading={pending}>
@@ -188,7 +207,7 @@ export function NewWishForm({
 
       <div>
         <Card>
-          <CardHeader title="Hlasové přání" description="Namluv to — orchestrátor přepíše (Whisper)." />
+          <CardHeader title="Hlasové přání" description="Namluv to — orchestrátor nahrávku přepíše přes Groq Whisper." />
           <CardBody>
             <VoiceRecorder
               projectId={projectId}
@@ -197,7 +216,7 @@ export function NewWishForm({
                 router.push(`/projects/${projectId}/wishes/${wishId}`);
               }}
             />
-            <p className="mt-3 text-xs text-[--color-muted]">
+            <p className="mt-3 text-xs text-(--color-muted)">
               Audio se nahraje do Knihovny a přepíše se automaticky. Přepis pak uvidíš u přání.
             </p>
           </CardBody>

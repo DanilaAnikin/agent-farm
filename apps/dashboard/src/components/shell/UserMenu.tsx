@@ -18,7 +18,7 @@ export function UserMenu({ email, role }: { email: string | null; role: string }
         {...triggerProps}
         aria-controls={open ? menuId : undefined}
         aria-label={`Účet ${email ?? ""}`}
-        className="ring-focus flex h-9 w-9 items-center justify-center rounded-full bg-[--color-surface-2] text-sm font-medium hover:bg-[--color-border]"
+        className="ring-focus flex h-9 w-9 items-center justify-center rounded-full bg-(--color-surface-2) text-sm font-medium hover:bg-(--color-border)"
         title={email ?? "Účet"}
       >
         {(email ?? "?").slice(0, 1).toUpperCase()}
@@ -29,11 +29,11 @@ export function UserMenu({ email, role }: { email: string | null; role: string }
           id={menuId}
           role="menu"
           aria-label="Účet"
-          className="absolute right-0 z-20 mt-1 w-56 rounded-lg border border-[--color-border-strong] bg-[--color-surface] p-3 shadow-xl"
+          className="absolute right-0 z-20 mt-1 w-56 rounded-lg border border-(--color-border-strong) bg-(--color-surface) p-3 shadow-xl"
         >
           <div className="mb-2 truncate text-sm">{email ?? "—"}</div>
-          <div className="mb-3 text-xs text-[--color-muted]">
-            Role: {role === "admin" ? "administrátor" : "člen"}
+          <div className="mb-3 text-xs text-(--color-muted)">
+            Role: {role === "admin" ? "Administrátor" : "Člen"}
           </div>
           <Button
             variant="secondary"

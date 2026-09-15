@@ -23,7 +23,8 @@ export type RepoMode = (typeof REPO_MODES)[number];
 export const PROJECT_STATUSES = ["active", "paused", "budget_hold", "stopped"] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
-export const WISH_SOURCES = ["dashboard", "telegram", "voice"] as const;
+// 'autopilot' = přání, které farma zadala sama z vlastního návrhu (suggestion intake).
+export const WISH_SOURCES = ["dashboard", "telegram", "voice", "autopilot"] as const;
 export type WishSource = (typeof WISH_SOURCES)[number];
 
 export const WISH_STATUSES = [
@@ -43,11 +44,35 @@ export const TASK_STATUSES = [
   "queued",
   "running",
   "judging",
+  // 'merging' = PR je otevřený a čeká na sloučení. Úkol NENÍ hotový otevřením PR,
+  // ale až potvrzeným mergem — dokud se nesloučí, kód v hlavní větvi není.
+  "merging",
   "done",
   "failed",
   "parked",
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/**
+ * Proč je úkol zaparkovaný (tasks.park_reason). Bez toho nešlo odlišit historickou
+ * frontu ('archived') od skutečné poruchy — panel pozornosti hlásil 201 „incidentů",
+ * které žádné incidenty nebyly.
+ */
+export const PARK_REASONS = [
+  "archived", // hromadná archivace staré fronty (backlog_task_archived)
+  "qa_false_fix", // QA ukázala, že oprava neplatí
+  "judge_exhausted", // vyčerpané pokusy u soudce
+  "dependency_cascade", // padla závislost, na které úkol stojí
+  "empty_diff", // pokus nic nezměnil
+  "infra", // infrastruktura (kontejner, git, síť)
+  "judging_orphan", // osiřelé posuzování po restartu
+  "owner_cancelled", // zrušil majitel z dashboardu
+  // Úkol opakovaně vyčerpal per-pokus příděl LiteLLM bez nového commitu — na jeden
+  // pokus je moc velký; farma přání přeplánuje na menší kroky (dispatch.ts).
+  "attempt_allowance_exhausted",
+  "unknown", // důvod se nepodařilo dohledat (backfill)
+] as const;
+export type ParkReason = (typeof PARK_REASONS)[number];
 
 export const ATTEMPT_STATUSES = [
   "running",
@@ -73,13 +98,16 @@ export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "expired"] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
-export const DECIDED_VIA = ["dashboard", "telegram"] as const;
+// 'autopilot' = rozhodla farma sama (např. specifikace schválená autopilotem).
+export const DECIDED_VIA = ["dashboard", "telegram", "autopilot"] as const;
 export type DecidedVia = (typeof DECIDED_VIA)[number];
 
 export const COST_SCOPES = ["task", "attempt", "media", "system"] as const;
 export type CostScope = (typeof COST_SCOPES)[number];
 
-export const AGENT_ROLES = ["manager", "worker", "judge", "media", "publisher"] as const;
+// 'tester' = QA agent (tester.ts). Dosud se registroval jako 'judge', takže se ve
+// velíně zobrazoval jako Soudce a nešlo poznat, kdo vlastně testuje.
+export const AGENT_ROLES = ["manager", "worker", "judge", "tester", "media", "publisher"] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
 export const AGENT_STATUSES = ["idle", "busy", "dead"] as const;
@@ -133,7 +161,7 @@ export type SuggestionStatus = (typeof SUGGESTION_STATUSES)[number];
 /**
  * Nastavení autonomie projektu (projects.autonomy jsonb) — KIND-AGNOSTICKÉ.
  * proactive: farma sama generuje návrhy co dál (pro cokoliv).
- * selfRun: návrhy se samy převádějí na přání a exekuují (plný autopilot práce).
+ * selfRun: ZASTARALÉ, nikdo ho nečte — návrhy se na přání převádějí vždy (intake v orchestrátoru).
  * autoDeliver: nevratné doručení (publish/prod-deploy) se auto-schválí do denního capu.
  */
 export interface ProjectAutonomy {

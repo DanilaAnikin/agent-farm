@@ -17,7 +17,7 @@ services:
     env_file: ../../.env
     networks: *id001
     logging: *id002
-    image: ghcr.io/berriai/litellm-database:main-stable
+    image: agent-farm-litellm:budgeted-20260914
     command:
     - --config
     - /app/config.yaml
@@ -25,21 +25,15 @@ services:
     - '4000'
     volumes:
     - ../litellm/config.yaml:/app/config.yaml:ro
-    # POZOR: sem NEPATRI `KLIC: ${KLIC}`.
-    #
-    # `environment:` interpoluje compose CLI z `.env` v adresari compose souboru
-    # (tedy infra/compose/), kde zadny neni — a prazdna hodnota z `environment:`
-    # PREBIJE spravnou hodnotu z `env_file` niz. Kdyz se sluzba takhle pretvori,
-    # LiteLLM prijde o master klic i o klice poskytovatelu a kazde volani konci
-    # 401. Stalo se to 3. 9. 2026 a projevilo se to az za dva dny jako churn,
-    # protoze chyba jde jen do stdout kontejneru.
-    #
-    # Klice dodava `env_file: ../../.env`. DATABASE_URL smi zustat, protoze
-    # zadnou interpolaci nepouziva.
     environment:
-      DATABASE_URL: postgresql://supabase_admin:afe4162c061d3de4134bd45d6ca1a9fa160c9af5912ac855@agentfarm-supabase-db-1:5432/litellm
+      DATABASE_URL: ${LITELLM_DATABASE_URL:?LITELLM_DATABASE_URL chybí v .env}
     ports:
     - 127.0.0.1:4000:4000
+    build:
+      context: ../litellm
+      dockerfile: Dockerfile.budgeted
+      args:
+        LITELLM_BASE_IMAGE: ghcr.io/berriai/litellm-database@sha256:af7ff0444278be40f7615764d1562ac557df6103cba052e886915a7e1e944c27
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:0.3.0
     restart: unless-stopped
@@ -74,6 +68,12 @@ services:
     - docker-socket-proxy
     environment:
       DOCKER_HOST: tcp://docker-socket-proxy:2375
+      FARM_BUDGET_GUARD_REQUIRED: 'true'
+      FARM_DAILY_CAP_USD: '0.60'
+      MAX_WORKERS_TOTAL: '1'
+      MAX_BEST_OF_N: '1'
+      REFILL_MAX_ROUNDS_PER_DAY: '1'
+      REFILL_MAX_TASKS_PER_ROUND: '2'
     volumes:
     - /var/lib/agent-farm/workspaces:/var/lib/agent-farm/workspaces
   publisher:
@@ -116,7 +116,29 @@ services:
     - orchestrator
   dashboard:
     restart: unless-stopped
-    env_file: ../../.env
+    # Dashboard ZÁMĚRNĚ nemá `env_file: ../../.env` — jinak by do procesu
+    # webového serveru teklo všechno (GITHUB_ADMIN_PAT, DEEPSEEK_API_KEY,
+    # LITELLM_MASTER_KEY, DATABASE_URL, Stripe…). Předáváme jen to, co kód
+    # dashboardu skutečně čte (ověřeno grepem `process.env.` v apps/dashboard/src
+    # a v runtime importech @farm/core; @farm/db se importuje jen jako typy).
+    # FARM_* a MAX_WORKERS_TOTAL sem nepatří: autoritativní je farm_settings v DB.
+    #
+    # Interpolaci `${…}` dělá compose CLI, ne kontejner: hodnoty bere z
+    # `--env-file` (produkce: explicitní cesta k .env), jinak z `.env` v adresáři
+    # projektu (infra/compose/), kde žádný není. `:?` proto shodí `up` hned,
+    # místo aby se dashboard tiše rozjel s prázdnými klíči (viz výpadek 3. 9. 2026).
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: '3000'
+      # Časy se v UI renderují v Europe/Prague; rozpočtová okna dál počítá SQL
+      # (`date_trunc` na serveru DB) v UTC, takže TZ je neovlivní.
+      TZ: Europe/Prague
+      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL chybí v .env}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY chybí v .env}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY chybí v .env}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:?PUBLIC_APP_URL chybí v .env}
+      # encryptCredentials (@farm/core) při ukládání připojení v /settings.
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?CREDENTIALS_ENCRYPTION_KEY chybí v .env}
     networks:
     - farmnet
     - agentfarm-supabase_default
@@ -131,9 +153,6 @@ services:
     container_name: agentfarm-dashboard
     expose:
     - '3000'
-    environment:
-      HOSTNAME: 0.0.0.0
-      PORT: '3000'
 networks:
   farmnet:
     driver: bridge

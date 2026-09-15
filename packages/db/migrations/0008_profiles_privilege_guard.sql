@@ -10,19 +10,27 @@
 -- =============================================================================
 
 -- Rozděl původní FOR ALL politiku na SELECT + UPDATE; sloupcovou ochranu řeší trigger.
+-- POZOR na idempotenci: migrate.ts pouští VŠECHNY soubory znovu při každém běhu,
+-- takže před každým CREATE POLICY musí být DROP POLICY IF EXISTS (vzor 0007).
+-- Bez toho padne druhý běh na 42710 (politika už existuje) a nové migrace se
+-- vůbec nespustí.
 DROP POLICY IF EXISTS profiles_self ON public.profiles;
 
+DROP POLICY IF EXISTS profiles_self_select ON public.profiles;
 CREATE POLICY profiles_self_select ON public.profiles FOR SELECT
   USING (user_id = auth.uid() OR public.is_admin());
 
+DROP POLICY IF EXISTS profiles_self_update ON public.profiles;
 CREATE POLICY profiles_self_update ON public.profiles FOR UPDATE
   USING (user_id = auth.uid() OR public.is_admin())
   WITH CHECK (user_id = auth.uid() OR public.is_admin());
 
 -- INSERT/DELETE profiles jen admin; běžný uživatel je nesmí (registrace jede přes
 -- service_role, který RLS obchází). Bez policy pro authenticated = zákaz.
+DROP POLICY IF EXISTS profiles_admin_insert ON public.profiles;
 CREATE POLICY profiles_admin_insert ON public.profiles FOR INSERT
   WITH CHECK (public.is_admin());
+DROP POLICY IF EXISTS profiles_admin_delete ON public.profiles;
 CREATE POLICY profiles_admin_delete ON public.profiles FOR DELETE
   USING (public.is_admin());
 

@@ -17,7 +17,8 @@ COPY apps ./apps
 RUN pnpm install --frozen-lockfile || pnpm install
 
 FROM deps AS build
-RUN pnpm run build
+ARG SERVICE=orchestrator
+RUN pnpm --filter @farm/${SERVICE}... build
 
 FROM base AS runtime
 ARG SERVICE=orchestrator

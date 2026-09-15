@@ -16,8 +16,28 @@ import { withConstitution } from "./constitution.js";
 /** Vloží PROJECT BRIEF (nastřádané znalosti) do systémové role, pokud existuje. */
 function briefBlock(brief?: string): string {
   if (!brief || !brief.trim()) return "";
-  return `\n\n${brief.trim()}\n\nUse the PROJECT BRIEF above as ground truth. Do not contradict or re-decide settled architecture/decisions/conventions.`;
+  return (
+    `\n\n${brief.trim()}\n\nThe PROJECT BRIEF above is earlier agent notes and may be stale. Follow its settled ` +
+    `architecture/decisions/conventions, but where verified repository facts or the PROJECT IDENTITY disagree, the repository wins.`
+  );
 }
+
+/** Ověřená identita projektu (README, package.json, nasazení) — vyšší váha než paměť agentů. */
+function identityBlock(identity?: string | null): string {
+  if (!identity || !identity.trim()) return "";
+  return (
+    `PROJECT IDENTITY (verified from the repository — ground truth, outranks the PROJECT BRIEF):\n` +
+    `${identity.trim().slice(0, 2500)}\n\n`
+  );
+}
+
+/** Pravidla proti halucinovaným návrhům (sdílí strategist i supervisor). */
+const GROUNDING_RULES =
+  `- Base every suggestion on the PROJECT IDENTITY and CURRENT REPOSITORY FACTS. Do NOT propose technologies, frameworks, ` +
+  `hosting providers or deployment targets that the repository facts do not mention.\n` +
+  `- Every suggestion MUST cite a concrete file path or repository fact in "evidence" (e.g. "apps/web/src/app/login/page.tsx ` +
+  `nemá validaci formuláře", "package.json: žádný test script"). A suggestion without evidence is discarded.\n` +
+  `- Do NOT re-propose anything from KNOWN WORK (existing wishes, tasks, earlier suggestions), in any wording or language.\n`;
 
 function profileBlock(p?: PreferenceProfile): string {
   if (!p || Object.keys(p).length === 0) return "";
@@ -107,7 +127,7 @@ export function planPrompt(input: {
         `Each worker picks up ONE task in isolation and must be able to finish it in a single focused session, so tasks ` +
         `must be small, self-contained, dependency-ordered vertical slices — not big buckets.\n\n` +
         `Return ONLY JSON: { "tasks": [{\n` +
-        `  "title": string,               // short imperative, e.g. "Add /login route with form"\n` +
+        `  "title": string,               // krátký český rozkazovací název pro UI, např. "Přidat /login s formulářem" (identifikátory a cesty ponechat v originále)\n` +
         `  "description": string,         // concrete implementation guidance: files to create/edit, libs to use, approach\n` +
         `  "done_condition": string,      // ONE objectively checkable condition (build/test/behaviour), no vagueness\n` +
         `  "verify_method": string,       // how the Tester confirms it end-to-end, e.g. "otevři /login, vyplň email+heslo, klikni Přihlásit, čekej redirect na /dashboard"\n` +
@@ -173,7 +193,7 @@ export function architectPrompt(input: {
         `  "decisions": [{ "title": string, "content": string }],   // durable decisions + rationale (stored as memory)\n` +
         `  "tasks": [{\n` +
         `    "key": string,              // short local slug, unique, referenced by depends_on (e.g. "scaffold", "tests")\n` +
-        `    "title": string,            // short imperative\n` +
+        `    "title": string,            // krátký český rozkazovací název pro UI, např. "Přidat /login s formulářem" (identifikátory a cesty ponechat v originále)\n` +
         `    "description": string,      // concrete guidance: files to create/edit, libs, approach\n` +
         `    "done_condition": string,   // ONE objectively checkable condition (build/test/behaviour), no vagueness\n` +
         `    "verify_method": string,    // how the Tester confirms it end-to-end (concrete browser/CLI/API steps)\n` +
@@ -300,11 +320,25 @@ export function refillPrompt(input: {
   repoState: string;
   managerNote?: string | null;
   parkedTasks: string[];
+  /**
+   * Zaparkované úkoly bez přání, které se nevešly do rozpočtu jednoho pokusu. Žádný
+   * plánovač je nerozdělí, takže jediná autonomní cesta je navrhnout je znovu po
+   * menších krocích (jinak by „čekaly na člověka" navždy).
+   */
+  oversizedTasks?: string[];
   /** Už hotové tasky — sémantický guard proti duplikátům (viz níže). */
   doneTasks?: string[];
   maxTasks: number;
   /** ADITIVNÍ (volitelné): nastřádané znalosti projektu (project_memory). */
   projectBrief?: string;
+  /** Ověřená identita projektu (README, package.json, nasazení). */
+  projectIdentity?: string | null;
+  /**
+   * Otevřené PR farmy, které ještě nejsou v hlavní větvi. Plánovač jinak staví
+   * nad main bez nich a zakládá duplicitní úkoly nebo závislosti na kódu, který
+   * v main vůbec není.
+   */
+  openPullRequests?: { title: string; files: string[] }[];
 }): ChatMessage[] {
   return [
     {
@@ -319,12 +353,24 @@ export function refillPrompt(input: {
         `3. Performance or reliability problems that actually bite at this stage.\n` +
         `4. Genuinely useful next features that extend the core flow.\n` +
         `5. Documentation only where it unblocks users or contributors.\n\n` +
-        `Return ONLY JSON: { "reasoning": string, "tasks": [{ "title", "description", "done_condition", "verify_method", "kind", "priority"? }] } ` +
-        `with at most ${input.maxTasks} tasks.\n\n` +
+        `Return ONLY JSON: { "reasoning": string, "tasks": [{\n` +
+        `  "title": string,          // krátký český rozkazovací název pro UI, např. "Přidat /login s formulářem" (identifikátory a cesty ponechat v originále)\n` +
+        `  "description": string,    // technical implementation guidance\n` +
+        `  "done_condition": string, // ONE objectively checkable condition\n` +
+        `  "verify_method": string,\n` +
+        `  "kind": "code"|"media"|"publish"|"deploy",\n` +
+        `  "priority"?: number\n` +
+        `}] } with at most ${input.maxTasks} tasks.\n\n` +
         `RULES:\n` +
+        `- OPEN PULL REQUESTS (listed below) are code that is already being worked on but is NOT in the main branch yet. ` +
+        `Do not recreate that work and do not plan tasks that depend on those changes or edit the same files.\n` +
+        `- Do not propose technologies or hosting providers that the verified repository facts do not mention.\n` +
         `- An EMPTY tasks array is the correct answer if nothing is genuinely worth doing right now. Do not pad.\n` +
         `- Do NOT churn: no cosmetic refactors, no renaming, no reformatting, no "improve code quality" with no observable effect.\n` +
         `- Do NOT recreate any parked task (listed below) — those are blocked on a human.\n` +
+        `- The only exception are tasks listed as TOO LARGE FOR ONE ATTEMPT: if the goal is still worth it, ` +
+        `propose it again ONLY split into smaller tasks, each independently verifiable and small enough ` +
+        `not to require reading the whole repository at once — never as the same task in one piece.\n` +
         `- Do NOT recreate anything from ALREADY DONE (listed below), in ANY wording or language. ` +
         `Key-based dedup cannot see that "Nastavit Jest s ts-jest" and "Set up Jest with ts-jest" are the same task, ` +
         `so this is on you. If the done work is incomplete, propose the concrete MISSING piece, never a re-do.\n` +
@@ -337,10 +383,22 @@ export function refillPrompt(input: {
       role: "user",
       content:
         (input.managerNote ? `USER STEERING NOTE (top priority, address first): ${input.managerNote}\n\n` : "") +
+        identityBlock(input.projectIdentity) +
         `Project kind: ${input.projectKind}\n\nCurrent repo state / recent history:\n${input.repoState}\n\n` +
+        (input.openPullRequests?.length
+          ? `OPEN PULL REQUESTS (already in progress, NOT in main — do not redo or build on them):\n` +
+            input.openPullRequests
+              .map((pr) => `- ${pr.title}${pr.files.length ? ` — files: ${pr.files.slice(0, 20).join(", ")}` : ""}`)
+              .join("\n") +
+            "\n\n"
+          : "No open pull requests.\n\n") +
         (input.parkedTasks.length
           ? `Parked tasks (do NOT recreate — blocked on a human):\n${input.parkedTasks.map((t) => `- ${t}`).join("\n")}\n\n`
           : "No parked tasks.\n\n") +
+        (input.oversizedTasks?.length
+          ? `TOO LARGE FOR ONE ATTEMPT (the farm stopped retrying these; split into smaller steps or leave out):\n` +
+            `${input.oversizedTasks.map((t) => `- ${t}`).join("\n")}\n\n`
+          : "") +
         (input.doneTasks?.length
           ? `ALREADY DONE (do NOT propose again, in any wording or language):\n${input.doneTasks.map((t) => `- ${t}`).join("\n")}`
           : "Nothing done yet."),
@@ -357,6 +415,12 @@ export function strategistPrompt(input: {
   recentActivity?: string;
   managerNote?: string;
   maxSuggestions: number;
+  /** Ověřená identita projektu (README, package.json, nasazení) — vyšší váha než paměť. */
+  projectIdentity?: string | null;
+  /** Zkrácená ověřená fakta z repozitáře (gatherRepoState). */
+  repoFacts?: string;
+  /** Známá práce (přání, úkoly, dřívější návrhy) — neopakovat. */
+  knownWork?: string[];
 }): ChatMessage[] {
   const max = input.maxSuggestions && input.maxSuggestions > 0 ? input.maxSuggestions : 5;
   return [
@@ -375,7 +439,8 @@ export function strategistPrompt(input: {
         `- An integration project: connect system A to B, add a webhook, handle an auth/rate-limit edge, sync more entities.\n` +
         `Choose whichever KINDS genuinely fit; do NOT force every project into features, and do NOT bias toward content.\n\n` +
         `THINK LIKE THIS (do not output your thinking, only JSON):\n` +
-        `1. Read the goal + PROJECT BRIEF as ground truth: what is this project truly for, and how far along is it?\n` +
+        `1. Read the PROJECT IDENTITY and CURRENT REPOSITORY FACTS first — they are verified ground truth. The goal and ` +
+        `PROJECT BRIEF are earlier notes that may be stale. What is this project truly for, and how far along is it?\n` +
         `2. Look at recent activity to avoid re-proposing what was just done or is in flight.\n` +
         `3. Find the 1-${max} moves with the best value/effort ratio RIGHT NOW. Prefer genuinely valuable, shippable ` +
         `work a smart co-founder would push for. Ruthlessly avoid busywork, cosmetic refactors, and vague "improve X".\n` +
@@ -385,15 +450,17 @@ export function strategistPrompt(input: {
         `  "kind": string,          // one of: improvement|feature|fix|test|content|automation|integration|research|refactor|opportunity\n` +
         `  "title": string,         // crisp, specific headline of the move (Czech, user-facing)\n` +
         `  "description": string,   // concretely WHAT to build/do — enough for the farm to turn into a spec (Czech)\n` +
-        `  "rationale": string      // short WHY it is worth doing now (the value / the risk it removes) (Czech)\n` +
+        `  "rationale": string,     // short WHY it is worth doing now (the value / the risk it removes) (Czech)\n` +
+        `  "evidence": string       // REQUIRED: the concrete file path or repository fact this is based on\n` +
         `}] }\n\n` +
         `HARD RULES:\n` +
         `- Return at most ${max} suggestions, ordered best-first. Fewer high-value items beat a padded list.\n` +
         `- Pick the "kind" that best matches each move; it MUST be from the list above.\n` +
         `- description must be actionable and specific to THIS project — never generic advice that would fit any project.\n` +
         `- Do not re-propose work that recent activity shows is already done or in progress.\n` +
+        GROUNDING_RULES +
         `- If a MANAGER NOTE is given, it is the TOP priority — address it first and let it shape the batch.\n` +
-        `- Honor the PROJECT BRIEF; do not contradict settled architecture/decisions. User-facing text in Czech.` +
+        `- Follow settled decisions from the PROJECT BRIEF unless the repository facts contradict them. User-facing text in Czech.` +
         briefBlock(input.projectBrief),
       ),
     },
@@ -401,9 +468,14 @@ export function strategistPrompt(input: {
       role: "user",
       content:
         (input.managerNote ? `MANAGER NOTE (top priority, address first): ${input.managerNote}\n\n` : "") +
+        identityBlock(input.projectIdentity) +
         `Project: ${input.projectName}\n` +
         `Project kind: ${input.projectKind}\n` +
-        `Goal: ${input.goalSummary}\n\n` +
+        `Goal (earlier notes): ${input.goalSummary}\n\n` +
+        (input.repoFacts ? `CURRENT REPOSITORY FACTS (verified):\n${input.repoFacts}\n\n` : "") +
+        (input.knownWork?.length
+          ? `KNOWN WORK (do NOT re-propose, in any wording):\n${input.knownWork.map((t) => `- ${t}`).join("\n")}\n\n`
+          : "") +
         (input.recentActivity
           ? `Recent activity (do NOT re-propose what is already done or in flight):\n${input.recentActivity}\n\n`
           : "") +
@@ -413,8 +485,27 @@ export function strategistPrompt(input: {
 }
 
 // --- Supervisor (portfolio napříč VŠEMI projekty) ----------------------------
+/** Kontext jednoho projektu pro supervisora — stejná fakta, jaká dostává refill. */
+export interface SupervisorProjectContext {
+  name: string;
+  kind: string;
+  goalSummary: string;
+  status: string;
+  /** Ověřená identita projektu (README, package.json, nasazení). */
+  identity?: string | null;
+  /** Zkrácená ověřená fakta z repozitáře. */
+  repoFacts?: string;
+  /** Dřívější poznámky agentů (project_memory) — mohou být zastaralé. */
+  brief?: string;
+  managerNote?: string | null;
+  /** Posledních ~10 hotových úkolů. */
+  doneTasks?: string[];
+  /** Otevřená a zaparkovaná přání + návrhy za posledních 30 dní. */
+  knownWork?: string[];
+}
+
 export function farmSupervisorPrompt(input: {
-  projects: { name: string; kind: string; goalSummary: string; status: string }[];
+  projects: SupervisorProjectContext[];
   maxSuggestions: number;
 }): ChatMessage[] {
   const max = input.maxSuggestions && input.maxSuggestions > 0 ? input.maxSuggestions : 5;
@@ -433,36 +524,79 @@ export function farmSupervisorPrompt(input: {
         `- Opportunities: a finished project that could be productized/shipped/promoted; a gap none of the projects fills yet.\n` +
         `- Portfolio hygiene: a stalled project that needs an unblock, duplicated effort to consolidate.\n\n` +
         `THINK LIKE THIS (do not output your thinking, only JSON):\n` +
-        `1. Read every project's goal + status. Understand what each is for and how far along it is.\n` +
-        `2. Find the ${max} moves with the best leverage across the whole portfolio — favour cross-project wins and clear ` +
-        `"this project is ready for its next chapter" calls a smart co-founder would make.\n` +
-        `3. Reference the concrete project(s) each move touches.\n\n` +
+        `1. Read every project's PROJECT IDENTITY and REPOSITORY FACTS first — they are verified. Notes and goals may be stale.\n` +
+        `2. Find the ${max} moves with the best leverage across the whole portfolio — clear "this project is ready for its ` +
+        `next chapter" calls a smart co-founder would make.\n` +
+        `3. Each move is executed automatically inside ONE project, so tie it to exactly one project.\n\n` +
         `Return ONLY JSON with this exact shape:\n` +
         `{ "suggestions": [{\n` +
         `  "kind": string,          // one of: improvement|feature|fix|test|content|automation|integration|research|refactor|opportunity\n` +
         `  "title": string,         // crisp headline of the move (Czech, user-facing)\n` +
-        `  "description": string,   // concretely WHAT to do and which projects it involves (Czech)\n` +
+        `  "description": string,   // concretely WHAT to do inside that project (Czech)\n` +
         `  "rationale": string,     // short WHY it is worth doing now (Czech)\n` +
-        `  "projectName"?: string   // the primary project this concerns; omit ONLY for a truly cross-project/portfolio move\n` +
+        `  "evidence": string,      // REQUIRED: the concrete file path or repository fact of that project this is based on\n` +
+        `  "projectName": string    // REQUIRED: the exact name of the ONE project this concerns, from the list\n` +
         `}] }\n\n` +
         `HARD RULES:\n` +
         `- Return at most ${max} suggestions, ordered best-first. Quality over quantity.\n` +
         `- "kind" MUST be from the list above; pick the best fit per move.\n` +
-        `- When a suggestion is about one project, set projectName to that project's exact name from the list.\n` +
-        `- Prefer moves that are only visible at the portfolio level over things a single-project strategist would already catch.\n` +
-        `- description must be specific and reference the real projects — never generic advice. User-facing text in Czech.`,
+        `- projectName is mandatory and must be exactly one project's name. Moves that need changes in several projects at ` +
+        `once are NOT executed automatically — do not propose them.\n` +
+        GROUNDING_RULES +
+        `- description must be specific and reference the real project — never generic advice. User-facing text in Czech.`,
       ),
     },
     {
       role: "user",
       content:
-        `The user's projects:\n` +
+        `The user's projects:\n\n` +
         (input.projects.length
-          ? input.projects
-              .map((p) => `- ${p.name} [kind: ${p.kind}, status: ${p.status}] — ${p.goalSummary}`)
-              .join("\n")
+          ? input.projects.map((p) => supervisorProjectBlock(p)).join("\n\n")
           : "(no projects)") +
-        `\n\nPropose the highest-leverage cross-project and per-project moves.`,
+        `\n\nPropose the highest-leverage per-project moves.`,
+    },
+  ];
+}
+
+function supervisorProjectBlock(p: SupervisorProjectContext): string {
+  const lines = [`## ${p.name} [kind: ${p.kind}, status: ${p.status}]`];
+  if (p.managerNote && p.managerNote.trim()) lines.push(`MANAGER NOTE (top priority): ${p.managerNote.trim()}`);
+  if (p.identity && p.identity.trim()) lines.push(identityBlock(p.identity).trim());
+  lines.push(`Goal (earlier notes): ${p.goalSummary}`);
+  if (p.repoFacts && p.repoFacts.trim()) lines.push(`CURRENT REPOSITORY FACTS (verified):\n${p.repoFacts.trim()}`);
+  if (p.brief && p.brief.trim()) lines.push(`Earlier agent notes (may be stale):\n${p.brief.trim()}`);
+  if (p.doneTasks?.length) lines.push(`Recently done:\n${p.doneTasks.map((t) => `- ${t}`).join("\n")}`);
+  if (p.knownWork?.length)
+    lines.push(`KNOWN WORK (do NOT re-propose, in any wording):\n${p.knownWork.map((t) => `- ${t}`).join("\n")}`);
+  return lines.join("\n");
+}
+
+// --- Sémantická deduplikace práce (levný model) ------------------------------
+/**
+ * Mechanický trigram neuvidí, že „Monitoring chyb přes Sentry" a „Napojit Sentry"
+ * je totéž. Když skóre leží v nejistém pásmu, rozhodne JEDNO levné volání nad
+ * seznamem ~20 nejbližších titulků. Vrací index shody nebo null.
+ */
+export function workDedupPrompt(input: {
+  candidate: { title: string; description: string };
+  existing: { title: string; kind: string }[];
+}): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        `You detect duplicate work in a software project. Given a CANDIDATE work item and a numbered list of EXISTING ` +
+        `work (wishes, tasks, earlier suggestions — in Czech or English), decide whether the candidate asks for the SAME ` +
+        `outcome as one existing item, even if worded differently or in another language. Related-but-different work ` +
+        `(a different feature, a follow-up step, a different part of the app) is NOT a duplicate.\n` +
+        `Return ONLY JSON: {"match": <index of the duplicate from the list> | null, "reason": string}.`,
+    },
+    {
+      role: "user",
+      content:
+        `CANDIDATE:\n${input.candidate.title}\n${input.candidate.description.slice(0, 800)}\n\n` +
+        `EXISTING WORK:\n` +
+        input.existing.map((e, i) => `${i}. [${e.kind}] ${e.title}`).join("\n"),
     },
   ];
 }

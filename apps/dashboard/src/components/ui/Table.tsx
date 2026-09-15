@@ -11,19 +11,19 @@ export function Table({ children, className }: { children: ReactNode; className?
 
 export function THead({ children }: { children: ReactNode }) {
   return (
-    <thead className="border-b border-[--color-border] text-left text-xs uppercase tracking-wide text-[--color-muted]">
+    <thead className="border-b border-(--color-border) text-left text-xs uppercase tracking-wide text-(--color-muted)">
       {children}
     </thead>
   );
 }
 
 export function TBody({ children }: { children: ReactNode }) {
-  return <tbody className="divide-y divide-[--color-border]">{children}</tbody>;
+  return <tbody className="divide-y divide-(--color-border)">{children}</tbody>;
 }
 
 export function TR({ children, className, ...props }: HTMLAttributes<HTMLTableRowElement>) {
   return (
-    <tr className={cn("transition-colors hover:bg-[--color-surface-2]", className)} {...props}>
+    <tr className={cn("transition-colors hover:bg-(--color-surface-2)", className)} {...props}>
       {children}
     </tr>
   );
@@ -39,7 +39,7 @@ export function TH({ children, className, ...props }: ThHTMLAttributes<HTMLTable
 
 export function TD({ children, className, ...props }: HTMLAttributes<HTMLTableCellElement>) {
   return (
-    <td className={cn("px-4 py-2.5 align-middle text-[--color-fg]", className)} {...props}>
+    <td className={cn("px-4 py-2.5 align-middle text-(--color-fg)", className)} {...props}>
       {children}
     </td>
   );

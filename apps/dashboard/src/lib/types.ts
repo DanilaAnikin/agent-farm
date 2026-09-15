@@ -14,6 +14,7 @@ import type {
   JudgeVerdict,
   MediaKind,
   MediaStatus,
+  ParkReason,
   PreferenceProfile,
   ProjectKind,
   ProjectStatus,
@@ -43,6 +44,7 @@ export type {
   JudgeVerdict,
   MediaKind,
   MediaStatus,
+  ParkReason,
   PreferenceProfile,
   ProjectKind,
   ProjectStatus,
@@ -98,6 +100,10 @@ export interface InviteRow {
   token: string;
   invited_by: string | null;
   used_at: string | null;
+  // Životní cyklus pozvánky (migrace 0015). NULL u obou = stará pozvánka bez
+  // expirace; retroaktivně se nedoplňuje, jinak by vypadly už pozvané účty.
+  expires_at: string | null;
+  revoked_at: string | null;
   created_at: string;
 }
 
@@ -126,6 +132,11 @@ export interface ProjectRow {
   manager_note: string | null;
   trust_mode: boolean;
   autonomy: ProjectAutonomy;
+  // Ověřená fakta o repozitáři (migrace 0016) — v promptech mají větší váhu
+  // než paměť agentů.
+  identity: string | null;
+  // Kam se projekt nasazuje. Prázdný objekt = nemá kam → UI tlačítko skryje.
+  deploy_target: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -144,6 +155,9 @@ export interface SuggestionRow {
   source: string;
   created_at: string;
   decided_at: string | null;
+  // Proč farma návrh zadala nebo zahodila (converted, duplicate, project_paused,
+  // no_project, cross_project) — dashboard z toho skládá „Co farma sama zadala".
+  decided_reason: string | null;
 }
 
 export interface WishRow {
@@ -186,6 +200,10 @@ export interface TaskRow {
   // DAG závislosti + best-of-N (migrace 0004/0006) — dřív se depends_on bolt-on castoval.
   depends_on: string[];
   best_of_n: number;
+  // Proč je úkol zaparkovaný (migrace 0014). 'archived' = historická fronta,
+  // NE porucha — panel pozornosti ji nesmí hlásit.
+  park_reason: ParkReason | null;
+  parked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -209,6 +227,10 @@ export interface AttemptRow {
   candidate_idx: number;
   score: number | null;
   is_winner: boolean;
+  // Doručení (migrace 0016): merge smyčka bez nich neví, co slučovat, a nedá se
+  // ověřit, že kontroly prošly PRÁVĚ tomuhle commitu.
+  pr_number: number | null;
+  head_sha: string | null;
   started_at: string;
   finished_at: string | null;
   heartbeat_at: string;
@@ -233,7 +255,7 @@ export interface ApprovalRow {
   payload: Record<string, unknown>;
   status: ApprovalStatus;
   requested_by: string | null;
-  decided_via: "dashboard" | "telegram" | null;
+  decided_via: "dashboard" | "telegram" | "autopilot" | null;
   decided_at: string | null;
   expires_at: string | null;
   created_at: string;

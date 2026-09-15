@@ -127,7 +127,15 @@ test("terminální stavy nedovolí žádný přechod (done/…)", () => {
   }
   // task.done
   assert.deepEqual(taskMachine.table.done, []);
-  for (const to of ["queued", "running", "judging", "failed", "parked", "done"] as const) {
+  for (const to of [
+    "queued",
+    "running",
+    "judging",
+    "merging",
+    "failed",
+    "parked",
+    "done",
+  ] as const) {
     assert.equal(taskMachine.can("done", to), false);
     assert.throws(() => taskMachine.assert("done", to), InvalidTransitionError);
   }
@@ -144,4 +152,33 @@ test("konkrétní legální přechody: budget_hold → active (auto-resume)", ()
   assert.doesNotThrow(() => projectMachine.assert("budget_hold", "active"));
   assert.equal(taskMachine.can("running", "judging"), true);
   assert.equal(wishMachine.can("awaiting_spec_approval", "active"), true);
+});
+
+test("task.merging: doručení je vlastní stav, ne 'done' po otevření PR", () => {
+  // Otevřením PR práce nekončí — do 'done' se smí až po potvrzeném sloučení.
+  assert.equal(taskMachine.can("judging", "merging"), true);
+  assert.doesNotThrow(() => taskMachine.assert("judging", "merging"));
+  assert.equal(taskMachine.can("merging", "done"), true);
+  assert.doesNotThrow(() => taskMachine.assert("merging", "done"));
+
+  // Z 'merging' se dá vrátit práci (oprava PR) i doručení vzdát.
+  assert.equal(taskMachine.can("merging", "queued"), true);
+  assert.equal(taskMachine.can("merging", "parked"), true);
+
+  // ...ale zpět do práce NE. Worker pushuje na tutéž větev přes 'queued',
+  // aby se aktualizoval existující PR; skok rovnou do 'running' by obešel
+  // dispatch a vyrobil druhý běh nad stejnou větví.
+  assert.equal(taskMachine.can("merging", "running"), false);
+  assert.throws(() => taskMachine.assert("merging", "running"), InvalidTransitionError);
+  assert.equal(taskMachine.can("merging", "judging"), false);
+  assert.equal(taskMachine.can("merging", "merging"), false);
+  assert.equal(taskMachine.can("merging", "failed"), false);
+
+  // 'judging → done' zůstává legální: repo_mode='new' merguje rovnou do main.
+  assert.equal(taskMachine.can("judging", "done"), true);
+
+  // Do 'merging' se jde JEN od soudce.
+  for (const from of ["queued", "running", "failed", "parked", "done"] as const) {
+    assert.equal(taskMachine.can(from, "merging"), false, `${from} → merging má být neplatný`);
+  }
 });

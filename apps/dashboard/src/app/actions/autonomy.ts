@@ -7,8 +7,9 @@ import type { ProjectAutonomy } from "@/lib/types";
 
 /**
  * Uloží nastavení autonomie projektu (projects.autonomy jsonb) — kind-agnostické.
- * proactive: farma sama generuje návrhy „co dál" (pro cokoliv).
- * selfRun: návrhy se samy převádějí na přání a exekuují (plný autopilot).
+ * proactive: farma sama generuje návrhy „co dál" (pro cokoliv) a sama je zadává.
+ * selfRun se už nečte — převod návrhů na přání je jediné chování farmy, proto ho
+ * dashboard nepřepisuje (případná stará hodnota zůstane beze změny).
  * autoDeliver: nevratné doručení (publish/prod-deploy) se auto-schválí do denního capu.
  * deliverDailyCap: kolik nevratných doručení denně smí projít bez tvého tapu.
  */
@@ -35,7 +36,6 @@ export async function updateProjectAutonomy(
   const clean: ProjectAutonomy = {
     ...existing,
     proactive: Boolean(autonomy.proactive),
-    selfRun: Boolean(autonomy.selfRun),
     autoDeliver: Boolean(autonomy.autoDeliver),
   };
   if (typeof autonomy.deliverDailyCap === "number" && Number.isFinite(autonomy.deliverDailyCap)) {

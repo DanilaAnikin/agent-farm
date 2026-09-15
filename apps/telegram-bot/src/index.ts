@@ -63,12 +63,13 @@ async function main(): Promise<void> {
     console.error("[telegram-bot] chyba při zpracování update:", err.error);
   });
 
-  // Pollery na pozadí.
+  // Schválení vyžadují člověka; rutinní reporty jsou ve výchozím stavu tiché.
   const intervals: NodeJS.Timeout[] = [
     startApprovalsPoller(bot),
-    startReporter(bot),
-    startDigestScheduler(bot),
   ];
+  if (process.env.TELEGRAM_AUTOMATIC_REPORTS_ENABLED === "true") {
+    intervals.push(startReporter(bot), startDigestScheduler(bot));
+  }
 
   // Graceful shutdown.
   const shutdown = async (signal: string): Promise<void> => {

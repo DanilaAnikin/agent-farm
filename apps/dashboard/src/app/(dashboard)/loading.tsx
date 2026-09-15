@@ -3,7 +3,7 @@
 // dotazy. Shimmer signalizuje živý stav a drží layout stabilní (bez skoku obsahu).
 
 function Bar({ className = "" }: { className?: string }) {
-  return <div className={`shimmer rounded-[--radius-sm] bg-[--color-surface-2] ${className}`} />;
+  return <div className={`shimmer rounded-(--radius-sm) bg-(--color-surface-2) ${className}`} />;
 }
 
 export default function DashboardLoading() {
@@ -28,7 +28,7 @@ export default function DashboardLoading() {
         {Array.from({ length: 6 }).map((_, i) => (
           <div
             key={i}
-            className="elev-1 space-y-4 rounded-[--radius-lg] border border-[--color-border-subtle] bg-[--color-surface-1] p-5"
+            className="elev-1 space-y-4 rounded-(--radius-lg) border border-(--color-border-subtle) bg-(--color-surface-1) p-5"
           >
             <div className="flex items-center justify-between">
               <Bar className="h-4 w-32" />

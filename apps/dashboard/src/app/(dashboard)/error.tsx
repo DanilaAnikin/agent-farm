@@ -24,18 +24,18 @@ export default function DashboardError({
   return (
     <div
       role="alert"
-      className="mx-auto flex max-w-md flex-col items-center justify-center rounded-[--radius-lg] border border-[--color-border] bg-[--color-surface-1] px-6 py-14 text-center elev-1"
+      className="mx-auto flex max-w-md flex-col items-center justify-center rounded-(--radius-lg) border border-(--color-border) bg-(--color-surface-1) px-6 py-14 text-center elev-1"
     >
-      <div className="mb-4 flex size-14 items-center justify-center rounded-full bg-[--color-danger-bg] text-[--color-danger]">
+      <div className="mb-4 flex size-14 items-center justify-center rounded-full bg-(--color-danger-bg) text-(--color-danger)">
         <AlertTriangle className="size-6" />
       </div>
-      <h2 className="t-heading text-[--color-fg]">Něco se pokazilo</h2>
-      <p className="t-body mt-1.5 max-w-sm text-[--color-muted]">
+      <h2 className="t-heading text-(--color-fg)">Něco se pokazilo</h2>
+      <p className="t-body mt-1.5 max-w-sm text-(--color-muted)">
         Tuhle část velína se nepodařilo načíst. Většinou pomůže zkusit to znovu — farma běží
         dál na pozadí.
       </p>
       {error.digest ? (
-        <p className="t-code mt-3 text-[--color-faint]">ref: {error.digest}</p>
+        <p className="t-code mt-3 text-(--color-faint)">ref: {error.digest}</p>
       ) : null}
       <div className="mt-6 flex items-center gap-3">
         <Button onClick={reset}>
@@ -43,7 +43,7 @@ export default function DashboardError({
         </Button>
         <Link
           href="/projects"
-          className="ring-focus rounded-[--radius-sm] px-3 py-2 text-sm text-[--color-muted] transition-colors hover:text-[--color-fg]"
+          className="ring-focus rounded-(--radius-sm) px-3 py-2 text-sm text-(--color-muted) transition-colors hover:text-(--color-fg)"
         >
           Zpět na velín
         </Link>

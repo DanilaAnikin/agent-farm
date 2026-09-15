@@ -13,7 +13,7 @@
  *
  * Defenzivní: chyby jen logujeme, smyčku neshazujeme.
  */
-import { getDb, tasks, QUEUES, enqueue } from "@farm/db";
+import { getDb, getSql, tasks, QUEUES, enqueue } from "@farm/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { taskMachine } from "@farm/core";
 import { logEvent } from "./events.js";
@@ -64,7 +64,9 @@ export async function areDepsMet(dependsOn: string[] | null | undefined): Promis
       .from(tasks)
       .where(inArray(tasks.id, deps));
     const statuses = new Map(depRows.map((r) => [r.id, r.status] as const));
-    // Každá závislost musí existovat a být 'done'.
+    // Každá závislost musí existovat a být 'done'. 'merging' NESTAČÍ: PR předchůdce
+    // je jen otevřený, jeho kód v hlavní větvi ještě není a navazující práce by
+    // stavěla nad něčím, co se možná nikdy nesloučí.
     return deps.every((d) => statuses.get(d) === "done");
   } catch (err) {
     console.error("[dag] areDepsMet selhalo:", err);
@@ -73,9 +75,33 @@ export async function areDepsMet(dependsOn: string[] | null | undefined): Promis
   }
 }
 
+/** Čas posledního přeplánování přání (událost wish_replanned); null = nikdy. */
+export async function lastReplanAt(wishId: string): Promise<Date | null> {
+  const rows = await getSql()<{ ts: Date | null }[]>`
+    SELECT max(ts) AS ts FROM events WHERE wish_id = ${wishId} AND type = 'wish_replanned'
+  `;
+  const ts = rows[0]?.ts;
+  return ts ? new Date(ts) : null;
+}
+
+/**
+ * Úkol NAHRAZENÝ přeplánováním: zaparkovaný PŘED posledním přeplánováním přání
+ * (s jakýmkoli park_reason). Nový plán ho nahradil, takže nesmí blokovat dokončení
+ * přání ani znovu spouštět přeplánování.
+ */
+export function isSupersededTask(
+  task: { status: string; parkReason?: string | null; parkedAt?: Date | null; updatedAt?: Date | null },
+  replanAt: Date | null,
+): boolean {
+  if (!replanAt || task.status !== "parked") return false;
+  const parkedAt = task.parkedAt ?? task.updatedAt ?? null;
+  return parkedAt !== null && new Date(parkedAt).getTime() <= replanAt.getTime();
+}
+
 /**
  * Po dokončení tasku zařadí do q_tasks ty jeho závislé tasky, jejichž VŠECHNY
- * závislosti jsou nyní 'done'. Volá judge v 'done' větvi.
+ * závislosti jsou nyní 'done'. Volá judge v 'done' větvi (repo_mode='new') a
+ * merge smyčka delivery.ts po potvrzeném sloučení PR (repo_mode='existing').
  */
 export async function enqueueReadyDependents(taskId: string, wishId: string | null): Promise<void> {
   if (!wishId) return;
@@ -151,7 +177,7 @@ export async function parkBlockedDependents(
       // Atomicky jen když je stále 'queued' (obrana proti závodu s dispatchem).
       await getDb()
         .update(tasks)
-        .set({ status: "parked" })
+        .set({ status: "parked", parkReason: "dependency_cascade", parkedAt: new Date() })
         .where(and(eq(tasks.id, t.id), eq(tasks.status, "queued")));
       await logEvent({
         projectId: t.projectId,

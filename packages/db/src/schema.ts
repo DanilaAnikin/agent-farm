@@ -29,6 +29,7 @@ import type {
   MediaStatus,
   MemoryKind,
   MemorySource,
+  ParkReason,
   PreferenceProfile,
   ProjectAutonomy,
   ProjectKind,
@@ -117,6 +118,10 @@ export const invites = pgTable("invites", {
   token: text("token").notNull().unique(),
   invitedBy: uuid("invited_by").references(() => authUsers.id, { onDelete: "set null" }),
   usedAt: timestamp("used_at", { withTimezone: true }),
+  // Životní cyklus pozvánky (migrace 0015): platnost 7 dní a možnost zrušení.
+  // Bez nich byl jednou vygenerovaný registrační odkaz trvalý vstup do farmy.
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
   createdAt: now(),
 });
 
@@ -156,7 +161,15 @@ export const projects = pgTable(
     monthlyBudgetUsd: doublePrecision("monthly_budget_usd").notNull().default(200),
     dailyCapUsd: doublePrecision("daily_cap_usd").notNull().default(3),
     managerNote: text("manager_note"),
-    trustMode: boolean("trust_mode").notNull().default(false),
+    // Výchozí DŮVĚRA (migrace 0016): nový projekt jede rovnou autonomně, žádné
+    // čekání na ruční schválení specifikace. Existující řádky se nepřepisují.
+    trustMode: boolean("trust_mode").notNull().default(true),
+    // Ověřená fakta o repozitáři (README, package.json, způsob nasazení). V promptech
+    // mají větší váhu než paměť agentů, která si umí vymyslet i technologie, co v repu
+    // nejsou. Plní ji ensureRepo, obnovuje se nejvýš 1× týdně.
+    identity: text("identity"),
+    // Kam se projekt nasazuje. Prázdný objekt = nemá kam → dashboard tlačítko skryje.
+    deployTarget: jsonb("deploy_target").$type<Record<string, unknown>>().notNull().default({}),
     // Nastavení autonomie (proaktivní návrhy, self-run, auto-doručení) — kind-agnostické.
     autonomy: jsonb("autonomy").$type<ProjectAutonomy>().notNull().default({}),
     createdAt: now(),
@@ -236,6 +249,10 @@ export const tasks = pgTable(
     dependsOn: jsonb("depends_on").$type<string[]>().notNull().default([]),
     // Best-of-N: kolik soupeřících kandidátů na tento úkol (1 = klasika).
     bestOfN: integer("best_of_n").notNull().default(1),
+    // Proč je úkol zaparkovaný (migrace 0014, hodnoty viz PARK_REASONS). Bez toho
+    // nešlo odlišit archivovanou historickou frontu od skutečné poruchy.
+    parkReason: text("park_reason").$type<ParkReason>(),
+    parkedAt: timestamp("parked_at", { withTimezone: true }),
     createdAt: now(),
     // KRITICKÉ: $onUpdate bumpne updated_at na KAŽDÉM přechodu stavu (queued→running→
     // judging→…). Bez toho reconciliation měřila stáří od VZNIKU tasku, takže úkol
@@ -254,6 +271,7 @@ export const tasks = pgTable(
     // GIN trigram index pro dedup podobnost (refill/guardrails). Musí být i ve
     // schématu, jinak by `db:push` tenhle index shodil a dedup by zpomalil/rozbil.
     index("tasks_dedup_trgm_idx").using("gin", sql`${t.dedupKey} gin_trgm_ops`),
+    index("tasks_park_reason_idx").on(t.projectId, t.parkReason),
   ],
 );
 
@@ -282,6 +300,10 @@ export const attempts = pgTable(
     candidateIdx: integer("candidate_idx").notNull().default(0),
     score: doublePrecision("score"),
     isWinner: boolean("is_winner").notNull().default(false),
+    // Doručení (migrace 0016): číslo PR a otestovaný head SHA. Merge smyčka bez nich
+    // neví, co slučovat, a nedá se ověřit, že kontroly prošly PRÁVĚ tomuhle commitu.
+    prNumber: integer("pr_number"),
+    headSha: text("head_sha"),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }).defaultNow().notNull(),
@@ -510,10 +532,14 @@ export const suggestions = pgTable(
     source: text("source").notNull().default("strategist"),
     createdAt: now(),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
+    // Proč farma návrh zahodila nebo zadala (duplicate, project_paused, no_project,
+    // cross_project, converted) — dashboard z toho skládá „Co farma sama zadala".
+    decidedReason: text("decided_reason"),
   },
   (t) => [
     index("suggestions_user_idx").on(t.userId, t.status),
     index("suggestions_project_idx").on(t.projectId),
+    index("suggestions_status_idx").on(t.status, t.createdAt),
   ],
 );
 

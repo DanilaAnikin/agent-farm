@@ -6,7 +6,8 @@
  *   naklonuje/založí workspace projektu pod WORKSPACES_ROOT/<projectId>.
  * - createWorktree/commitWorktree: worktree + branch farm/task-<id>.
  * - mergeToMain: merge s per-repo zámkem (jen nová repa farmy).
- * - openPr: pro existující repa uživatele (nikdy nemergujeme do jejich main).
+ * - deliverToPullRequest: pro existující repa uživatele — push + PR (slučuje až
+ *   merge smyčka delivery.ts po zeleném CI a přísné bráně).
  * - pushMain: push mainu na origin.
  *
  * Token: per-user fine-grained PAT z connections (šifrovaný), fallback na
@@ -23,6 +24,7 @@ import { Octokit } from "@octokit/rest";
 import { getDb, connections, projects } from "@farm/db";
 import { and, eq } from "drizzle-orm";
 import { loadConfig, decryptCredentials, assertSafeRepoUrl } from "@farm/core";
+import { syncExistingRepository } from "./git-sync.js";
 
 /** Jednoduchý in-process mutex klíčovaný per projectId (merge lock per repo). */
 class KeyedMutex {
@@ -47,6 +49,12 @@ class KeyedMutex {
 
 const repoLock = new KeyedMutex();
 
+/** Serialize disposable QA worktree changes with worker/merge Git operations. */
+export function withProjectRepoLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+  return repoLock.run(projectId, fn);
+}
+
+
 export interface ProjectRow {
   id: string;
   userId: string;
@@ -55,14 +63,14 @@ export interface ProjectRow {
   repoUrl: string | null;
 }
 
-interface GithubCreds {
+export interface GithubCreds {
   /** null = žádné GitHub credentials (OK pro repo_mode='none' / lokální běh). */
   token: string | null;
   owner?: string | null;
 }
 
 /** Získá GitHub token+owner: per-user PAT z connections, jinak admin PAT z env. */
-async function githubCredsForUser(userId: string): Promise<GithubCreds> {
+export async function githubCredsForUser(userId: string): Promise<GithubCreds> {
   const rows = await getDb()
     .select({ enc: connections.encryptedCredentials })
     .from(connections)
@@ -172,6 +180,7 @@ export async function ensureRepo(project: ProjectRow): Promise<{ workspacePath: 
     }
   }
 
+  if (project.repoMode === "existing") await syncExistingRepository(wsPath);
   return { workspacePath: wsPath, repoUrl };
   });
 }
@@ -200,7 +209,11 @@ export async function createWorktree(
    * V praxi to znamenalo, že 25 kroků reálné práce skončilo verdiktem „žádná změna".
    */
   attemptId?: string,
+  resumeRef?: string,
 ): Promise<WorktreeInfo> {
+  if (resumeRef && !/^[a-f0-9]{40}$/.test(resumeRef)) {
+    throw new Error("Invalid checkpoint commit");
+  }
   // Per-repo zámek: souběžné `git worktree add` na tomtéž repu závodí o index.lock.
   // Zámek drží jen po dobu (rychlé) manipulace s worktree, ne po dobu běhu workera.
   return repoLock.run(projectId, async () => {
@@ -234,14 +247,14 @@ export async function createWorktree(
     // Pojistka: kdyby recovery přesto neuspěla, NEVYHAZUJ výjimku donekonečna —
     // uhni na unikátní jméno. Task tak nikdy neuvázne v nekonečné smyčce.
     try {
-      await git.raw(["worktree", "add", "-b", branch, worktreePath, "HEAD"]);
+      await git.raw(["worktree", "add", "-b", branch, worktreePath, resumeRef ?? "HEAD"]);
     } catch (err) {
       const alt = `${branch}-r${Date.now().toString(36)}`;
       const altPath = `${worktreePath}-r${Date.now().toString(36)}`;
       console.warn(
         `[git] worktree add selhal pro ${branch} (${String(err).slice(0, 120)}) → uhýbám na ${alt}`,
       );
-      await git.raw(["worktree", "add", "-b", alt, altPath, "HEAD"]);
+      await git.raw(["worktree", "add", "-b", alt, altPath, resumeRef ?? "HEAD"]);
       await execFileP("chown", ["-R", "1001:1001", altPath]).catch(() => undefined);
       return { worktreePath: altPath, branch: alt };
     }
@@ -391,30 +404,203 @@ export async function pushMain(projectId: string): Promise<void> {
 }
 
 /**
- * Otevře PR místo mergování (existující repa uživatele — do jejich main nesaháme).
- * Nejdřív pushne branch, pak vytvoří PR přes octokit. Vrací URL PR.
+ * Git příkaz s tokenem jen v argumentu JEDNOHO volání (jednorázová URL).
+ *
+ * Dřív openPr dělal `git remote set-url origin https://x-access-token:<token>@…`,
+ * takže token zůstal natrvalo v .git/config sdíleného workspace — a ten se
+ * připojuje i do worker kontejnerů přes git view. Chybová hláška gitu navíc URL
+ * s tokenem umí vypsat, proto se každá chyba před vyhozením začerní.
  */
-export async function openPr(
-  projectId: string,
-  branch: string,
-  title: string,
-  body: string,
-): Promise<string> {
+async function gitOnce(cwd: string, args: string[], token: string | null): Promise<string> {
+  try {
+    const { stdout } = await execFileP("git", ["-C", cwd, ...args], {
+      timeout: 180_000,
+      maxBuffer: 8 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    return stdout.trim();
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    throw new Error(redactSecrets(e.stderr || e.message || String(err), token));
+  }
+}
+
+/** Začerní token i jakoukoli URL s vloženými přihlašovacími údaji. */
+export function redactSecrets(text: string, token?: string | null): string {
+  let out = text.replace(/(https?:\/\/)[^\s/@]+@/g, "$1***@");
+  if (token) out = out.split(token).join("***");
+  return out.slice(0, 600);
+}
+
+export interface GithubRepoClient {
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+  token: string;
+}
+
+/** Octokit + owner/repo projektu (pro merge smyčku). Bez tokenu nebo URL vyhodí. */
+export async function githubClientForProject(projectId: string): Promise<GithubRepoClient> {
   const project = await loadProject(projectId);
+  if (!project.repoUrl) throw new Error("Projekt nemá repoUrl.");
   const creds = await githubCredsForUser(project.userId);
+  if (!creds.token) throw new Error("Chybí GitHub token (connections ani GITHUB_ADMIN_PAT).");
+  // Stejná kontrola hostu jako u vkládání tokenu do URL — token nesmí odejít jinam.
+  const safe = assertSafeRepoUrl(project.repoUrl);
+  const { owner, repo } = parseGithubUrl(safe);
+  return { octokit: new Octokit({ auth: creds.token }), owner, repo, token: creds.token };
+}
+
+export interface PullRequestDelivery {
+  prUrl: string;
+  prNumber: number;
+  /** Commit, který soudce posoudil a který je teď hlavou PR. */
+  headSha: string;
+  headRef: string;
+  /** true = commit se pushnul do UŽ OTEVŘENÉHO PR (oprava na téže větvi). */
+  reused: boolean;
+}
+
+function httpStatus(err: unknown): number | undefined {
+  const s = (err as { status?: unknown }).status;
+  return typeof s === "number" ? s : undefined;
+}
+
+/**
+ * Doručí schválenou větev do pull requestu (existující repa uživatele — do jejich
+ * main přímo nesaháme, slučuje merge smyčka až po zeleném CI).
+ *
+ *  - `existingPrNumber` otevřeného PR → commit se pushne na JEHO hlavní větev
+ *    (oprava po zablokovaném merge; PR se aktualizuje, nový nevzniká),
+ *  - jinak push vlastní větve pokusu a nový PR; když GitHub odpoví 422
+ *    „already exists" (opakované doručení po pádu), dohledá se existující PR.
+ *
+ * Celé pod per-repo zámkem: sdílený workspace nesmí zároveň měnit worker ani QA.
+ */
+export async function deliverToPullRequest(input: {
+  projectId: string;
+  branch: string;
+  title: string;
+  body: string;
+  existingPrNumber?: number | null;
+}): Promise<PullRequestDelivery> {
+  return repoLock.run(input.projectId, async () => {
+    const project = await loadProject(input.projectId);
+    if (!project.repoUrl) throw new Error("Projekt nemá repoUrl — nelze otevřít PR.");
+    const creds = await githubCredsForUser(project.userId);
+    if (!creds.token) throw new Error("Otevření PR vyžaduje GitHub PAT (existující repo).");
+    const token = creds.token;
+    const wsPath = workspacePath(input.projectId);
+    const authUrl = authRemoteUrl(project.repoUrl, token);
+    const { owner, repo } = parseGithubUrl(assertSafeRepoUrl(project.repoUrl));
+    const octokit = new Octokit({ auth: token });
+
+    const headSha = await gitOnce(wsPath, ["rev-parse", `refs/heads/${input.branch}^{commit}`], token);
+
+    if (input.existingPrNumber) {
+      const pr = (await octokit.pulls.get({ owner, repo, pull_number: input.existingPrNumber })).data;
+      const sameRepo = pr.head.repo?.full_name?.toLowerCase() === `${owner}/${repo}`.toLowerCase();
+      if (pr.state === "open" && sameRepo) {
+        // Bez force: oprava stojí na aktuální hlavě PR (resumeRef), takže je to
+        // fast-forward. Když se hlava mezitím pohnula, push selže a doručovací
+        // smyčka to zopakuje — cizí commity se nikdy nepřepíší.
+        await gitOnce(wsPath, ["push", authUrl, `${headSha}:refs/heads/${pr.head.ref}`], token);
+        return { prUrl: pr.html_url, prNumber: pr.number, headSha, headRef: pr.head.ref, reused: true };
+      }
+    }
+
+    // Vlastní větev pokusu je unikátní (farm/task-<id>-a<pokus>), přepsat ji smí
+    // jen farma — `+` řeší opakované doručení téhož pokusu po pádu uprostřed.
+    const refspec = `${input.branch.startsWith("farm/") ? "+" : ""}refs/heads/${input.branch}:refs/heads/${input.branch}`;
+    await gitOnce(wsPath, ["push", authUrl, refspec], token);
+
+    let base = "main";
+    try {
+      base = (await octokit.repos.get({ owner, repo })).data.default_branch || base;
+    } catch {
+      base = await defaultBranch(simpleGit(wsPath));
+    }
+
+    try {
+      const pr = await octokit.pulls.create({ owner, repo, title: input.title, body: input.body, head: input.branch, base });
+      return { prUrl: pr.data.html_url, prNumber: pr.data.number, headSha, headRef: input.branch, reused: false };
+    } catch (err) {
+      if (httpStatus(err) !== 422) throw new Error(redactSecrets(String(err), token));
+      const found = await octokit.pulls.list({ owner, repo, head: `${owner}:${input.branch}`, state: "open", per_page: 1 });
+      const pr = found.data[0];
+      if (!pr) throw new Error(redactSecrets(`GitHub odmítl PR (422) a otevřený PR pro větev nenašel: ${String(err)}`, token));
+      return { prUrl: pr.html_url, prNumber: pr.number, headSha, headRef: input.branch, reused: false };
+    }
+  });
+}
+
+/** Zpětná kompatibilita: otevře (nebo dohledá) PR a vrátí jeho URL. */
+export async function openPr(projectId: string, branch: string, title: string, body: string): Promise<string> {
+  return (await deliverToPullRequest({ projectId, branch, title, body })).prUrl;
+}
+
+/**
+ * Stáhne aktuální hlavu PR do lokálního repa (ref refs/farm/pr-<n>, ať ji gc
+ * nesmaže) a vrátí její SHA. Z něj pak worker pokračuje na TÉŽE větvi PR —
+ * i když GitHub mezitím přidal merge commit z update-branch.
+ */
+export async function fetchPullHead(projectId: string, prNumber: number): Promise<string> {
+  return repoLock.run(projectId, async () => {
+    const project = await loadProject(projectId);
+    if (!project.repoUrl) throw new Error("Projekt nemá repoUrl.");
+    const creds = await githubCredsForUser(project.userId);
+    if (!creds.token) throw new Error("Chybí GitHub token.");
+    const wsPath = workspacePath(projectId);
+    const localRef = `refs/farm/pr-${prNumber}`;
+    await gitOnce(
+      wsPath,
+      ["fetch", "--no-tags", authRemoteUrl(project.repoUrl, creds.token), `+refs/pull/${prNumber}/head:${localRef}`],
+      creds.token,
+    );
+    const sha = await gitOnce(wsPath, ["rev-parse", `${localRef}^{commit}`], creds.token);
+    if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("Neplatná hlava PR.");
+    return sha;
+  });
+}
+
+/** SHA hlavní větve sdíleného workspace (po syncExistingRepository = origin/main). */
+export async function mainHeadSha(projectId: string): Promise<string | null> {
+  try {
+    const sha = await gitOnce(workspacePath(projectId), ["rev-parse", "HEAD^{commit}"], null);
+    return /^[a-f0-9]{40}$/.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Dočasný odpojený worktree na daném commitu (baseline kontrol nad main). Založení
+ * i úklid jsou pod per-repo zámkem; samotná práce `fn` běží mimo zámek, ať dlouhý
+ * build nezdržuje workery.
+ */
+export async function withDetachedWorktree<T>(
+  projectId: string,
+  sha: string,
+  fn: (path: string) => Promise<T>,
+): Promise<T> {
+  if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("Neplatný commit pro baseline.");
   const wsPath = workspacePath(projectId);
-  const git = simpleGit(wsPath);
-
-  if (!project.repoUrl) throw new Error("Projekt nemá repoUrl — nelze otevřít PR.");
-  if (!creds.token) throw new Error("Otevření PR vyžaduje GitHub PAT (existující repo).");
-  await git.remote(["set-url", "origin", authRemoteUrl(project.repoUrl, creds.token)]);
-  await git.push(["-u", "origin", branch]);
-
-  const { owner, repo } = parseGithubUrl(project.repoUrl);
-  const octokit = new Octokit({ auth: creds.token });
-  const base = await defaultBranch(git);
-  const pr = await octokit.pulls.create({ owner, repo, title, body, head: branch, base });
-  return pr.data.html_url;
+  const path = join(wsPath, "..", `${projectId}--baseline-${sha.slice(0, 12)}-${Date.now().toString(36)}`);
+  await repoLock.run(projectId, async () => {
+    await gitOnce(wsPath, ["worktree", "add", "--detach", path, sha], null);
+    await execFileP("chown", ["-R", "1001:1001", path]).catch(() => undefined);
+  });
+  try {
+    return await fn(path);
+  } finally {
+    await repoLock
+      .run(projectId, async () => {
+        await gitOnce(wsPath, ["worktree", "remove", "--force", path], null).catch(() => undefined);
+        if (await pathExists(path)) await fs.rm(path, { recursive: true, force: true }).catch(() => undefined);
+        await gitOnce(wsPath, ["worktree", "prune"], null).catch(() => undefined);
+      })
+      .catch(() => undefined);
+  }
 }
 
 async function defaultBranch(git: SimpleGit): Promise<string> {
@@ -445,7 +631,7 @@ async function loadProject(projectId: string): Promise<ProjectRow> {
   return p as ProjectRow;
 }
 
-function parseGithubUrl(url: string): { owner: string; repo: string } {
+export function parseGithubUrl(url: string): { owner: string; repo: string } {
   const m = url.match(/github\.com[/:]([^/]+)\/([^/.]+)(\.git)?/);
   if (!m || !m[1] || !m[2]) throw new Error(`Nelze rozparsovat GitHub URL: ${url}`);
   return { owner: m[1], repo: m[2] };

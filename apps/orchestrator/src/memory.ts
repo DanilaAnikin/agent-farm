@@ -12,7 +12,7 @@
  * VŠECHNY funkce jsou defenzivní — paměť je "chytrost navíc" a nikdy nesmí
  * shodit dispatch/judge/manager/tester smyčku.
  */
-import { getDb, projectMemory } from "@farm/db";
+import { getDb, getSql, projectMemory } from "@farm/db";
 import type { MemoryKind, MemorySource } from "@farm/db";
 import { eq, desc } from "drizzle-orm";
 import {
@@ -26,6 +26,36 @@ import {
 } from "@farm/llm";
 import type { ReflectionOutput, SuccessLearningOutput } from "@farm/llm";
 import { logEvent } from "./events.js";
+import { isIdentityStale, readProjectIdentity } from "./repo-state.js";
+
+/**
+ * Vrátí ověřenou identitu projektu (projects.identity) a obnoví ji, když chybí
+ * nebo je starší než týden. Čte jen soubory z lokálního checkoutu, žádné LLM.
+ *
+ * Proč identita vedle paměti: paměť projektu psali agenti a dřív se v promptech
+ * brala jako fakt, takže halucinace (hudební ripieno, FastAPI, Netlify) se samy
+ * posilovaly. Brief teď nese hlavičku „dřívější poznámky agentů (mohou být
+ * zastaralé)" a identita + fakta z repa jsou „ověřená fakta" s vyšší vahou.
+ */
+export async function ensureProjectIdentity(project: {
+  id: string;
+  identity?: string | null;
+}): Promise<string | null> {
+  const current = project.identity ?? null;
+  if (!isIdentityStale(current)) return current;
+  try {
+    const fresh = await readProjectIdentity(project.id);
+    if (!fresh) return current;
+    // Surové SQL, ne drizzle update: $onUpdate by bumpl projects.updated_at a
+    // budget-hold z něj počítá, odkdy projekt v holdu stojí.
+    await getSql()`UPDATE projects SET identity = ${fresh} WHERE id = ${project.id}`;
+    project.identity = fresh;
+    return fresh;
+  } catch (err) {
+    console.error("[memory] obnova identity projektu selhala (pokračuji):", err);
+    return current;
+  }
+}
 
 /** Řádek paměti tak, jak ho potřebuje buildProjectBrief + volající. */
 export interface MemoryRow {

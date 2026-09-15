@@ -6,9 +6,24 @@ import { createProject } from "@/app/actions/projects";
 import { Button } from "@/components/ui/Button";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTrigger } from "@/components/ui/Dialog";
 import { Field, Input, Select, Textarea } from "@/components/ui/Field";
+import { formatUsd } from "@/lib/format";
 import type { RepoMode } from "@/lib/types";
 
-export function NewProjectDialog({ trigger }: { trigger?: React.ReactNode }) {
+/** Výchozí rozpočty spočítané na serveru ze stropů farmy (viz farmBudgetDefaults). */
+export interface NewProjectDefaults {
+  projectDailyUsd: number;
+  projectMonthlyUsd: number;
+  farmDailyUsd: number;
+  farmMonthlyUsd: number;
+}
+
+export function NewProjectDialog({
+  trigger,
+  defaults,
+}: {
+  trigger?: React.ReactNode;
+  defaults: NewProjectDefaults;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [repoMode, setRepoMode] = useState<RepoMode>("new");
@@ -32,7 +47,10 @@ export function NewProjectDialog({ trigger }: { trigger?: React.ReactNode }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger>{trigger ?? <Button>Nový projekt</Button>}</DialogTrigger>
-      <DialogContent title="Nový projekt" description="Jeden projekt na jednu věc — vlastní agenti, rozpočty a repo.">
+      <DialogContent
+        title="Nový projekt"
+        description="Jeden projekt na jednu věc — vlastní agenti, rozpočty a repozitář. Farma na něm pracuje sama, bez schvalování."
+      >
         <form action={onSubmit} className="space-y-4">
           <Field label="Název" htmlFor="name">
             <Input id="name" name="name" required placeholder="Např. IG kanál o AI nástrojích" />
@@ -66,9 +84,9 @@ export function NewProjectDialog({ trigger }: { trigger?: React.ReactNode }) {
                 <Input id="repo_url" name="repo_url" placeholder="https://github.com/…" />
               </Field>
               <Field
-                label="Env recipe"
+                label="Jak appku spustit"
                 htmlFor="env_recipe"
-                hint="jak appku spustit bez produkčních credentials (JSON nebo popis)"
+                hint="bez produkčních přístupových údajů (JSON nebo popis)"
               >
                 <Textarea
                   id="env_recipe"
@@ -80,20 +98,35 @@ export function NewProjectDialog({ trigger }: { trigger?: React.ReactNode }) {
           ) : null}
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Měsíční rozpočet (USD)" htmlFor="monthly_budget_usd">
-              <Input id="monthly_budget_usd" name="monthly_budget_usd" type="number" step="1" defaultValue={200} />
+            <Field label="Měsíční rozpočet (US$)" htmlFor="monthly_budget_usd">
+              <Input
+                id="monthly_budget_usd"
+                name="monthly_budget_usd"
+                type="number"
+                min={0}
+                max={defaults.farmMonthlyUsd}
+                step="0.01"
+                defaultValue={defaults.projectMonthlyUsd}
+              />
             </Field>
-            <Field label="Denní strop (USD)" htmlFor="daily_cap_usd">
-              <Input id="daily_cap_usd" name="daily_cap_usd" type="number" step="0.5" defaultValue={3} />
+            <Field label="Denní strop (US$)" htmlFor="daily_cap_usd">
+              <Input
+                id="daily_cap_usd"
+                name="daily_cap_usd"
+                type="number"
+                min={0}
+                max={defaults.farmDailyUsd}
+                step="0.01"
+                defaultValue={defaults.projectDailyUsd}
+              />
             </Field>
           </div>
+          <p className="text-xs text-(--color-muted)">
+            farma: {formatUsd(defaults.farmDailyUsd, "cap")}/den · {formatUsd(defaults.farmMonthlyUsd, "cap")}/měsíc
+            — strop projektu se dělí se stropem farmy a nesmí být vyšší.
+          </p>
 
-          <label className="flex items-center gap-2 text-sm text-[--color-muted]">
-            <input type="checkbox" name="trust_mode" className="h-4 w-4 rounded border-[--color-border-strong] bg-[--color-surface-2]" />
-            Trust mode — přeskočit schvalování specifikací
-          </label>
-
-          {error ? <p role="alert" className="text-xs text-[--color-danger]">{error}</p> : null}
+          {error ? <p role="alert" className="text-xs text-(--color-danger)">{error}</p> : null}
 
           <DialogFooter>
             <DialogClose>Zrušit</DialogClose>

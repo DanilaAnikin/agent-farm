@@ -53,7 +53,7 @@ function computeLevels(tasks: DagTask[]): Map<string, number> {
  */
 export function TaskDag({ tasks }: { tasks: DagTask[] }) {
   if (tasks.length === 0) {
-    return <p className="text-sm text-[--color-muted]">Zatím žádné úkoly v plánu.</p>;
+    return <p className="text-sm text-(--color-muted)">Zatím žádné úkoly v plánu.</p>;
   }
 
   const levels = computeLevels(tasks);
@@ -79,10 +79,11 @@ export function TaskDag({ tasks }: { tasks: DagTask[] }) {
         return (
           <div key={idx}>
             <div className="mb-2 flex items-center gap-2">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-[--color-faint]">
-                {idx === 0 ? "Start · bez závislostí" : `Vlna ${idx + 1}`}
+              <span className="text-[11px] font-medium uppercase tracking-wide text-(--color-faint)">
+                {/* Vlny se číslují od 1 včetně startu — dřív šla po „Start" rovnou „Vlna 2". */}
+                {idx === 0 ? "Vlna 1 · bez závislostí" : `Vlna ${idx + 1}`}
               </span>
-              <span className="h-px flex-1 bg-[--color-border]" />
+              <span className="h-px flex-1 bg-(--color-border)" />
             </div>
             <ul
               className="space-y-2"
@@ -93,12 +94,12 @@ export function TaskDag({ tasks }: { tasks: DagTask[] }) {
                 return (
                   <li
                     key={task.id}
-                    className="rounded-lg border border-[--color-border] bg-[--color-surface] p-3"
+                    className="rounded-lg border border-(--color-border) bg-(--color-surface) p-3"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-2">
                         {idx > 0 ? (
-                          <span className="shrink-0 text-[--color-faint]" aria-hidden>
+                          <span className="shrink-0 text-(--color-faint)" aria-hidden>
                             └
                           </span>
                         ) : null}
@@ -108,13 +109,13 @@ export function TaskDag({ tasks }: { tasks: DagTask[] }) {
                       <StatusBadge meta={TASK_STATUS_META[task.status]} dot className="shrink-0" />
                     </div>
                     {task.done_condition ? (
-                      <p className="mt-1.5 text-xs text-[--color-muted]">
-                        <span className="text-[--color-faint]">Podmínka: </span>
+                      <p className="mt-1.5 text-xs text-(--color-muted)">
+                        <span className="text-(--color-faint)">Podmínka: </span>
                         {task.done_condition}
                       </p>
                     ) : null}
                     {deps.length > 0 ? (
-                      <p className="mt-1.5 text-[11px] text-[--color-faint]">
+                      <p className="mt-1.5 text-[11px] text-(--color-faint)">
                         závisí na: {deps.map((d) => titleById.get(d)).filter(Boolean).join(" · ")}
                       </p>
                     ) : null}

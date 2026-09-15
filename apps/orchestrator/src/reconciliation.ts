@@ -16,8 +16,10 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { loadConfig, isStaleHeartbeat } from "@farm/core";
 import { logEvent } from "./events.js";
 import { listWorkerContainers, killContainer } from "./docker.js";
-import { reapDeadAgents, liveContainerIds } from "./agents-registry.js";
+import { markStaleAgents, reapDeadAgents, liveContainerIds } from "./agents-registry.js";
+import { publishRuntimeConfig, publishGithubStatus } from "./runtime-config.js";
 import type { TaskMessage } from "./types.js";
+import { recoverOrphanedJudging } from "./judging-recovery.js";
 
 const STALE_MS = Number(process.env.ATTEMPT_STALE_HEARTBEAT_MS ?? 3 * 60_000);
 // 'queued' task bez zpracování déle než tohle = ztracená/chybějící zpráva (nebo
@@ -27,6 +29,20 @@ const STALE_MS = Number(process.env.ATTEMPT_STALE_HEARTBEAT_MS ?? 3 * 60_000);
 const QUEUED_STALE_MS = Number(process.env.QUEUED_STALE_MS ?? 10 * 60_000);
 // 'judging' task uvázlý (ztracená judge zpráva) — delší práh, judge build/test trvá.
 const JUDGING_STALE_MS = Number(process.env.JUDGING_STALE_MS ?? 15 * 60_000);
+// Jak dlouho držet 'dead' řádky agentů jako stopu, než se smažou.
+const DEAD_AGENT_RETENTION_HOURS = 24;
+// GitHub se ověřuje nejvýš jednou za hodinu (GET /user) — stav se mění zřídka
+// a zbytečné volání API by jen pálilo rate limit.
+const GITHUB_STATUS_EVERY_MS = 60 * 60_000;
+let lastGithubStatusAt = 0;
+
+async function maybePublishGithubStatus(): Promise<void> {
+  const now = Date.now();
+  if (now - lastGithubStatusAt < GITHUB_STATUS_EVERY_MS) return;
+  // Značka PŘED voláním: i neúspěch se zkusí až za hodinu, ne každých 5 min.
+  lastGithubStatusAt = now;
+  await publishGithubStatus();
+}
 
 /** Jedna iterace reconciliation. Bezpečné volat i při startu. Každý krok je
  *  IZOLOVANÝ (vlastní try/catch) — selhání jednoho nesmí přeskočit ostatní
@@ -37,8 +53,13 @@ export async function runReconciliationOnce(): Promise<void> {
     reconcileStrandedRunning,
     reconcileOrphanedTasks,
     reconcileOrphanContainers,
-    () => reapDeadAgents(STALE_MS),
+    () => markStaleAgents(STALE_MS),
+    () => reapDeadAgents(DEAD_AGENT_RETENTION_HOURS),
     pruneWorktrees,
+    // Pravda o běžícím procesu pro dashboard. Tahle smyčka NENÍ pausable, takže
+    // údaje jsou čerstvé i ve chvíli, kdy farma stojí.
+    publishRuntimeConfig,
+    maybePublishGithubStatus,
   ]) {
     try {
       await step();
@@ -54,7 +75,8 @@ export async function runReconciliationOnce(): Promise<void> {
  *    závislosti jsou 'done' → znovu do q_tasks (dispatch je idempotentní, případné
  *    zdvojení zprávy je neškodné — druhá se jen zahodí);
  *  - 'judging' uvázlé (ztracená judge zpráva / crash mezi set 'judging' a enqueue)
- *    → zpět do fronty jako čerstvý pokus.
+ *    → obnovit judge pro stejný hotový pokus. Delayed/invisible zpráva není osiřelá;
+ *    chybějící provenance se parkuje, nikdy nespouští čerstvě placený worker.
  */
 async function reconcileOrphanedTasks(): Promise<void> {
   const sql = getSql();
@@ -102,27 +124,17 @@ async function reconcileOrphanedTasks(): Promise<void> {
     });
   }
 
-  const judging = await sql<{ id: string; project_id: string; wish_id: string | null; kind: string }[]>`
-    SELECT id, project_id, wish_id, kind FROM tasks
-    WHERE status = 'judging'
-      AND updated_at < now() - (${JUDGING_STALE_MS}::text || ' milliseconds')::interval
-  `;
-  for (const t of judging) {
-    await getDb().update(tasks).set({ status: "queued" }).where(eq(tasks.id, t.id));
-    await enqueue(QUEUES.tasks, {
-      taskId: t.id,
-      projectId: t.project_id,
-      wishId: t.wish_id,
-      kind: t.kind as TaskMessage["kind"],
-      isFix: true,
-      note: "reconciliation_requeue_judging",
-    });
+  for (const recovery of await recoverOrphanedJudging(JUDGING_STALE_MS, sql)) {
+    const restored = recovery.kind === "judge_restored";
     await logEvent({
-      projectId: t.project_id,
-      taskId: t.id,
-      level: "warn",
-      type: "reconciliation_requeue_judging",
-      message: "Task uvázlý v 'judging' (ztracená judge zpráva) znovu zařazen do fronty.",
+      projectId: recovery.projectId,
+      taskId: recovery.taskId,
+      level: restored ? "info" : "warn",
+      type: restored ? "reconciliation_restore_judge" : "reconciliation_judge_missing_artifact",
+      message: restored
+        ? "Chybějící judge zpráva obnovena pro stejný hotový pokus."
+        : "Judge nemá obnovitelný pokus s branch/worktree; úkol zaparkován bez nového workera.",
+      data: recovery.attemptId ? { attemptId: recovery.attemptId } : undefined,
     });
   }
 }

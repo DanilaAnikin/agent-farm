@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Field";
 import { FormMessage } from "@/components/ui/FormMessage";
 
-// Retry zaparkovaného tasku s poznámkou / zrušení.
+// Ruční zásah u zaparkovaného úkolu: nový pokus s poznámkou, nebo zrušení
+// (úkol zůstane zaparkovaný s důvodem „zrušeno majitelem").
 export function ParkedTaskActions({
   taskId,
   projectId,
@@ -59,7 +60,7 @@ export function ParkedTaskActions({
         <Textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="Poznámka k dalšímu pokusu (injektuje se do promptu)…"
+          placeholder="Poznámka k dalšímu pokusu (dostane ji agent v zadání)…"
           className="min-h-16 text-xs"
         />
       ) : null}
@@ -70,7 +71,7 @@ export function ParkedTaskActions({
           </Button>
         ) : (
           <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
-            Retry s poznámkou
+            Zkusit znovu s poznámkou
           </Button>
         )}
 
@@ -95,6 +96,11 @@ export function ParkedTaskActions({
           </Button>
         )}
       </div>
+      {confirmingCancel ? (
+        <p className="text-xs text-(--color-muted)">
+          Úkol zůstane zaparkovaný jako zrušený majitelem a farma ho sama znovu nespustí.
+        </p>
+      ) : null}
       {error ? <FormMessage tone="error">{error}</FormMessage> : null}
     </div>
   );

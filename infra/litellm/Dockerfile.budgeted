@@ -1,0 +1,6 @@
+# Keep the deployed LiteLLM release; only add the budget guard's PostgreSQL driver.
+ARG LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm-database@sha256:af7ff0444278be40f7615764d1562ac557df6103cba052e886915a7e1e944c27
+FROM ${LITELLM_BASE_IMAGE}
+USER root
+RUN python -m ensurepip && python -m pip install --no-cache-dir asyncpg==0.30.0
+COPY farm_budget_guard.py /app/farm_budget_guard.py
