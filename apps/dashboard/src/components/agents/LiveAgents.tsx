@@ -19,6 +19,8 @@ const ROLE_LABEL: Record<AgentRole, string> = {
   manager: "Manažer",
   worker: "Worker",
   judge: "Soudce",
+  // Tester (QA) se dosud registroval jako 'judge' → ve velíně byl vidět Soudce.
+  tester: "Tester",
   media: "Média",
   publisher: "Publisher",
 };
@@ -27,6 +29,7 @@ const ROLE_GLYPH: Record<AgentRole, string> = {
   manager: "◆",
   worker: "▲",
   judge: "⚖",
+  tester: "✓",
   media: "◈",
   publisher: "➤",
 };

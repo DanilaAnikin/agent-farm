@@ -61,15 +61,30 @@ async function main() {
     console.log("→ pgmq fronty ok");
 
     // Seed farm_settings z env (idempotentní upsert).
+    //
+    // POZOR: zápis je `ON CONFLICT DO NOTHING`, takže se tím NIKDY nepřepíše
+    // hodnota, která už v produkci je. Výchozí hodnoty níž jsou proto jen
+    // startovní nastavení PRÁZDNÉ databáze — a musí odpovídat skutečnému
+    // provozu farmy, ne dávno neplatným číslům z prvního nasazení.
+    //
+    // Staré výchozí hodnoty (15 US$/den, 10 US$/den na média, 4 workeři) byly
+    // 25× nad skutečným rozpočtem farmy (0,60 US$/den, 20 US$/měsíc, 1 worker).
+    // Na čisté databázi tak vznikla farma, která směla utrácet mnohonásobek.
+    // Žádný strop se touhle změnou nezvyšuje — všechny jdou DOLŮ.
     const settings: Record<string, unknown> = {
       global_pause: false,
-      farm_daily_cap_usd: num("FARM_DAILY_CAP_USD", 15),
-      farm_daily_media_cap_usd: num("FARM_DAILY_MEDIA_CAP_USD", 10),
+      // Vypínač majitele (nadřazený všemu) a zdroj automatické pauzy. Bez seedu
+      // by klíče na čisté DB chyběly a dashboard by nevěděl, kdo pauzu drží.
+      owner_pause: false,
+      pause_source: null,
+      farm_daily_cap_usd: num("FARM_DAILY_CAP_USD", 0.6),
+      farm_daily_media_cap_usd: num("FARM_DAILY_MEDIA_CAP_USD", 0.2),
+      farm_monthly_cap_usd: num("FARM_MONTHLY_CAP_USD", 20),
       default_user_daily_cap_usd: num("DEFAULT_USER_DAILY_CAP_USD", 5),
       default_project_daily_cap_usd: num("DEFAULT_PROJECT_DAILY_CAP_USD", 3),
       default_wish_budget_usd: num("DEFAULT_WISH_BUDGET_USD", 20),
       per_attempt_budget_usd: num("PER_ATTEMPT_BUDGET_USD", 0.5),
-      max_workers_total: num("MAX_WORKERS_TOTAL", 4),
+      max_workers_total: num("MAX_WORKERS_TOTAL", 1),
       max_task_attempts: num("MAX_TASK_ATTEMPTS", 3),
       max_steps_per_attempt: num("MAX_STEPS_PER_ATTEMPT", 50),
       attempt_wall_clock_min: num("ATTEMPT_WALL_CLOCK_MIN", 30),

@@ -32,10 +32,22 @@ const WISH: Record<WishStatus, WishStatus[]> = {
   parked: ["active"], // znovu otevře jen člověk
 };
 
+/**
+ * Proč přibyl stav `merging`: úkol NENÍ hotový otevřením pull requestu, ale až
+ * potvrzeným sloučením. Dřív soudce u `repo_mode='existing'` otevřel PR a úkol
+ * rovnou označil za `done` — závislé úkoly se tím rozjely nad kódem, který
+ * v hlavní větvi vůbec nebyl, a když se PR nikdy nesloučil, farma si myslela,
+ * že práci doručila. `merging` je tedy skutečný čekací stav doručení: z něj se
+ * jde do `done` (merge potvrzen), zpět do `queued` (PR se musí opravit, worker
+ * pushne na tutéž větev) nebo do `parked` (doručení vzdáno, s park_reason).
+ * `judging → done` zůstává legální kvůli `repo_mode='new'`, kde se merguje
+ * rovnou do main a žádný PR se neotevírá.
+ */
 const TASK: Record<TaskStatus, TaskStatus[]> = {
   queued: ["running", "parked"],
   running: ["judging", "failed", "queued"], // queued = infra kill (bez inkrementu)
-  judging: ["done", "queued", "parked"], // reject → queued; 3. fail/escalate → parked
+  judging: ["merging", "done", "queued", "parked"], // merging = otevřen PR; reject → queued
+  merging: ["done", "queued", "parked"], // done = PR sloučen; queued = oprava na téže větvi
   failed: ["queued", "parked"],
   done: [],
   parked: ["queued"], // jen člověk

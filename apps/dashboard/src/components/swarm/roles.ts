@@ -39,6 +39,16 @@ export const ROLE_META: Record<AgentRole, RoleMeta> = {
     dot: "bg-[--color-violet]",
     text: "text-[--color-violet]",
   },
+  // Tester (QA) se dosud registroval jako 'judge', takže se ve velíně zobrazoval
+  // jako Soudce a nešlo poznat, kdo testuje.
+  tester: {
+    emoji: "🧪",
+    label: "Tester",
+    tile: "border-[--color-ok]/30 bg-[--color-ok-bg]/40",
+    chip: "bg-[--color-ok-bg] text-[--color-ok]",
+    dot: "bg-[--color-ok]",
+    text: "text-[--color-ok]",
+  },
   media: {
     emoji: "🎬",
     label: "Média",
@@ -58,7 +68,14 @@ export const ROLE_META: Record<AgentRole, RoleMeta> = {
 };
 
 // Pořadí rolí v legendě (workeři jako první — jádro roje).
-export const ROLE_ORDER: AgentRole[] = ["worker", "manager", "judge", "media", "publisher"];
+export const ROLE_ORDER: AgentRole[] = [
+  "worker",
+  "manager",
+  "judge",
+  "tester",
+  "media",
+  "publisher",
+];
 
 // Doba běhu → krátký český tvar ("3 min", "1 h 4 min").
 export function formatElapsed(seconds: number | null | undefined): string {

@@ -43,11 +43,32 @@ export const TASK_STATUSES = [
   "queued",
   "running",
   "judging",
+  // 'merging' = PR je otevřený a čeká na sloučení. Úkol NENÍ hotový otevřením PR,
+  // ale až potvrzeným mergem — dokud se nesloučí, kód v hlavní větvi není.
+  "merging",
   "done",
   "failed",
   "parked",
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/**
+ * Proč je úkol zaparkovaný (tasks.park_reason). Bez toho nešlo odlišit historickou
+ * frontu ('archived') od skutečné poruchy — panel pozornosti hlásil 201 „incidentů",
+ * které žádné incidenty nebyly.
+ */
+export const PARK_REASONS = [
+  "archived", // hromadná archivace staré fronty (backlog_task_archived)
+  "qa_false_fix", // QA ukázala, že oprava neplatí
+  "judge_exhausted", // vyčerpané pokusy u soudce
+  "dependency_cascade", // padla závislost, na které úkol stojí
+  "empty_diff", // pokus nic nezměnil
+  "infra", // infrastruktura (kontejner, git, síť)
+  "judging_orphan", // osiřelé posuzování po restartu
+  "owner_cancelled", // zrušil majitel z dashboardu
+  "unknown", // důvod se nepodařilo dohledat (backfill)
+] as const;
+export type ParkReason = (typeof PARK_REASONS)[number];
 
 export const ATTEMPT_STATUSES = [
   "running",
@@ -79,7 +100,9 @@ export type DecidedVia = (typeof DECIDED_VIA)[number];
 export const COST_SCOPES = ["task", "attempt", "media", "system"] as const;
 export type CostScope = (typeof COST_SCOPES)[number];
 
-export const AGENT_ROLES = ["manager", "worker", "judge", "media", "publisher"] as const;
+// 'tester' = QA agent (tester.ts). Dosud se registroval jako 'judge', takže se ve
+// velíně zobrazoval jako Soudce a nešlo poznat, kdo vlastně testuje.
+export const AGENT_ROLES = ["manager", "worker", "judge", "tester", "media", "publisher"] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
 export const AGENT_STATUSES = ["idle", "busy", "dead"] as const;

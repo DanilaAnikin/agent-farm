@@ -1,11 +1,13 @@
 // Mapování stavů na barevný tón (viz Badge) a české popisky.
 import type {
+  AgentRole,
   AgentStatus,
   ApprovalStatus,
   ApprovalType,
   AttemptStatus,
   JudgeVerdict,
   MediaStatus,
+  ParkReason,
   ProjectKind,
   ProjectStatus,
   PublishStatus,
@@ -60,9 +62,39 @@ export const TASK_STATUS_META: Record<TaskStatus, Meta> = {
   queued: { label: "Ve frontě", tone: "neutral" },
   running: { label: "Běží", tone: "info" },
   judging: { label: "Posuzuje se", tone: "violet" },
+  // Otevřený PR čekající na sloučení. Dokud se nesloučí, práce NENÍ doručená.
+  merging: { label: "Slučuje se", tone: "violet" },
   done: { label: "Hotovo", tone: "ok" },
   failed: { label: "Selhalo", tone: "danger" },
   parked: { label: "Zaparkováno", tone: "danger" },
+};
+
+/**
+ * Proč je úkol zaparkovaný. `archived` je ARCHIV, ne porucha — panel pozornosti
+ * ho nesmí hlásit a do postupu projektu se nepočítá.
+ */
+export const ARCHIVED_PARK_REASON = "archived" as const;
+
+export const PARK_REASON_META: Record<ParkReason, Meta> = {
+  archived: { label: "Archivováno (historická fronta)", tone: "neutral" },
+  qa_false_fix: { label: "Testy vyvrátily opravu", tone: "warn" },
+  judge_exhausted: { label: "Vyčerpané pokusy u soudce", tone: "danger" },
+  dependency_cascade: { label: "Padla závislost", tone: "warn" },
+  empty_diff: { label: "Žádná změna v kódu", tone: "warn" },
+  infra: { label: "Chyba infrastruktury", tone: "danger" },
+  judging_orphan: { label: "Osiřelé posuzování", tone: "warn" },
+  owner_cancelled: { label: "Zrušeno majitelem", tone: "neutral" },
+  unknown: { label: "Důvod neznámý", tone: "neutral" },
+};
+
+/** Popisky rolí agentů. 'tester' se dosud hlásil jako 'judge' → ve velíně byl Soudce. */
+export const AGENT_ROLE_META: Record<AgentRole, Meta & { emoji: string }> = {
+  manager: { label: "Manažer", tone: "info", emoji: "🧭" },
+  worker: { label: "Vývojář", tone: "ok", emoji: "⚙️" },
+  judge: { label: "Soudce", tone: "violet", emoji: "⚖️" },
+  tester: { label: "Tester", tone: "warn", emoji: "🧪" },
+  media: { label: "Média", tone: "warn", emoji: "🎬" },
+  publisher: { label: "Publikace", tone: "info", emoji: "📡" },
 };
 
 export const TASK_KIND_META: Record<TaskKind, Meta> = {
@@ -145,7 +177,52 @@ export const ADMIN_NAV_ITEM = { href: "/admin", label: "Administrace", icon: "�
 // Klíče farm_settings používané dashboardem.
 export const FARM_SETTING_KEYS = {
   globalPause: "global_pause",
+  // Vypínač majitele. Klíčový rozdíl: `global_pause` zapínají a vypínají hlídače,
+  // `owner_pause` výhradně člověk — a žádný hlídač se jí nesmí dotknout.
+  ownerPause: "owner_pause",
+  pauseSource: "pause_source",
+  budgetBlock: "budget_block",
   farmDailyCapUsd: "farm_daily_cap_usd",
   farmDailyMediaCapUsd: "farm_daily_media_cap_usd",
+  farmMonthlyCapUsd: "farm_monthly_cap_usd",
+  // Nastavení („kolik smí"), zapisuje admin.
   maxWorkersTotal: "max_workers_total",
+  // Skutečnost („kolik reálně je"), zapisuje běžící orchestrátor. Dashboard už
+  // nehádá kapacitu z vlastního env — to ukazovalo číslo, které nikdo nedodržoval.
+  runtimeMaxWorkersTotal: "runtime_max_workers_total",
+  githubStatus: "github_status",
+  offpeakWindowsUtc: "offpeak_windows_utc",
+  nextResumeAt: "next_resume_at",
+} as const;
+
+/** Stavy přání, která farma ještě řeší (otevřená práce). */
+export const OPEN_WISH_STATUSES = [
+  "new",
+  "specifying",
+  "awaiting_spec_approval",
+  "active",
+] as const satisfies readonly WishStatus[];
+
+/** Přání, na kterých se PRÁVĚ pracuje (podmnožina otevřených). */
+export const ACTIVE_WISH_STATUSES = [
+  "specifying",
+  "awaiting_spec_approval",
+  "active",
+] as const satisfies readonly WishStatus[];
+
+/**
+ * GLOSÁŘ: anglické pojmy, které se v UI objevovat NESMÍ, a jejich český překlad.
+ * Není to jen slovníček — je to kontrolní seznam. Když se v dashboardu objeví
+ * levý sloupec, je to chyba.
+ */
+export const GLOSAR = {
+  Throughput: "Dokončeno",
+  Ledger: "Pohyby",
+  Scope: "Druh",
+  Provider: "Poskytovatel",
+  "kill switch": "Nouzové zastavení farmy",
+  heartbeat: "poslední signál",
+  "Push to Production": "Nasadit do produkce",
+  "mission control": "Velín",
+  swarm: "roj",
 } as const;
