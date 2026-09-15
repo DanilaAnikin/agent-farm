@@ -57,11 +57,11 @@ export function LiveAgents({
     if (variant === "strip") {
       // Na velínu jen jeden řádek — velká prázdná karta nic neříká a zabírá místo.
       return (
-        <p className="flex items-center gap-2 text-sm text-[--color-muted]">
-          <Bot className="size-4 shrink-0 text-[--color-faint]" />
+        <p className="flex items-center gap-2 text-sm text-(--color-muted)">
+          <Bot className="size-4 shrink-0 text-(--color-faint)" />
           <span>
             {emptyTitle}
-            {emptyHint ? <span className="text-[--color-faint]"> · {emptyHint}</span> : null}
+            {emptyHint ? <span className="text-(--color-faint)"> · {emptyHint}</span> : null}
           </span>
         </p>
       );
@@ -79,14 +79,14 @@ export function LiveAgents({
           return (
             <div
               key={a.id}
-              className="flex min-w-56 shrink-0 items-center gap-3 rounded-xl border border-[--color-border] bg-[--color-surface-2] px-3 py-2.5"
+              className="flex min-w-56 shrink-0 items-center gap-3 rounded-xl border border-(--color-border) bg-(--color-surface-2) px-3 py-2.5"
             >
               <span
                 className={
                   "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm " +
                   (busy
-                    ? "bg-[--color-brand-soft] text-[--color-brand] animate-farm-pulse"
-                    : "bg-[--color-surface] text-[--color-muted]")
+                    ? "bg-(--color-brand-soft) text-(--color-brand) animate-farm-pulse"
+                    : "bg-(--color-surface) text-(--color-muted)")
                 }
               >
                 {roleGlyph(a.role)}
@@ -95,10 +95,10 @@ export function LiveAgents({
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{roleLabel(a.role)}</span>
                   {a.projectName ? (
-                    <span className="truncate text-xs text-[--color-faint]">{a.projectName}</span>
+                    <span className="truncate text-xs text-(--color-faint)">{a.projectName}</span>
                   ) : null}
                 </div>
-                <div className="truncate text-xs text-[--color-muted]">
+                <div className="truncate text-xs text-(--color-muted)">
                   {busy && a.currentTaskTitle ? a.currentTaskTitle : a.model ? modelLabel(a.model) : roleLabel(a.role)}
                 </div>
               </div>
@@ -116,15 +116,15 @@ export function LiveAgents({
         return (
           <li
             key={a.id}
-            className="flex items-center justify-between gap-3 rounded-lg border border-[--color-border] px-3 py-2"
+            className="flex items-center justify-between gap-3 rounded-lg border border-(--color-border) px-3 py-2"
           >
             <div className="flex min-w-0 items-center gap-3">
               <span
                 className={
                   "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs " +
                   (busy
-                    ? "bg-[--color-brand-soft] text-[--color-brand] animate-farm-pulse"
-                    : "bg-[--color-surface-2] text-[--color-muted]")
+                    ? "bg-(--color-brand-soft) text-(--color-brand) animate-farm-pulse"
+                    : "bg-(--color-surface-2) text-(--color-muted)")
                 }
               >
                 {roleGlyph(a.role)}
@@ -132,9 +132,9 @@ export function LiveAgents({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{roleLabel(a.role)}</span>
-                  {a.model ? <span className="text-xs text-[--color-faint]">{modelLabel(a.model)}</span> : null}
+                  {a.model ? <span className="text-xs text-(--color-faint)">{modelLabel(a.model)}</span> : null}
                 </div>
-                <div className="truncate text-xs text-[--color-muted]" suppressHydrationWarning>
+                <div className="truncate text-xs text-(--color-muted)" suppressHydrationWarning>
                   {busy && a.currentTaskTitle
                     ? a.currentTaskTitle
                     : `poslední signál ${formatRelative(a.lastHeartbeat)}`}

@@ -76,18 +76,18 @@ export function FleetGrid({
             {/* Role + model */}
             <div className="min-w-0">
               <div className={cn("truncate text-sm font-semibold", meta.text)}>{meta.label}</div>
-              <div className="truncate text-[11px] text-[--color-muted]">{a.model ?? "—"}</div>
+              <div className="truncate text-[11px] text-(--color-muted)">{a.model ?? "—"}</div>
             </div>
 
             {/* Projekt */}
             {a.projectName ? (
-              <div className="truncate text-[11px] font-medium text-[--color-faint]">{a.projectName}</div>
+              <div className="truncate text-[11px] font-medium text-(--color-faint)">{a.projectName}</div>
             ) : null}
 
             {/* Aktuální úkol */}
-            <div className="line-clamp-2 min-h-[2.25rem] text-xs text-[--color-fg]/90">
+            <div className="line-clamp-2 min-h-[2.25rem] text-xs text-(--color-fg)/90">
               {a.href && a.taskTitle ? (
-                <Link href={a.href} className="hover:text-[--color-brand]">
+                <Link href={a.href} className="hover:text-(--color-brand)">
                   {a.taskTitle}
                 </Link>
               ) : (
@@ -96,7 +96,7 @@ export function FleetGrid({
             </div>
 
             {/* Doba běhu s pulzem */}
-            <div className="mt-auto flex items-center gap-1.5 pt-1 text-[11px] tabular-nums text-[--color-muted]">
+            <div className="mt-auto flex items-center gap-1.5 pt-1 text-[11px] tabular-nums text-(--color-muted)">
               <span className={cn("h-1.5 w-1.5 rounded-full animate-farm-pulse", meta.dot)} />
               běží {formatElapsed(a.runningSeconds)}
             </div>

@@ -38,22 +38,22 @@ function stavUkolu(task: TaskRow): { label: string; tone: "ok" | "warn" | "dange
 
 function Pokusy({ attempts, reviewsByAttempt }: Pick<TaskTreeData, "attempts" | "reviewsByAttempt">) {
   return (
-    <div className="mt-3 space-y-2 border-t border-[--color-border] pt-3">
+    <div className="mt-3 space-y-2 border-t border-(--color-border) pt-3">
       {attempts.map((a) => {
         const review = reviewsByAttempt.get(a.id);
         const diff = a.diff_stat as { additions?: number; deletions?: number; files?: number } | null;
         return (
-          <div key={a.id} className="rounded-md bg-[--color-surface-2] p-2.5 text-xs">
+          <div key={a.id} className="rounded-md bg-(--color-surface-2) p-2.5 text-xs">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <StatusBadge meta={ATTEMPT_STATUS_META[a.status]} />
-                {a.model ? <span className="text-[--color-faint]">{modelLabel(a.model)}</span> : null}
+                {a.model ? <span className="text-(--color-faint)">{modelLabel(a.model)}</span> : null}
               </div>
-              <span className="text-[--color-faint]" suppressHydrationWarning>
+              <span className="text-(--color-faint)" suppressHydrationWarning>
                 {formatRelative(a.started_at)}
               </span>
             </div>
-            <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[--color-muted]">
+            <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-(--color-muted)">
               <span>{countLabel(a.steps_used, KROK)}</span>
               <span>{formatDuration(a.wall_ms ? a.wall_ms / 1000 : null)}</span>
               <span>{formatUsd(a.cost_usd)}</span>
@@ -64,16 +64,16 @@ function Pokusy({ attempts, reviewsByAttempt }: Pick<TaskTreeData, "attempts" | 
               ) : null}
             </div>
             {a.output_summary ? (
-              <p className="mt-1.5 whitespace-pre-wrap text-[--color-fg]">{a.output_summary}</p>
+              <p className="mt-1.5 whitespace-pre-wrap text-(--color-fg)">{a.output_summary}</p>
             ) : null}
             {review ? (
-              <div className="mt-2 border-t border-[--color-border] pt-2">
+              <div className="mt-2 border-t border-(--color-border) pt-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-[--color-faint]">Kontrola:</span>
+                  <span className="text-(--color-faint)">Kontrola:</span>
                   <StatusBadge meta={JUDGE_VERDICT_META[review.verdict]} />
                 </div>
                 {review.reasons ? (
-                  <p className="mt-1 whitespace-pre-wrap text-[--color-muted]">{review.reasons}</p>
+                  <p className="mt-1 whitespace-pre-wrap text-(--color-muted)">{review.reasons}</p>
                 ) : null}
               </div>
             ) : null}
@@ -107,7 +107,7 @@ export function TaskTree({
           <li
             key={task.id}
             className={
-              "rounded-lg border border-[--color-border] p-3" + (archiv ? " bg-[--color-surface-1]/40 opacity-80" : "")
+              "rounded-lg border border-(--color-border) p-3" + (archiv ? " bg-(--color-surface-1)/40 opacity-80" : "")
             }
           >
             <div className="flex items-start justify-between gap-3">
@@ -116,8 +116,8 @@ export function TaskTree({
                   <StatusBadge meta={TASK_KIND_META[task.kind]} />
                   <span className="truncate font-medium">{task.title}</span>
                 </div>
-                <p className="mt-1 text-xs text-[--color-muted]">
-                  <span className="text-[--color-faint]">Podmínka: </span>
+                <p className="mt-1 text-xs text-(--color-muted)">
+                  <span className="text-(--color-faint)">Podmínka: </span>
                   {task.done_condition}
                 </p>
               </div>
@@ -125,7 +125,7 @@ export function TaskTree({
                 <Badge tone={stav.tone} dot>
                   {stav.label}
                 </Badge>
-                <span className="text-xs text-[--color-faint]">
+                <span className="text-xs text-(--color-faint)">
                   {task.attempts_count}/{task.max_attempts} pokusů
                 </span>
               </div>
@@ -134,7 +134,7 @@ export function TaskTree({
             {attempts.length > 0 ? (
               archiv ? (
                 <details className="mt-2">
-                  <summary className="cursor-pointer text-xs text-[--color-muted] hover:text-[--color-fg]">
+                  <summary className="cursor-pointer text-xs text-(--color-muted) hover:text-(--color-fg)">
                     Zobrazit původní stav ({countLabel(attempts.length, ["pokus", "pokusy", "pokusů"])})
                   </summary>
                   <Pokusy attempts={attempts} reviewsByAttempt={reviewsByAttempt} />
@@ -146,7 +146,7 @@ export function TaskTree({
 
             {rucniZasah ? (
               <details className="mt-3">
-                <summary className="cursor-pointer text-xs text-[--color-muted] hover:text-[--color-fg]">
+                <summary className="cursor-pointer text-xs text-(--color-muted) hover:text-(--color-fg)">
                   Pokročilé (ruční zásah)
                 </summary>
                 <ParkedTaskActions taskId={task.id} projectId={projectId} wishId={wishId} />

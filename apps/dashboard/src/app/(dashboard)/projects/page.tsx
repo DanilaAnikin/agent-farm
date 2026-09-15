@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { formatUsd } from "@/lib/format";
 import { countLabel, plural, TVARY } from "@/lib/plural";
 import { OPEN_WISH_STATUSES } from "@/lib/constants";
-import { eventLabel } from "@/lib/event-labels";
+import { eventLabel, NOISE_EVENT_TYPES } from "@/lib/event-labels";
 import { RPC, type FarmAttention, type ProjectLastEventRow } from "@/lib/rpc";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -26,7 +26,7 @@ import { farmBudgetDefaults } from "@/app/actions/project-defaults";
 import type { AgentRow, ProjectRow, WishRow } from "@/lib/types";
 
 // Titulek odpovídá položce navigace (NAV_ITEMS) — na mobilu se podle něj orientuje.
-export const metadata = { title: "Projekty — Perennial" };
+export const metadata = { title: "Projekty" };
 
 const PRACUJE = ["pracuje", "pracují", "pracuje"] as const;
 const BEZICI_UKOL = new Set(["running", "judging", "merging"]);
@@ -61,7 +61,11 @@ export default async function CommandCenterPage() {
       .neq("status", "dead")
       .order("last_heartbeat", { ascending: false })
       .limit(200),
-    supabase.rpc(RPC.projectLastEvent),
+    // Šumové typy posílá dashboard (jeden zdroj: event-labels). DB bez migrace 0017 → původní varianta.
+    (async () => {
+      const s = await supabase.rpc(RPC.projectLastEvent, { p_exclude: NOISE_EVENT_TYPES });
+      return s.error ? await supabase.rpc(RPC.projectLastEvent) : s;
+    })(),
     supabase.rpc(RPC.farmAttention),
     supabase.from("connections").select("kind, status"),
     supabase.from("events").select("id", { count: "exact", head: true }).eq("type", "task_done").limit(1),
@@ -205,27 +209,27 @@ export default async function CommandCenterPage() {
             {busy.length > 0 ? <StatusPulse className="h-1.5 w-1.5" /> : null}
             {busy.length > 0 ? "Živě · Projekty" : "Projekty"}
           </div>
-          <h1 className="t-title mt-2 text-[--color-fg]">{nadpis}</h1>
+          <h1 className="t-title mt-2 text-(--color-fg)">{nadpis}</h1>
         </div>
         <div className="flex items-center gap-6">
           <div>
             <div className="t-eyebrow">Aktivní přání</div>
-            <div className="t-metric mt-1 text-2xl text-[--color-fg]">
+            <div className="t-metric mt-1 text-2xl text-(--color-fg)">
               {overview.wishRollupError ? "—" : prehledPrani.openActive}
             </div>
             <div className="t-meta mt-0.5">
               {overview.wishRollupError ? "nepodařilo se načíst" : wishBreakdownLine(prehledPrani)}
             </div>
           </div>
-          <div className="h-9 w-px bg-[--color-border-subtle]" />
+          <div className="h-9 w-px bg-(--color-border-subtle)" />
           <div>
             <div className="t-eyebrow" title="Denní strop se počítá v UTC (02:00–02:00 Europe/Prague v létě).">
               Dnes (UTC)
             </div>
-            <div className="t-metric mt-1 text-2xl text-[--color-fg]">
+            <div className="t-metric mt-1 text-2xl text-(--color-fg)">
               {overview.todaySpend === null ? "—" : formatUsd(overview.todaySpend)}
             </div>
-            <div className="t-meta mt-0.5">strop farmy {formatUsd(overview.caps.dailyUsd, "cap")}</div>
+            <div className="t-meta mt-0.5">strop farmy {formatUsd(overview.caps.dailyUsd, "cap")} · {overview.spendSource === "guard" ? "započteno hlídačem" : "z pohybů"}</div>
           </div>
         </div>
       </div>
@@ -243,6 +247,7 @@ export default async function CommandCenterPage() {
           monthlyCap={overview.caps.monthlyUsd}
           monthLabel={overview.monthLabel}
           spendError={overview.spendError}
+          spendSourceLabel={overview.spendSourceLabel}
         />
       </div>
 
@@ -259,7 +264,7 @@ export default async function CommandCenterPage() {
       <FirstRunChecklist hasGithub={hasGithub} hasCaps={hasCaps} farmHasRun={farmHasRun} />
 
       {projectsRes.error ? (
-        <p role="alert" className="mt-4 text-sm text-[--color-warn]">
+        <p role="alert" className="mt-4 text-sm text-(--color-warn)">
           Projekty se nepodařilo načíst ({projectsRes.error.message}).
         </p>
       ) : null}
@@ -281,8 +286,8 @@ export default async function CommandCenterPage() {
               description="Živý registr agentů farmy."
               action={
                 busy.length > 0 ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-[--color-brand]">
-                    <span className="h-2 w-2 rounded-full bg-[--color-brand] animate-farm-pulse" />
+                  <span className="inline-flex items-center gap-1.5 text-xs text-(--color-brand)">
+                    <span className="h-2 w-2 rounded-full bg-(--color-brand) animate-farm-pulse" />
                     živě
                   </span>
                 ) : null
@@ -290,7 +295,7 @@ export default async function CommandCenterPage() {
             />
             <CardBody>
               {agentsRes.error ? (
-                <p role="alert" className="text-xs text-[--color-warn]">
+                <p role="alert" className="text-xs text-(--color-warn)">
                   Agenty se nepodařilo načíst ({agentsRes.error.message}).
                 </p>
               ) : (
@@ -310,13 +315,13 @@ export default async function CommandCenterPage() {
           {/* Přehled projektů */}
           <div>
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[--color-muted]">
-                Projekty <span className="text-[--color-faint]">({projects.length})</span>
+              <h2 className="text-sm font-semibold text-(--color-muted)">
+                Projekty <span className="text-(--color-faint)">({projects.length})</span>
               </h2>
               <NewProjectDialog defaults={newProjectDefaults} />
             </div>
             {tasksRes.error ? (
-              <p role="alert" className="mb-3 text-xs text-[--color-warn]">
+              <p role="alert" className="mb-3 text-xs text-(--color-warn)">
                 Postup přání se nepodařilo načíst ({tasksRes.error.message}).
               </p>
             ) : null}

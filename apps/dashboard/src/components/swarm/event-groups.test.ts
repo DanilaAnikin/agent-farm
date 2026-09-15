@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { errorGroups, groupEvents, type FeedEvent } from "./event-groups";
+import { budgetScopeLabel, errorGroups, groupEvents, humanEventText, type FeedEvent } from "./event-groups";
 
 let seq = 0;
 function ev(p: Partial<FeedEvent>): FeedEvent {
@@ -83,4 +83,58 @@ test("poslední chyby: seskupené podle typu, nejčerstvější první, jen warn
   assert.equal(g[0]!.type, "deploy_failed");
   assert.equal(g[0]!.count, 2);
   assert.equal(g[0]!.lastMessage, "compose up selhal");
+});
+
+test("lidský text: budget_hold bez syrových kódů a s pravdivým pokračováním", () => {
+  const zprava = "Projekt v budget_hold — překročen strop: project.";
+  const label = "Projekt pozastaven rozpočtem";
+  assert.equal(
+    humanEventText({ type: "budget_hold", message: zprava, scope: "project" }, label),
+    "Další pokus by překročil denní strop projektu. Projekt pokračuje sám po přetočení dne o půlnoci UTC.",
+  );
+  // Bez data.scope se kód vyčte ze zprávy; měsíční strop se o půlnoci nepřetočí.
+  assert.equal(
+    humanEventText({ type: "budget_hold", message: "Projekt v budget_hold — překročen strop: farm_month." }, label),
+    "Další pokus by překročil měsíční strop farmy. Projekt čeká, až to rozpočet dovolí.",
+  );
+  const neznamy = humanEventText({ type: "budget_hold", message: "Projekt v budget_hold — překročen strop: xyz." }, label);
+  assert.doesNotMatch(neznamy, /budget_hold|xyz/);
+  assert.equal(budgetScopeLabel("user"), "denní strop uživatele");
+  assert.equal(budgetScopeLabel("nesmysl"), null);
+});
+
+test("lidský text: bez zdvojení popisku a interních prefixů", () => {
+  assert.equal(
+    humanEventText(
+      { type: "attempt_budget_deferred", message: "Práce čeká na rozpočet; rozpracované změny jsou uložené pro pokračování." },
+      "Pokus odložen kvůli rozpočtu",
+    ),
+    "Rozpracované změny jsou uložené pro pokračování.",
+  );
+  assert.equal(
+    humanEventText({ type: "orchestrator_start", message: "Orchestrátor nastartoval." }, "Orchestrátor nastartoval"),
+    "",
+  );
+  assert.equal(humanEventText({ type: "orchestrator_stop", message: "Orchestrátor se vypíná." }, "Orchestrátor skončil"), "");
+  assert.equal(
+    humanEventText({ type: "attempt_started", message: "Worker start (worker-build): Audit SEO" }, "Pokus začal"),
+    "Audit SEO",
+  );
+  assert.equal(
+    humanEventText({ type: "farm_supervisor", message: "Supervisor: 4 návrhů napříč projekty." }, "Dohled nad farmou"),
+    "4 návrhy napříč projekty.",
+  );
+  assert.equal(
+    humanEventText({ type: "pr_opened", message: "PR otevřen (existující repo): https://github.com/x/y/pull/37" }, "Otevřen pull request"),
+    "",
+  );
+});
+
+test("skupina a poslední chyby používají lidský text; prázdný text = jen popisek", () => {
+  const g = groupEvents([ev({ type: "orchestrator_start", message: "Orchestrátor nastartoval.", project_id: null })]);
+  assert.equal(g[0]!.text, g[0]!.label);
+  const chyby = errorGroups([
+    ev({ type: "budget_hold", level: "warn", scope: "project", message: "Projekt v budget_hold — překročen strop: project." }),
+  ]);
+  assert.match(chyby[0]!.lastMessage ?? "", /^Další pokus by překročil denní strop projektu/);
 });

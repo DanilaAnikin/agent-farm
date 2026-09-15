@@ -18,13 +18,15 @@ import {
   parseOffpeakWindows,
   type UtcWindow,
 } from "./time";
-import { formatTimeShort } from "./format";
+import { formatAtTime, formatTimeShort } from "./format";
+import { countLabel, plural, TVARY } from "./plural";
 
 /** Zdroj automatické pauzy tak, jak ho zapisuje orchestrátor. */
 export type PauseSource = "owner" | "offpeak" | "credit" | "month" | null;
 
 export type FarmStateCode =
   | "running"
+  | "budget_wait"
   | "owner"
   | "budget"
   | "offpeak_expected"
@@ -41,6 +43,9 @@ export interface FarmState {
   tone: FarmTone;
   /** Kdy se farma sama rozjede (ISO), pokud to jde určit. */
   nextResumeAt: string | null;
+  /** Jen `budget_wait`: kolik projektů čeká na rozpočet a kolik úkolů mají ve frontě. */
+  heldProjects?: number;
+  heldQueued?: number;
 }
 
 /** Syrové hodnoty z `farm_settings` (jsonb), tak jak přijdou z RPC nebo z REST. */
@@ -53,6 +58,14 @@ export interface FarmStateInput {
   guard_ready?: boolean | null;
   next_resume_at?: unknown;
   offpeak_windows_utc?: unknown;
+  /** `farm_run_state()` od migrace 0017: projekty ve stavu `budget_hold`. */
+  budget_hold_projects?: unknown;
+  /** Čekající úkoly v projektech `budget_hold`. */
+  budget_hold_queued?: unknown;
+  /** Nejstarší přechod do `budget_hold` (projects.updated_at), ISO. */
+  budget_hold_since?: unknown;
+  /** Práce v AKTIVNÍCH projektech: fronta, běh, soudce, slučování, specifikace, pracující agenti. */
+  active_work?: unknown;
 }
 
 /**
@@ -146,6 +159,23 @@ export function isBudgetBlocked(raw: unknown): boolean {
   return true;
 }
 
+/** Nezáporný celý počet z jsonb; chybějící nebo nesmyslná hodnota → null („nevím", ne nula). */
+function pocetNeboNull(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+/**
+ * Nejbližší půlnoc UTC po `now` — tehdy se přetočí denní strop a smyčka
+ * budget-hold vrátí projekty do práce (stejně jako `nextResetUtc` v @farm/core).
+ */
+export function nextUtcMidnight(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
+}
+
+const CEKA = ["čeká", "čekají", "čeká"] as const;
+
 /** Text důvodu z `budget_block`, když je to řetězec. */
 function budgetBlockDuvod(raw: unknown): string | null {
   return typeof raw === "string" && raw !== "" && raw !== "false" ? raw : null;
@@ -160,7 +190,8 @@ function budgetBlockDuvod(raw: unknown): string | null {
  *   3. offpeak ve špičce— stojí správně, sama se rozjede v levném okně.
  *   4. offpeak mimo špičku — měla se pustit a nepustila = PORUCHA.
  *   5. pauza bez zdroje — nikdo se k ní nehlásí, taky porucha.
- *   6. běží.
+ *   6. běží, ale veškerá práce stojí v projektech `budget_hold` → čeká na rozpočet.
+ *   7. běží.
  */
 export function farmState(input: FarmStateInput, now: Date = new Date()): FarmState {
   const okna: UtcWindow[] =
@@ -201,6 +232,32 @@ export function farmState(input: FarmStateInput, now: Date = new Date()): FarmSt
 
   const globalni = Boolean(input.global_pause);
   if (!globalni) {
+    // 6) Farma běží, ale v aktivních projektech nic není a projekty s prací čekají
+    // v `budget_hold` na přetočení dne. Hlavička dřív psala „Farma pracuje" a velín
+    // „nemá práci — sama si ji doplní", přestože fronta čekala na rozpočet.
+    const drzene = pocetNeboNull(input.budget_hold_projects);
+    const praceAktivnich = pocetNeboNull(input.active_work);
+    if (drzene !== null && drzene > 0 && praceAktivnich === 0) {
+      const fronta = pocetNeboNull(input.budget_hold_queued) ?? 0;
+      const od = isoNeboNull(input.budget_hold_since);
+      const pristiDen = nextUtcMidnight(now);
+      // Projekt drží rozpočet už přes půlnoc UTC → smyčka ho vrátí během pár minut.
+      const denSePretocil = od !== null && nextUtcMidnight(new Date(od)).getTime() <= now.getTime();
+      const kdo = `${countLabel(drzene, TVARY.projekt)} ${plural(drzene, CEKA)}`;
+      const veFronte = fronta > 0 ? ` (ve frontě ${countLabel(fronta, TVARY.ukol)})` : "";
+      return {
+        code: "budget_wait",
+        paused: false,
+        title: "Farma čeká na rozpočet",
+        detail: denSePretocil
+          ? `${kdo} na obnovení rozpočtu${veFronte}. Rozpočtový den se už přetočil, farma je vrátí do práce během několika minut.`
+          : `${kdo} na nový rozpočtový den${veFronte}. Farma pokračuje sama ${formatAtTime(pristiDen)} (Europe/Prague), po přetočení denního stropu o půlnoci UTC.`,
+        tone: "info",
+        nextResumeAt: denSePretocil ? null : pristiDen.toISOString(),
+        heldProjects: drzene,
+        heldQueued: fronta,
+      };
+    }
     return {
       code: "running",
       paused: false,

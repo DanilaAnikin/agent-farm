@@ -16,6 +16,7 @@ import {
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { formatDayShort, formatPercent, formatUsd, formatUsdAxis } from "@/lib/format";
 import type { NamedValue } from "@/lib/admin-guards";
+import { splitMinorSlices } from "@/lib/chart-slices";
 
 export type { NamedValue };
 
@@ -46,12 +47,17 @@ function denTooltip(label: unknown): string {
   return formatDayShort(typeof label === "string" ? label : String(label ?? ""));
 }
 
-/** Místo grafu s jedinou položkou stačí věta — koláč o jedné výseči nic neřekne. */
-function JedinaPolozka({ items }: { items: NamedValue[] }) {
-  if (items.length === 0) return <p className="text-sm text-[--color-muted]">Zatím žádná útrata.</p>;
+/**
+ * Místo grafu s jedinou položkou stačí věta — koláč o jedné výseči nic neřekne.
+ * `total` = celek včetně drobných položek mimo graf; bez něj je položka celek.
+ */
+function JedinaPolozka({ items, total }: { items: NamedValue[]; total?: number }) {
+  if (items.length === 0) return <p className="text-sm text-(--color-muted)">Zatím žádná útrata.</p>;
+  const podil = total && total > 0 ? Math.min(1, items[0]!.value / total) : 1;
   return (
-    <p className="text-sm text-[--color-fg]">
-      Veškerá útrata: <span className="font-medium">{items[0]!.name}</span> ({formatPercent(1)})
+    <p className="text-sm text-(--color-fg)">
+      {podil >= 0.9995 ? "Veškerá útrata" : "Většina útraty"}: <span className="font-medium">{items[0]!.name}</span> (
+      {formatPercent(podil)})
     </p>
   );
 }
@@ -68,7 +74,8 @@ export function CostCharts({
   byPoskytovatel: NamedValue[];
 }) {
   const projekty = byProject.slice(0, 8);
-  const modely = byModel.slice(0, 8);
+  const rozpadModelu = splitMinorSlices(byModel);
+  const modely = rozpadModelu.major.slice(0, 8);
 
   return (
     <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
@@ -150,7 +157,7 @@ export function CostCharts({
         <CardHeader title="Podle modelu" description="Aliasy okruhů (worker, manager…) přeložené na skutečný model." />
         <CardBody>
           {modely.length <= 1 ? (
-            <JedinaPolozka items={modely} />
+            <JedinaPolozka items={modely} total={rozpadModelu.total} />
           ) : (
             <div className="h-56 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -164,6 +171,12 @@ export function CostCharts({
               </ResponsiveContainer>
             </div>
           )}
+          {rozpadModelu.minor.length > 0 ? (
+            <p className="t-meta mt-2">
+              Pod 5 % útraty, v grafu vynecháno:{" "}
+              {rozpadModelu.minor.map((m) => `${m.name} ${formatUsd(m.value)}`).join(", ")}.
+            </p>
+          ) : null}
         </CardBody>
       </Card>
     </div>

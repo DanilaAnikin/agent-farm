@@ -76,7 +76,7 @@ export function ProjectMessageBox({
 
   return (
     <div className="space-y-2.5">
-      <div className="inline-flex rounded-lg border border-[--color-border] bg-[--color-surface-2] p-0.5 text-xs">
+      <div className="inline-flex rounded-lg border border-(--color-border) bg-(--color-surface-2) p-0.5 text-xs">
         {(
           [
             { id: "wish", label: "Úkol" },
@@ -94,8 +94,8 @@ export function ProjectMessageBox({
             className={cn(
               "rounded-md px-2.5 py-1 font-medium transition-colors",
               mode === t.id
-                ? "bg-[--color-surface] text-[--color-fg]"
-                : "text-[--color-muted] hover:text-[--color-fg]",
+                ? "bg-(--color-surface) text-(--color-fg)"
+                : "text-(--color-muted) hover:text-(--color-fg)",
             )}
           >
             {t.label}
@@ -104,7 +104,7 @@ export function ProjectMessageBox({
       </div>
 
       {mode === "wish" && projectPaused ? (
-        <p className="text-xs text-[--color-warn]">Projekt je pozastavený — přání počká.</p>
+        <p className="text-xs text-(--color-warn)">Projekt je pozastavený — přání počká.</p>
       ) : null}
 
       {mode === "wish" ? (
@@ -133,13 +133,13 @@ export function ProjectMessageBox({
         <Button size="sm" loading={pending} onClick={send}>
           {mode === "wish" ? "Poslat farmě" : "Uložit poznámku"}
         </Button>
-        {flash ? <span className="text-xs text-[--color-ok]">{flash}</span> : null}
+        {flash ? <span className="text-xs text-(--color-ok)">{flash}</span> : null}
         {odkaz ? (
-          <Link href={odkaz} className="text-xs text-[--color-brand] hover:underline">
+          <Link href={odkaz} className="text-xs text-(--color-brand) hover:underline">
             Otevřít přání
           </Link>
         ) : null}
-        {error ? <span className="text-xs text-[--color-danger]">{error}</span> : null}
+        {error ? <span className="text-xs text-(--color-danger)">{error}</span> : null}
       </div>
     </div>
   );

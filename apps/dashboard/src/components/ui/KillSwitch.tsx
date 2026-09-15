@@ -89,15 +89,15 @@ export function KillSwitch({
           className={cn(
             "ring-focus relative flex h-28 w-28 items-center justify-center rounded-full border-4 text-center text-sm font-bold uppercase tracking-wide transition-all disabled:opacity-60",
             paused
-              ? "border-[--color-ok] bg-[--color-ok-bg] text-[--color-ok] hover:brightness-125"
-              : "border-[--color-danger] bg-[--color-danger-bg] text-[--color-danger] hover:brightness-125",
+              ? "border-(--color-ok) bg-(--color-ok-bg) text-(--color-ok) hover:brightness-125"
+              : "border-(--color-danger) bg-(--color-danger-bg) text-(--color-danger) hover:brightness-125",
           )}
         >
           <span
             aria-hidden
             className={cn(
               "absolute inset-2 rounded-full border-2 border-dashed opacity-30",
-              paused ? "border-[--color-ok]" : "border-[--color-danger]",
+              paused ? "border-(--color-ok)" : "border-(--color-danger)",
             )}
           />
           {paused ? "▶ Uvolnit" : "⏸ Zastavit vše"}
@@ -105,40 +105,41 @@ export function KillSwitch({
 
         <div className="flex flex-col items-center gap-1.5 text-center">
           <div className="flex items-center gap-2 text-sm">
-            <span className="text-[--color-muted]">Ruční vypínač</span>
+            {/* „Vypnuto" se četlo i jako „farma vypnutá" — štítek popisuje PAUZU, ne farmu. */}
+            <span className="text-(--color-muted)">Ruční pauza</span>
             <Badge tone={paused ? "warn" : "neutral"} dot>
-              {paused ? "Zapnuto" : "Vypnuto"}
+              {paused ? "aktivní — farma stojí" : "neaktivní"}
             </Badge>
           </div>
-          <p className="max-w-xs text-xs text-[--color-muted]">{paused ? labelPaused : labelActive}</p>
+          <p className="max-w-xs text-xs text-(--color-muted)">{paused ? labelPaused : labelActive}</p>
         </div>
       </div>
 
       {/* (b) automatická pauza — jen informace, nic se tu nepřepíná */}
       <div
         className={cn(
-          "w-full max-w-sm rounded-[--radius-sm] border px-3 py-2 text-xs",
+          "w-full max-w-sm rounded-(--radius-sm) border px-3 py-2 text-xs",
           automatickaPauza
-            ? "border-[--color-info]/30 bg-[--color-info-bg] text-[--color-fg]"
-            : "border-[--color-border-subtle] text-[--color-muted]",
+            ? "border-(--color-info)/30 bg-(--color-info-bg) text-(--color-fg)"
+            : "border-(--color-border-subtle) text-(--color-muted)",
         )}
       >
         <span className="font-medium">Automatická pauza: </span>
         {automatickaPauza ? (autoDetail ?? detail ?? "farmu drží hlídač — rozjede se sama.") : "žádná."}
         {automatickaPauza ? (
-          <span className="mt-1 block text-[--color-muted]">
+          <span className="mt-1 block text-(--color-muted)">
             Tlačítko „Uvolnit“ ji nepřebije — farma se rozjede sama, až ji hlídač pustí.
           </span>
         ) : null}
       </div>
 
       {notice ? (
-        <div role="status" className="max-w-sm text-center text-xs text-[--color-info]">
+        <div role="status" className="max-w-sm text-center text-xs text-(--color-info)">
           {notice}
         </div>
       ) : null}
       {error ? (
-        <div role="alert" className="max-w-sm text-center text-xs text-[--color-danger]">
+        <div role="alert" className="max-w-sm text-center text-xs text-(--color-danger)">
           {error}
         </div>
       ) : null}

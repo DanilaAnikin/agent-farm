@@ -51,23 +51,23 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex min-h-screen">
       {/* Postranní panel */}
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-[--color-border-subtle] bg-[--color-surface-1]/60 md:flex">
-        <Link href="/projects" className="flex h-14 items-center gap-2.5 border-b border-[--color-border-subtle] px-4">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-(--color-border-subtle) bg-(--color-surface-1)/60 md:flex">
+        <Link href="/projects" className="flex h-14 items-center gap-2.5 border-b border-(--color-border-subtle) px-4">
           <LogoMark size={26} />
-          <span className="text-[1.05rem] font-semibold tracking-tight text-[--color-fg]">Perennial</span>
+          <span className="text-[1.05rem] font-semibold tracking-tight text-(--color-fg)">Perennial</span>
         </Link>
         <Sidebar isAdmin={isAdmin} ariaLabel="Hlavní navigace" />
-        <div className="t-micro mt-auto p-3 text-[--color-faint]">Perennial v0.1</div>
+        <div className="t-micro mt-auto p-3 text-(--color-faint)">Perennial v0.1</div>
       </aside>
 
       <div className="relative flex min-w-0 flex-1 flex-col">
         {/* Horní pruh se stavem + tep celé farmy (data-bus seam) */}
-        <header className="sticky top-0 z-30 border-b border-[--color-border-subtle] bg-[--color-bg]/85 backdrop-blur">
+        <header className="sticky top-0 z-30 border-b border-(--color-border-subtle) bg-(--color-bg)/85 backdrop-blur">
           <div className="flex h-14 items-center justify-between gap-2 px-4 sm:gap-3">
             <div className="flex min-w-0 items-center gap-2 sm:gap-3">
               <MobileNav isAdmin={isAdmin}>
                 <StatusBar {...statusProps} variant="drawer" />
-                <div className="border-b border-[--color-border-subtle] p-3 sm:hidden">
+                <div className="border-b border-(--color-border-subtle) p-3 sm:hidden">
                   <ProjectSwitcher projects={projectList} />
                 </div>
               </MobileNav>

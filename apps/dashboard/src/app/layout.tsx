@@ -33,7 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <html lang="cs" className={`${display.variable} ${sans.variable} ${mono.variable}`}>
-      <body className="min-h-screen bg-[--color-bg] text-[--color-fg] antialiased">
+      <body className="min-h-screen bg-(--color-bg) text-(--color-fg) antialiased">
         <SupabaseProvider url={url} anonKey={anonKey}>
           {children}
         </SupabaseProvider>

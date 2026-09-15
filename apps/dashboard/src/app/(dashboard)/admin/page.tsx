@@ -29,7 +29,7 @@ import { formatDate, formatNumber, formatRelative, formatUsd } from "@/lib/forma
 import type { Tone } from "@/lib/constants";
 import type { AgentRow, InviteRow, ProfileRow } from "@/lib/types";
 
-export const metadata = { title: "Administrace — Perennial" };
+export const metadata = { title: "Administrace" };
 
 const AGENT_LIMIT = 100;
 
@@ -170,7 +170,7 @@ export default async function AdminPage() {
               mode={ownerPaused ? "owner" : farmaStoji ? "auto" : "running"}
               autoPaused={automatickaPauza}
               labelPaused="Farmu drží vypínač majitele"
-              labelActive={farmaStoji ? stav.title : "Farma běží"}
+              labelActive={farmaStoji || stav.code !== "running" ? stav.title : "Farma běží"}
               detail={popisAutomaticke}
             />
           </CardBody>
@@ -206,7 +206,7 @@ export default async function AdminPage() {
           description="Denní stropy uživatelů (jazykové modely + média) a role. Stropy uživatele platí vedle stropů farmy; váže nižší."
         />
         {emailChyba ? (
-          <div role="alert" className="flex items-center gap-2 border-b border-[--color-border-subtle] bg-[--color-warn-bg] px-5 py-2.5 text-sm text-[--color-warn]">
+          <div role="alert" className="flex items-center gap-2 border-b border-(--color-border-subtle) bg-(--color-warn-bg) px-5 py-2.5 text-sm text-(--color-warn)">
             <AlertTriangle className="size-4 shrink-0" />
             {emailChyba}
           </div>
@@ -254,7 +254,7 @@ export default async function AdminPage() {
 
       <Card className="mt-6">
         <CardHeader title="Pozvánky" description="Registrace je jen na pozvánku. Pozvánka platí 7 dní; časy v Europe/Prague." />
-        <CardBody className="border-b border-[--color-border-subtle]">
+        <CardBody className="border-b border-(--color-border-subtle)">
           <InviteForm />
         </CardBody>
         <CardBody className={invites.length === 0 ? undefined : "p-0"}>
@@ -285,8 +285,8 @@ export default async function AdminPage() {
                       <TD>
                         <StatusBadge meta={INVITE_META[s]} dot={s === "active"} />
                       </TD>
-                      <TD className="whitespace-nowrap text-xs text-[--color-muted]">{formatDate(i.created_at)}</TD>
-                      <TD className="whitespace-nowrap text-xs text-[--color-muted]">
+                      <TD className="whitespace-nowrap text-xs text-(--color-muted)">{formatDate(i.created_at)}</TD>
+                      <TD className="whitespace-nowrap text-xs text-(--color-muted)">
                         {i.expires_at ? formatDate(i.expires_at) : "bez omezení"}
                       </TD>
                       <TD className="text-right">
@@ -326,12 +326,12 @@ export default async function AdminPage() {
                 {agents.map((a) => (
                   <TR key={a.id}>
                     <TD>{AGENT_ROLE_META[a.role]?.label ?? a.role}</TD>
-                    <TD className="font-mono text-xs text-[--color-muted]">{a.model ?? "—"}</TD>
+                    <TD className="font-mono text-xs text-(--color-muted)">{a.model ?? "—"}</TD>
                     <TD className="text-xs">{modelLabel(a.model)}</TD>
                     <TD>
                       <StatusBadge meta={AGENT_STATUS_META[a.status]} dot />
                     </TD>
-                    <TD className="text-xs text-[--color-muted]" title={formatDate(a.last_heartbeat)}>
+                    <TD className="text-xs text-(--color-muted)" title={formatDate(a.last_heartbeat)}>
                       {formatRelative(a.last_heartbeat, now)}
                     </TD>
                   </TR>

@@ -53,20 +53,20 @@ export function Sidebar({
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "ring-focus group relative flex items-center gap-3 rounded-[--radius-sm] px-3 py-2 text-sm transition-colors",
+              "ring-focus group relative flex items-center gap-3 rounded-(--radius-sm) px-3 py-2 text-sm transition-colors",
               active
-                ? "bg-[--color-surface-2] font-medium text-[--color-fg]"
-                : "text-[--color-muted] hover:bg-[--color-surface-2] hover:text-[--color-fg]",
+                ? "bg-(--color-surface-2) font-medium text-(--color-fg)"
+                : "text-(--color-muted) hover:bg-(--color-surface-2) hover:text-(--color-fg)",
             )}
           >
             {active && (
               <span
                 aria-hidden
-                className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-[--color-brand]"
+                className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-(--color-brand)"
               />
             )}
             <Icon
-              className={cn("size-4 shrink-0", active ? "text-[--color-brand]" : "text-[--color-tertiary] group-hover:text-[--color-muted]")}
+              className={cn("size-4 shrink-0", active ? "text-(--color-brand)" : "text-(--color-tertiary) group-hover:text-(--color-muted)")}
             />
             {item.label}
           </Link>

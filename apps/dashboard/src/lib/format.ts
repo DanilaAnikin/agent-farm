@@ -190,6 +190,20 @@ export function formatRelative(
   return formatDate(d);
 }
 
+/** Hodiny, před kterými se v češtině říká „ve": dvě, tři, čtyři, dvanáct, třináct, čtrnáct, dvacet… */
+const HODINY_S_VE = new Set([2, 3, 4, 12, 13, 14, 20, 21, 22, 23]);
+
+/**
+ * Čas s předložkou v Europe/Prague: „v 18:30", „ve 02:00".
+ * Věty typu „farma pokračuje sama ve 02:00" se jinak skládaly s „v 02:00".
+ */
+export function formatAtTime(value: string | Date | null | undefined): string {
+  const cas = formatTimeShort(value);
+  if (cas === "—") return cas;
+  const hodina = Number.parseInt(cas, 10);
+  return `${HODINY_S_VE.has(hodina) ? "ve" : "v"} ${cas}`;
+}
+
 /** Poměr útraty ke stropu (0..1, oříznuto). Strop 0 nebo záporný = nic neblokuje. */
 export function spendRatio(spent: number, cap: number): number {
   if (!Number.isFinite(cap) || cap <= 0) return 0;

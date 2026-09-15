@@ -59,18 +59,18 @@ export function DeployStatus({
 
   return (
     <div className="flex max-w-md flex-col items-start gap-1.5 text-xs">
-      <p className="text-[--color-muted]" suppressHydrationWarning>
-        <span className="font-medium text-[--color-fg]">Nasazování:</span> {casti.join(" · ")}
+      <p className="text-(--color-muted)" suppressHydrationWarning>
+        <span className="font-medium text-(--color-fg)">Nasazování:</span> {casti.join(" · ")}
       </p>
       {last?.status === "done" ? (
         <FormMessage tone="success">✓ produkce je aktuální</FormMessage>
       ) : last?.status === "failed" ? (
-        <p className="text-[--color-warn]" title={last.detail ?? undefined}>
+        <p className="text-(--color-warn)" title={last.detail ?? undefined}>
           Poslední nasazení selhalo{last.detail ? `: ${last.detail}` : ""}
           {lastDoneAt ? ` · naposledy úspěšně ${formatDate(lastDoneAt)}` : ""}
         </p>
       ) : last?.status === "deferred" ? (
-        <p className="text-[--color-muted]">{last.detail ?? "Nasazení odloženo — proběhne automaticky po skončení automatické pauzy"}</p>
+        <p className="text-(--color-muted)">{last.detail ?? "Nasazení odloženo — proběhne automaticky po skončení automatické pauzy"}</p>
       ) : null}
       <Button
         size="sm"

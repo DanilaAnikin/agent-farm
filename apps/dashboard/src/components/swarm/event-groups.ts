@@ -34,6 +34,8 @@ export interface FeedEvent {
   run_id?: string | null;
   /** `data->>prUrl` — odkaz na pull request (pr_opened). */
   pr_url?: string | null;
+  /** `data->>scope` — která rozpočtová vrstva zastavila práci (budget_hold). */
+  scope?: string | null;
 }
 
 export interface EventGroup {
@@ -61,13 +63,99 @@ function horsiLevel(a: FeedLevel, b: FeedLevel): FeedLevel {
   return (LEVEL_RANK[a] ?? 1) >= (LEVEL_RANK[b] ?? 1) ? a : b;
 }
 
+/** Rozpočtové vrstvy z `checkBudget` (@farm/core) → česky. */
+const VRSTVY_ROZPOCTU: Record<string, { text: string; denni: boolean }> = {
+  project: { text: "denní strop projektu", denni: true },
+  farm: { text: "denní strop farmy", denni: true },
+  user: { text: "denní strop uživatele", denni: true },
+  farm_month: { text: "měsíční strop farmy", denni: false },
+  wish: { text: "rozpočet přání", denni: false },
+};
+
+/** „project" → „denní strop projektu"; neznámý kód → null (nikdy syrový kód). */
+export function budgetScopeLabel(scope: string | null | undefined): string | null {
+  return scope ? (VRSTVY_ROZPOCTU[scope]?.text ?? null) : null;
+}
+
+function normalizuj(text: string): string {
+  return text.toLowerCase().replace(/[.…:;,!\s]+/g, " ").trim();
+}
+
+function velke(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+const NAVRH = ["návrh", "návrhy", "návrhů"] as const;
+
+/**
+ * Lidský text události BEZ zdvojení popisku. Orchestrátor zapisuje interní
+ * zprávy („Projekt v budget_hold — překročen strop: project.", „Worker start
+ * (worker-build): …") a řeka aktivity je dřív vypisovala za popiskem, takže
+ * vzniklo „Pokus odložen kvůli rozpočtu: Práce čeká na rozpočet; …".
+ * Prázdný řetězec = zpráva neříká nic navíc, stačí popisek.
+ */
+export function humanEventText(e: Pick<FeedEvent, "type" | "message" | "scope">, label: string): string {
+  const msg = (e.message ?? "").trim();
+  let text = msg;
+  switch (e.type) {
+    case "budget_hold": {
+      const kod = e.scope ?? /strop:\s*([a-z_]+)/i.exec(msg)?.[1] ?? null;
+      const vrstva = kod ? VRSTVY_ROZPOCTU[kod] : undefined;
+      // Dispatch drží projekt, když by DALŠÍ pokus (s rezervou) strop překročil — ne až po překročení.
+      if (!vrstva) return "Další pokus by překročil rozpočtový strop, projekt čeká na rozpočet.";
+      return vrstva.denni
+        ? `Další pokus by překročil ${vrstva.text}. Projekt pokračuje sám po přetočení dne o půlnoci UTC.`
+        : `Další pokus by překročil ${vrstva.text}. Projekt čeká, až to rozpočet dovolí.`;
+    }
+    case "attempt_budget_deferred":
+      text = msg.replace(/^Práce čeká na rozpočet;\s*/i, "");
+      break;
+    case "attempt_started":
+      text = msg.replace(/^Worker start \([^)]*\):\s*/i, "");
+      break;
+    case "attempt_finished":
+      text = msg.replace(/^Pokus dokončen,\s*předáno judgeovi\.\s*/i, "Předáno soudci. ");
+      break;
+    case "task_done":
+      text = msg.replace(/^Task hotový:\s*/i, "");
+      break;
+    case "pr_opened":
+      // Odkaz se vykresluje zvlášť; URL v textu je jen šum.
+      text = msg.replace(/^PR otevřen(?:\s*\([^)]*\))?:\s*\S*$/i, "");
+      break;
+    case "refill_done":
+      text = msg.replace(/^Refill:\s*/i, "");
+      break;
+    case "farm_supervisor": {
+      const m = /^Supervisor:\s*(\d+)\s+návrh\S*\s*(.*)$/i.exec(msg);
+      text = m ? `${countLabel(Number(m[1]), NAVRH)} ${m[2] ?? ""}`.trim() : msg.replace(/^Supervisor:\s*/i, "");
+      break;
+    }
+    case "dispatch_error":
+      text = msg.replace(/^Dispatch selhal:\s*/i, "");
+      break;
+    case "orchestrator_stop":
+    case "orchestrator_start":
+    case "deploy_running":
+      // „Orchestrátor se vypíná." / „Deploy zahájen." říkají totéž co popisek.
+      return "";
+  }
+  text = text.trim();
+  if (!text) return "";
+  if (normalizuj(text) === normalizuj(label)) return "";
+  if (normalizuj(text).startsWith(`${normalizuj(label)} `)) {
+    text = text.slice(label.length).replace(/^[\s.:;,—-]+/, "");
+  }
+  // Velké písmeno jen tam, kde jsme zprávu ořízli; původní zprávu nepřepisujeme.
+  return text === msg ? text : velke(text);
+}
+
 /**
  * Text sloučeného řádku. Archivaci popisujeme lidsky, ostatní typy „N× popisek".
  */
 export function groupText(g: Pick<EventGroup, "count" | "countsByType" | "label" | "latest">): string {
   if (g.count === 1) {
-    const msg = (g.latest.message ?? "").trim();
-    return msg || g.label;
+    return humanEventText(g.latest, g.label) || g.label;
   }
   const ukoly = g.countsByType.backlog_task_archived ?? 0;
   const prani = g.countsByType.backlog_wish_archived ?? 0;
@@ -200,18 +288,20 @@ export function errorGroups(events: readonly FeedEvent[], limit = 5): ErrorGroup
       g.level = horsiLevel(g.level, e.level);
       if (e.ts > g.lastTs) {
         g.lastTs = e.ts;
-        g.lastMessage = e.message;
+        g.lastMessage = humanEventText(e, g.label) || null;
         g.latest = e;
       }
       continue;
     }
+    const label = eventMeta(e.type).label;
     podleTypu.set(e.type, {
       type: e.type,
-      label: eventMeta(e.type).label,
+      label,
       level: e.level,
       count: 1,
       lastTs: e.ts,
-      lastMessage: e.message,
+      // Interní zprávu orchestrátoru přeložit, zdvojený popisek vynechat.
+      lastMessage: humanEventText(e, label) || null,
       latest: e,
     });
   }

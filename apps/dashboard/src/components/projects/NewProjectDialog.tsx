@@ -121,12 +121,12 @@ export function NewProjectDialog({
               />
             </Field>
           </div>
-          <p className="text-xs text-[--color-muted]">
+          <p className="text-xs text-(--color-muted)">
             farma: {formatUsd(defaults.farmDailyUsd, "cap")}/den · {formatUsd(defaults.farmMonthlyUsd, "cap")}/měsíc
             — strop projektu se dělí se stropem farmy a nesmí být vyšší.
           </p>
 
-          {error ? <p role="alert" className="text-xs text-[--color-danger]">{error}</p> : null}
+          {error ? <p role="alert" className="text-xs text-(--color-danger)">{error}</p> : null}
 
           <DialogFooter>
             <DialogClose>Zrušit</DialogClose>

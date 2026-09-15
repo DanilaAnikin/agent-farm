@@ -674,6 +674,40 @@ export function layerRatio(layer: Pick<CapLayer, "spent" | "cap">): number | nul
   return Math.max(0, layer.spent / layer.cap);
 }
 
+/** Projekt pro vrstvu „Projekty" na mapě stropů. */
+export interface ProjectCapInput {
+  id: string;
+  name: string;
+  status: string;
+  daily_cap_usd: number | null;
+}
+
+/**
+ * Nejvytíženější projekt, jehož denní strop OPRAVDU váže: jen projekty, na kterých
+ * farma smí pracovat (aktivní, nebo čekají na rozpočet a samy se pustí) a mají
+ * strop > 0. Pozastavený projekt se stropem 0 dřív vyhrál jako „Aktuálně nejblíž
+ * stropu" s „0,00 US$ z 0,00 US$", protože strop 0 dává poměr 1.
+ */
+export function busiestProjectCap(
+  projects: readonly ProjectCapInput[],
+  spentById: ReadonlyMap<string, number>,
+): { name: string; spent: number; cap: number } | null {
+  let nejlepsi: { name: string; spent: number; cap: number } | null = null;
+  let max = -1;
+  for (const p of projects) {
+    if (p.status !== "active" && p.status !== "budget_hold") continue;
+    const cap = Number(p.daily_cap_usd);
+    if (!Number.isFinite(cap) || cap <= 0) continue;
+    const spent = spentById.get(p.id) ?? 0;
+    const ratio = Math.max(0, spent / cap);
+    if (ratio > max) {
+      max = ratio;
+      nejlepsi = { name: p.name, spent, cap };
+    }
+  }
+  return nejlepsi;
+}
+
 /** Klíč vrstvy, která je stropu nejblíž (nejvyšší poměr). Při shodě vyhrává dřívější = vazba výš. */
 export function nearestCapKey(layers: CapLayer[]): CapLayer["key"] | null {
   let nejlepsi: CapLayer["key"] | null = null;

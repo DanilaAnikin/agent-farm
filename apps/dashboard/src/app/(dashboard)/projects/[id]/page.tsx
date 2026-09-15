@@ -1,5 +1,7 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Sparkles } from "lucide-react";
+import { ShowMore } from "@/components/ui/ShowMore";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { startOfUtcDayIso } from "@/lib/time";
@@ -33,7 +35,7 @@ import type { AgentRow, ProjectRow, WishRow } from "@/lib/types";
 
 // Konzistentní primární akce jako odkaz (stejný vzhled jako <Button variant=primary>).
 const primaryLink =
-  "ring-focus inline-flex h-9 items-center gap-2 rounded-[--radius-sm] bg-[linear-gradient(180deg,var(--color-brand),var(--color-brand-strong))] px-4 text-sm font-medium text-[--color-brand-ink] elev-brand transition-[filter] hover:brightness-105";
+  "ring-focus inline-flex h-9 items-center gap-2 rounded-(--radius-sm) bg-[linear-gradient(180deg,var(--color-brand),var(--color-brand-strong))] px-4 text-sm font-medium text-(--color-brand-ink) elev-brand transition-[filter] hover:brightness-105";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Úkol v práci nebo u soudce déle než tohle je „uvízlý" (stejně jako farm_attention). */
@@ -41,6 +43,14 @@ const STUCK_MS = 2 * 60 * 60 * 1000;
 /** Pokus bez signálu déle než tohle už neběží, jen visí (reconciliace ho sklidí po 3 min). */
 const FRESH_HEARTBEAT_MS = 3 * 60 * 1000;
 const OPEN = new Set<string>(OPEN_WISH_STATUSES);
+
+/** Titulek karty prohlížeče = název projektu (layout doplní „· Perennial"). */
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params;
+  const supabase = await createClient();
+  const { data } = await supabase.from("projects").select("name").eq("id", id).maybeSingle<{ name: string }>();
+  return { title: data?.name ?? "Projekt" };
+}
 
 export default async function ProjectMissionControl({
   params,
@@ -113,7 +123,7 @@ export default async function ProjectMissionControl({
       .limit(50),
     supabase
       .from("events")
-      .select("id, ts, type, level, message, project_id, wish_id, task_id, run_id:data->>run_id, pr_url:data->>prUrl")
+      .select("id, ts, type, level, message, project_id, wish_id, task_id, run_id:data->>run_id, pr_url:data->>prUrl, scope:data->>scope")
       .eq("project_id", id)
       .gte("ts", new Date(now - 7 * DAY_MS).toISOString())
       .order("ts", { ascending: false })
@@ -237,7 +247,7 @@ export default async function ProjectMissionControl({
         description={
           <>
             Řídicí panel projektu — živý stav agentů, fronty a útraty.
-            <span className={`mt-1 block text-xs ${projektBezi && farmStop ? "text-[--color-warn]" : ""}`}>
+            <span className={`mt-1 block text-xs ${projektBezi && farmStop ? "text-(--color-warn)" : ""}`}>
               {projectStatusLine(project.status)} ·{" "}
               {farmStop ? `farma stojí: ${farmStop}` : "farma běží"}
             </span>
@@ -254,13 +264,13 @@ export default async function ProjectMissionControl({
       />
 
       {run.degradedReason ? (
-        <p role="alert" className="mb-3 text-xs text-[--color-warn]">
+        <p role="alert" className="mb-3 text-xs text-(--color-warn)">
           {run.degradedReason}
         </p>
       ) : null}
 
       {maDeploy ? (
-        <div className="mb-4 rounded-lg border border-[--color-border] bg-[--color-surface-1] px-4 py-3">
+        <div className="mb-4 rounded-lg border border-(--color-border) bg-(--color-surface-1) px-4 py-3">
           <DeployStatus
             projectId={id}
             autoDeliver={Boolean(project.autonomy?.autoDeliver)}
@@ -289,14 +299,14 @@ export default async function ProjectMissionControl({
       </div>
 
       {rollupRes.error ? (
-        <p role="alert" className="mb-4 text-xs text-[--color-warn]">
+        <p role="alert" className="mb-4 text-xs text-(--color-warn)">
           Postup projektu se nepodařilo načíst ({rollupRes.error.message}).
         </p>
       ) : progress.denominator + progress.archived > 0 ? (
-        <div className="mb-6 rounded-lg border border-[--color-border] bg-[--color-surface-2] px-4 py-3">
+        <div className="mb-6 rounded-lg border border-(--color-border) bg-(--color-surface-2) px-4 py-3">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-[--color-muted]">Postup projektu</span>
-            <span className="tabular-nums text-[--color-muted]">
+            <span className="text-(--color-muted)">Postup projektu</span>
+            <span className="tabular-nums text-(--color-muted)">
               {progressBreakdown(progress)} · {formatPercent(progress.ratio)}
             </span>
           </div>
@@ -310,7 +320,7 @@ export default async function ProjectMissionControl({
             <CardHeader title="Rozpracovaná přání" description="Otevřená přání a skutečný stav práce na nich." />
             <CardBody>
               {wishesRes.error ? (
-                <p role="alert" className="text-xs text-[--color-warn]">
+                <p role="alert" className="text-xs text-(--color-warn)">
                   Přání se nepodařilo načíst ({wishesRes.error.message}).
                 </p>
               ) : openWishes.length === 0 ? (
@@ -326,7 +336,7 @@ export default async function ProjectMissionControl({
                   }
                 />
               ) : (
-                <ul className="space-y-3">
+                <ShowMore initial={5} className="space-y-3">
                   {openWishes.map((w) => {
                     const c = countsByWish.get(w.id) ?? { queued: 0, running: 0, parked: 0, done: 0, total: 0 };
                     const s = effectiveWishStatus(w, project, { paused: state.paused }, c);
@@ -334,7 +344,7 @@ export default async function ProjectMissionControl({
                       <li key={w.id}>
                         <Link
                           href={`/projects/${id}/wishes/${w.id}`}
-                          className="block rounded-lg border border-[--color-border] p-3 hover:border-[--color-border-strong]"
+                          className="block rounded-lg border border-(--color-border) p-3 hover:border-(--color-border-strong)"
                         >
                           <div className="flex items-start justify-between gap-3">
                             <span className="min-w-0 truncate font-medium">{w.title}</span>
@@ -347,7 +357,7 @@ export default async function ProjectMissionControl({
                               </span>
                             </span>
                           </div>
-                          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-[--color-muted]">
+                          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-(--color-muted)">
                             <span>
                               {c.done}/{countLabel(c.total, TVARY.ukol)}
                             </span>
@@ -362,7 +372,7 @@ export default async function ProjectMissionControl({
                       </li>
                     );
                   })}
-                </ul>
+                </ShowMore>
               )}
             </CardBody>
           </Card>
@@ -405,9 +415,9 @@ export default async function ProjectMissionControl({
             <CardHeader title="Všechna přání" description="Posledních 100." />
             <CardBody>
               {wishes.length === 0 ? (
-                <p className="text-sm text-[--color-muted]">Žádná přání.</p>
+                <p className="text-sm text-(--color-muted)">Žádná přání.</p>
               ) : (
-                <ul className="space-y-1.5">
+                <ShowMore initial={10} className="space-y-1.5">
                   {wishes.map((w) => {
                     const c = countsByWish.get(w.id) ?? { queued: 0, running: 0, parked: 0, done: 0, total: 0 };
                     const s = effectiveWishStatus(w, project, { paused: state.paused }, c);
@@ -415,7 +425,7 @@ export default async function ProjectMissionControl({
                       <li key={w.id}>
                         <Link
                           href={`/projects/${id}/wishes/${w.id}`}
-                          className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-[--color-surface-2]"
+                          className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-(--color-surface-2)"
                         >
                           <span className="min-w-0 truncate">{w.title}</span>
                           <Badge tone={s.tone}>{s.label}</Badge>
@@ -423,7 +433,7 @@ export default async function ProjectMissionControl({
                       </li>
                     );
                   })}
-                </ul>
+                </ShowMore>
               )}
             </CardBody>
           </Card>

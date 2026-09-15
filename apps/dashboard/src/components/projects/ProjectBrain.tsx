@@ -3,6 +3,8 @@ import { Brain } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
+import { ShowMore } from "@/components/ui/ShowMore";
+import { isLongText } from "@/lib/show-more";
 import type { Tone } from "@/lib/constants";
 import { formatRelative } from "@/lib/format";
 import { countLabel } from "@/lib/plural";
@@ -86,7 +88,7 @@ export async function ProjectBrain({ projectId }: { projectId: string }) {
       <Card>
         <CardHeader title="Mozek projektu" />
         <CardBody>
-          <p role="alert" className="text-xs text-[--color-warn]">
+          <p role="alert" className="text-xs text-(--color-warn)">
             Paměť projektu se nepodařilo načíst: {error.message}
           </p>
         </CardBody>
@@ -113,7 +115,7 @@ export async function ProjectBrain({ projectId }: { projectId: string }) {
         description="Znalostní báze, kterou farma čte před každým úkolem — architektura, rozhodnutí, konvence i poučení ze selhání."
         action={
           rows.length > 0 ? (
-            <span className="text-xs tabular-nums text-[--color-muted]">
+            <span className="text-xs tabular-nums text-(--color-muted)">
               {countLabel(rows.length, ["záznam", "záznamy", "záznamů"])}
             </span>
           ) : null
@@ -134,41 +136,58 @@ export async function ProjectBrain({ projectId }: { projectId: string }) {
                 <section key={kind}>
                   <div className="mb-3 flex items-center gap-2.5">
                     <span
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[--color-surface-2] text-sm text-[--color-muted]"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-(--color-surface-2) text-sm text-(--color-muted)"
                       aria-hidden
                     >
                       {meta.icon}
                     </span>
                     <div className="min-w-0">
-                      <h4 className="flex items-center gap-2 text-sm font-semibold text-[--color-fg]">
+                      <h4 className="flex items-center gap-2 text-sm font-semibold text-(--color-fg)">
                         {meta.label}
-                        <span className="rounded-full bg-[--color-surface-2] px-1.5 py-0.5 text-[11px] tabular-nums font-normal text-[--color-muted]">
+                        <span className="rounded-full bg-(--color-surface-2) px-1.5 py-0.5 text-[11px] tabular-nums font-normal text-(--color-muted)">
                           {items.length}
                         </span>
                       </h4>
                     </div>
                   </div>
-                  <div className="space-y-2.5">
+                  <ShowMore initial={3} className="space-y-2.5">
                     {items.map((item) => (
-                      <article
-                        key={item.id}
-                        className="rounded-lg border border-[--color-border] bg-[--color-surface-2] p-3.5"
-                      >
+                      <li key={item.id}>
+                      <article className="rounded-lg border border-(--color-border) bg-(--color-surface-2) p-3.5">
                         <div className="flex items-start justify-between gap-3">
-                          <h5 className="min-w-0 text-sm font-medium text-[--color-fg]">{item.title}</h5>
+                          <h5 className="min-w-0 text-sm font-medium text-(--color-fg)">{item.title}</h5>
                           <div className="flex shrink-0 items-center gap-2">
                             <Badge tone={meta.tone}>{SOURCE_LABEL[item.source] ?? item.source}</Badge>
                           </div>
                         </div>
-                        <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-[--color-muted]">
-                          {item.content}
-                        </p>
-                        <div className="mt-2 text-[11px] text-[--color-faint]">
+                        {isLongText(item.content) ? (
+                          // Architektura má i 5 000 znaků — sbalená na pár řádků, celá po rozkliknutí.
+                          <details className="group mt-1.5">
+                            <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                              <p className="line-clamp-4 whitespace-pre-wrap text-sm leading-relaxed text-(--color-muted) group-open:hidden">
+                                {item.content}
+                              </p>
+                              <span className="mt-1 inline-block text-xs font-medium text-(--color-brand) hover:underline">
+                                <span className="group-open:hidden">Zobrazit celý text</span>
+                                <span className="hidden group-open:inline">Sbalit text</span>
+                              </span>
+                            </summary>
+                            <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-(--color-muted)">
+                              {item.content}
+                            </p>
+                          </details>
+                        ) : (
+                          <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-(--color-muted)">
+                            {item.content}
+                          </p>
+                        )}
+                        <div className="mt-2 text-[11px] text-(--color-faint)">
                           {formatRelative(item.updated_at ?? item.created_at)}
                         </div>
                       </article>
+                      </li>
                     ))}
-                  </div>
+                  </ShowMore>
                 </section>
               );
             })}

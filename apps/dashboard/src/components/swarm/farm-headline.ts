@@ -10,7 +10,7 @@
  * Bez `@/` importů — testuje se přes `tsx --test`.
  */
 import type { FarmState, FarmTone } from "../../lib/farm-state";
-import { formatDate, formatDuration, formatTimeShort } from "../../lib/format";
+import { formatAtTime, formatDate, formatDuration, formatTimeShort } from "../../lib/format";
 import { countLabel, plural, TVARY } from "../../lib/plural";
 import {
   DEFAULT_OFFPEAK_WINDOWS_UTC,
@@ -68,6 +68,9 @@ export function currentOffpeakStart(
 export function farmShortReason(state: FarmState): string | null {
   switch (state.code) {
     case "running":
+    // Farma neběží naprázdno kvůli pauze — stojí jen projekty v budget_hold a ty to
+    // říkají vlastním stavem („Projekt čeká na rozpočet").
+    case "budget_wait":
       return null;
     case "owner":
       return "pozastavil ji majitel";
@@ -113,6 +116,24 @@ export function farmHeadline(input: FarmHeadlineInput): FarmHeadline {
         title: `Rozpočtový hlídač zablokoval nové požadavky${od}`,
         detail: `${state.detail} Farma se rozjede sama, jakmile hlídač požadavky zase pustí.`,
         tone: "danger",
+      };
+    }
+    case "budget_wait": {
+      const n = state.heldProjects ?? 0;
+      const q = state.heldQueued ?? 0;
+      const veFronte = q > 0 ? `Ve frontě ${plural(q, CEKA)} ${countLabel(q, TVARY.ukol)}. ` : "";
+      if (!state.nextResumeAt) {
+        return {
+          title: "Rozpočtový den se přetočil — farma vrací projekty do práce",
+          detail: state.detail,
+          tone: "info",
+        };
+      }
+      const kdo = n > 0 ? `${countLabel(n, TVARY.projekt)} ${plural(n, CEKA)}` : "Projekty čekají";
+      return {
+        title: `${kdo} na nový rozpočtový den — farma pokračuje sama ${formatAtTime(state.nextResumeAt)}`,
+        detail: `${veFronte}Do přetočení denního stropu o půlnoci UTC na nich farma nepracuje, pak pokračuje sama.`,
+        tone: "info",
       };
     }
     case "offpeak_expected": {

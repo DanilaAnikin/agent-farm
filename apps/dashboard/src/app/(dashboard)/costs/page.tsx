@@ -7,6 +7,7 @@ import { capsFromState, getBudgetSnapshot, getFarmRunState } from "@/lib/server/
 import { RPC, type CostSummaryRow } from "@/lib/rpc";
 import {
   aggregateCosts,
+  busiestProjectCap,
   effectiveUserCaps,
   layerRatio,
   modelLabel,
@@ -42,7 +43,7 @@ interface Pohyb {
   cost_usd: number;
 }
 
-export const metadata = { title: "Náklady — Perennial" };
+export const metadata = { title: "Náklady" };
 
 const WINDOW_DAYS = 14;
 const PAGE_SIZE = 50;
@@ -119,7 +120,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
     // Agregace v SQL: `select('*')` narazil na limit 1000 řádků PostgRESTu a
     // ukazoval zlomek útraty (0,2995 US$ místo 1,4478 US$).
     supabase.rpc(RPC.costSummary, { p_since: since }),
-    supabase.from("projects").select("id, name, daily_cap_usd").order("created_at", { ascending: true }),
+    supabase.from("projects").select("id, name, daily_cap_usd, status").order("created_at", { ascending: true }),
     getFarmRunState(),
     getBudgetSnapshot(),
     isAdmin
@@ -143,7 +144,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
     day: String(r.day).slice(0, 10),
     cost_usd: Number(r.cost_usd) || 0,
   }));
-  const projects = (projectsRes.data as Pick<ProjectRow, "id" | "name" | "daily_cap_usd">[] | null) ?? [];
+  const projects = (projectsRes.data as Pick<ProjectRow, "id" | "name" | "daily_cap_usd" | "status">[] | null) ?? [];
   const projectName = new Map(projects.map((p) => [p.id, p.name] as const));
   const jmenoProjektu = (id: string) => projectName.get(id) ?? "Neznámý projekt";
 
@@ -170,15 +171,8 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
   const userCaps = effectiveUserCaps(user.profile ?? {});
 
   // --- mapa stropů v pořadí vazby -------------------------------------------
-  let nejvytizenejsi: { name: string; spent: number; cap: number } | null = null;
-  for (const p of projects) {
-    const spent = projektDnes.get(p.id) ?? 0;
-    const ratio = layerRatio({ spent, cap: p.daily_cap_usd });
-    const bestRatio = nejvytizenejsi ? layerRatio(nejvytizenejsi) : -1;
-    if (ratio !== null && (bestRatio === null || ratio > bestRatio)) {
-      nejvytizenejsi = { name: p.name, spent, cap: p.daily_cap_usd };
-    }
-  }
+  // Jen projekty, jejichž strop opravdu váže (aktivní / čekající na rozpočet, strop > 0).
+  const nejvytizenejsi = busiestProjectCap(projects, projektDnes);
 
   const farmaMesic = snap.month_counted ?? (isAdmin && !summaryError ? snap.month_settled : null);
   const farmaDen = snap.day_counted ?? (isAdmin && !summaryError ? snap.day_settled : null);
@@ -224,12 +218,14 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
     },
     {
       key: "project",
-      label: nejvytizenejsi ? `Projekty (nejvytíženější: ${nejvytizenejsi.name})` : "Projekty",
+      label: nejvytizenejsi ? `Projekty (nejvytíženější aktivní: ${nejvytizenejsi.name})` : "Projekty",
       spent: summaryError || !nejvytizenejsi ? null : nejvytizenejsi.spent,
       cap: nejvytizenejsi?.cap ?? null,
       guard: "orchestrátor, generování médií",
       editWhere: "Náklady → Denní stropy projektů",
-      note: "každý projekt má vlastní denní strop",
+      note: nejvytizenejsi
+        ? "každý projekt má vlastní denní strop; pozastavené projekty a projekty bez stropu se nepočítají"
+        : "žádný aktivní projekt s denním stropem",
     },
     {
       key: "attempt",
@@ -262,7 +258,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
 
       <div className="space-y-6">
         {summaryError ? (
-          <div role="alert" className="flex items-start gap-2 rounded-[--radius-md] border border-[--color-warn]/40 bg-[--color-warn-bg] px-4 py-3 text-sm text-[--color-warn]">
+          <div role="alert" className="flex items-start gap-2 rounded-(--radius-md) border border-(--color-warn)/40 bg-(--color-warn-bg) px-4 py-3 text-sm text-(--color-warn)">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             Souhrn nákladů se nepodařilo načíst (RPC cost_summary). Grafy a součty níž proto chybí — nejsou nulové.
           </div>
@@ -293,22 +289,22 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
                     key={v.key}
                     className={
                       jeNejblizsi
-                        ? "rounded-[--radius-md] border border-[--color-warn]/40 bg-[--color-warn-bg]/40 px-3 py-2"
+                        ? "rounded-(--radius-md) border border-(--color-warn)/40 bg-(--color-warn-bg)/40 px-3 py-2"
                         : "px-3 py-1"
                     }
                   >
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                      <div className="flex items-center gap-2 text-sm font-medium text-[--color-fg]">
+                      <div className="flex items-center gap-2 text-sm font-medium text-(--color-fg)">
                         {v.label}
                         {jeNejblizsi ? <Badge tone="warn">Aktuálně nejblíž stropu</Badge> : null}
                       </div>
                       <div className="text-sm tabular-nums">
                         {v.spent === null && v.cap === null ? (
-                          <span className="text-[--color-muted]">rezerva dopředu</span>
+                          <span className="text-(--color-muted)">rezerva dopředu</span>
                         ) : (
                           <>
                             {v.spent === null ? "—" : `${v.spentLowerBound ? "≥ " : ""}${formatUsd(v.spent)}`}
-                            <span className="text-[--color-muted]"> z {v.cap === null ? "—" : formatUsd(v.cap, "cap")}</span>
+                            <span className="text-(--color-muted)"> z {v.cap === null ? "—" : formatUsd(v.cap, "cap")}</span>
                           </>
                         )}
                       </div>
@@ -348,9 +344,9 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
             title="Pohyby"
             description={`Každé volání modelu i generování médií za posledních ${WINDOW_DAYS} dní. Tokeny z cache DeepSeek účtuje ~30× levněji, proto stejný počet tokenů může stát různě. Časy v Europe/Prague.`}
           />
-          <CardBody className="border-b border-[--color-border-subtle]">
+          <CardBody className="border-b border-(--color-border-subtle)">
             <form method="get" action="/costs#pohyby" className="flex flex-wrap items-end gap-2">
-              <label className="text-xs text-[--color-muted]">
+              <label className="text-xs text-(--color-muted)">
                 Projekt
                 <Select name="projekt" defaultValue={filtr.projekt} className="mt-1 min-w-40">
                   <option value="">Všechny</option>
@@ -362,7 +358,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
                   ))}
                 </Select>
               </label>
-              <label className="text-xs text-[--color-muted]">
+              <label className="text-xs text-(--color-muted)">
                 Druh
                 <Select name="druh" defaultValue={filtr.druh} className="mt-1 min-w-32">
                   <option value="">Všechny</option>
@@ -373,7 +369,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
                   ))}
                 </Select>
               </label>
-              <label className="text-xs text-[--color-muted]">
+              <label className="text-xs text-(--color-muted)">
                 Částka
                 <Select name="castka" defaultValue={filtr.vcetneNulovych ? "vse" : ""} className="mt-1 min-w-40">
                   <option value="">Jen nenulové</option>
@@ -387,9 +383,9 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
           </CardBody>
           <CardBody className="p-0">
             {pohybyRes.error ? (
-              <p className="px-5 py-4 text-sm text-[--color-danger]">Pohyby se nepodařilo načíst.</p>
+              <p className="px-5 py-4 text-sm text-(--color-danger)">Pohyby se nepodařilo načíst.</p>
             ) : pohyby.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-[--color-muted]">Žádné pohyby neodpovídají filtru.</p>
+              <p className="px-5 py-4 text-sm text-(--color-muted)">Žádné pohyby neodpovídají filtru.</p>
             ) : (
               <Table>
                 <THead>
@@ -408,7 +404,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
                 <TBody>
                   {pohyby.map((r) => (
                     <TR key={r.id}>
-                      <TD className="whitespace-nowrap text-xs text-[--color-muted]" title={formatRelative(r.ts)}>
+                      <TD className="whitespace-nowrap text-xs text-(--color-muted)" title={formatRelative(r.ts)}>
                         {formatDate(r.ts)}
                       </TD>
                       <TD className="text-xs">{r.project_id ? jmenoProjektu(r.project_id) : "Systém"}</TD>
@@ -418,7 +414,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
                       </TD>
                       <TD className="text-xs">{poskytovatelLabel(r.provider)}</TD>
                       <TD className="text-right text-xs tabular-nums">{formatNumber(r.tokens_in)}</TD>
-                      <TD className="text-right text-xs tabular-nums text-[--color-muted]">
+                      <TD className="text-right text-xs tabular-nums text-(--color-muted)">
                         {formatNumber(r.tokens_cached)}
                       </TD>
                       <TD className="text-right text-xs tabular-nums">{formatNumber(r.tokens_out)}</TD>
@@ -430,19 +426,19 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
             )}
           </CardBody>
           {pohybyCelkem > 0 ? (
-            <CardFooter className="flex flex-wrap items-center justify-between gap-2 text-xs text-[--color-muted]">
+            <CardFooter className="flex flex-wrap items-center justify-between gap-2 text-xs text-(--color-muted)">
               <span>
                 Zobrazeno {formatNumber(od + 1)}–{formatNumber(Math.min(od + PAGE_SIZE, pohybyCelkem))} z{" "}
                 {countLabel(pohybyCelkem, TVARY.polozka)}
               </span>
               <span className="flex gap-2">
                 {filtr.strana > 1 ? (
-                  <Link className="text-[--color-accent] hover:underline" href={odkazStrany(filtr, filtr.strana - 1)}>
+                  <Link className="text-(--color-accent) hover:underline" href={odkazStrany(filtr, filtr.strana - 1)}>
                     ← Novější
                   </Link>
                 ) : null}
                 {filtr.strana < stran ? (
-                  <Link className="text-[--color-accent] hover:underline" href={odkazStrany(filtr, filtr.strana + 1)}>
+                  <Link className="text-(--color-accent) hover:underline" href={odkazStrany(filtr, filtr.strana + 1)}>
                     Starší →
                   </Link>
                 ) : null}
@@ -491,9 +487,9 @@ function TentoMesic({
   }
 
   const radek = (label: string, hodnota: string, poznamka: string, zvyraznit = false) => (
-    <div className={zvyraznit ? "rounded-[--radius-md] bg-[--color-surface-2] px-3 py-2" : "px-3 py-1"}>
+    <div className={zvyraznit ? "rounded-(--radius-md) bg-(--color-surface-2) px-3 py-2" : "px-3 py-1"}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-        <span className="text-sm text-[--color-fg]">{label}</span>
+        <span className="text-sm text-(--color-fg)">{label}</span>
         <span className="t-metric text-lg tabular-nums">{hodnota}</span>
       </div>
       <div className="t-meta">{poznamka}</div>
@@ -508,11 +504,11 @@ function TentoMesic({
       />
       <CardBody className="space-y-2">
         {snap.ready === false ? (
-          <p role="alert" className="text-sm text-[--color-danger]">
+          <p role="alert" className="text-sm text-(--color-danger)">
             Rozpočtový hlídač teď nové požadavky nepouští{snap.ready_since ? ` (od ${formatDate(snap.ready_since)})` : ""}.
           </p>
         ) : null}
-        {degradedReason ? <p className="text-sm text-[--color-warn]">{degradedReason}</p> : null}
+        {degradedReason ? <p className="text-sm text-(--color-warn)">{degradedReason}</p> : null}
         {radek(
           "Započteno do limitu",
           snap.month_counted === null ? "—" : `${formatUsd(snap.month_counted)} z ${formatUsd(monthlyCap, "cap")}`,

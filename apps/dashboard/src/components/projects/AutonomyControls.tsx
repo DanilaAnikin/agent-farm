@@ -27,8 +27,8 @@ function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[--color-accent]/50 disabled:opacity-50",
-        checked ? "bg-[--color-accent]" : "bg-[--color-border-strong]",
+        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-(--color-accent)/50 disabled:opacity-50",
+        checked ? "bg-(--color-accent)" : "bg-(--color-border-strong)",
       )}
     >
       <span
@@ -53,8 +53,8 @@ function Row({
   return (
     <div className="flex items-start justify-between gap-4 py-3">
       <div className="min-w-0">
-        <div className="text-sm font-medium text-[--color-fg]">{title}</div>
-        <p className="mt-0.5 text-xs text-[--color-muted]">{hint}</p>
+        <div className="text-sm font-medium text-(--color-fg)">{title}</div>
+        <p className="mt-0.5 text-xs text-(--color-muted)">{hint}</p>
       </div>
       <div className="shrink-0 pt-0.5">{children}</div>
     </div>
@@ -116,25 +116,25 @@ export function AutonomyControls({
 
   return (
     <div>
-      <ul className="mb-2 space-y-1 text-xs text-[--color-muted]">
+      <ul className="mb-2 space-y-1 text-xs text-(--color-muted)">
         <li>
-          <span className="text-[--color-fg]">Specifikace:</span>{" "}
+          <span className="text-(--color-fg)">Specifikace:</span>{" "}
           {trustMode ? "schvalují se automaticky." : "projekt má vypnutý autopilot specifikací (starší nastavení)."}
         </li>
         <li>
-          <span className="text-[--color-fg]">Kontrola práce:</span> soudce, testy a QA — úkol je hotový až po
+          <span className="text-(--color-fg)">Kontrola práce:</span> soudce, testy a QA — úkol je hotový až po
           sloučení do hlavní větve.
         </li>
         <li>
-          <span className="text-[--color-fg]">Návrhy:</span> samy se zadávají jako přání a farma je odpracuje až do
+          <span className="text-(--color-fg)">Návrhy:</span> samy se zadávají jako přání a farma je odpracuje až do
           sloučení.
         </li>
         <li>
-          <span className="text-[--color-fg]">Rozpočet:</span> hlídá ho strop projektu a rozpočtový hlídač farmy.
+          <span className="text-(--color-fg)">Rozpočet:</span> hlídá ho strop projektu a rozpočtový hlídač farmy.
         </li>
       </ul>
 
-      <div className="divide-y divide-[--color-border]">
+      <div className="divide-y divide-(--color-border)">
         <Row
           title="Farma sama vybírá další práci"
           hint="Sleduje repozitář a stav projektu, navrhuje další krok a sama ho zadá jako přání. Duplicity a nápady, které repozitář nepodporuje, zahazuje. Vypnuto = farma v projektu sama novou práci nevybírá ani nezadává."
@@ -176,7 +176,7 @@ export function AutonomyControls({
               aria-label="Denní limit doručení"
               onChange={(e) => setCap(Math.max(0, Math.round(Number(e.target.value) || 0)))}
               onBlur={() => persist(current({ deliverDailyCap: cap }))}
-              className="h-9 w-20 rounded-lg border border-[--color-border-strong] bg-[--color-surface-2] px-2.5 text-right text-sm tabular-nums text-[--color-fg] focus:border-[--color-accent] focus:outline-none focus:ring-1 focus:ring-[--color-accent] disabled:opacity-50"
+              className="h-9 w-20 rounded-lg border border-(--color-border-strong) bg-(--color-surface-2) px-2.5 text-right text-sm tabular-nums text-(--color-fg) focus:border-(--color-accent) focus:outline-none focus:ring-1 focus:ring-(--color-accent) disabled:opacity-50"
             />
           </Row>
         ) : null}
@@ -184,11 +184,11 @@ export function AutonomyControls({
 
       <div className="mt-3 h-4 text-xs">
         {error ? (
-          <span className="text-[--color-danger]">{error}</span>
+          <span className="text-(--color-danger)">{error}</span>
         ) : flash ? (
-          <span className="text-[--color-ok]">{flash}</span>
+          <span className="text-(--color-ok)">{flash}</span>
         ) : (
-          <span className="text-[--color-faint]">Změny se ukládají hned.</span>
+          <span className="text-(--color-faint)">Změny se ukládají hned.</span>
         )}
       </div>
     </div>

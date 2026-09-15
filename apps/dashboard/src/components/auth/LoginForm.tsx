@@ -17,13 +17,13 @@ export function LoginForm() {
 
   return (
     <Card className="p-6">
-      <div className="mb-4 flex rounded-lg border border-[--color-border] p-1 text-sm">
+      <div className="mb-4 flex rounded-lg border border-(--color-border) p-1 text-sm">
         <button
           type="button"
           onClick={() => setMode("password")}
           className={
             "flex-1 rounded-md py-1.5 transition-colors " +
-            (mode === "password" ? "bg-[--color-surface-2] text-[--color-fg]" : "text-[--color-muted]")
+            (mode === "password" ? "bg-(--color-surface-2) text-(--color-fg)" : "text-(--color-muted)")
           }
         >
           Heslo
@@ -33,7 +33,7 @@ export function LoginForm() {
           onClick={() => setMode("magic")}
           className={
             "flex-1 rounded-md py-1.5 transition-colors " +
-            (mode === "magic" ? "bg-[--color-surface-2] text-[--color-fg]" : "text-[--color-muted]")
+            (mode === "magic" ? "bg-(--color-surface-2) text-(--color-fg)" : "text-(--color-muted)")
           }
         >
           Magic link

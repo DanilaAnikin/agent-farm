@@ -3,12 +3,12 @@ import { cn } from "@/lib/cn";
 import type { Tone } from "@/lib/constants";
 
 const toneClasses: Record<Tone, string> = {
-  ok: "bg-[--color-ok-bg] text-[--color-ok] border-[--color-ok]/30",
-  warn: "bg-[--color-warn-bg] text-[--color-warn] border-[--color-warn]/30",
-  danger: "bg-[--color-danger-bg] text-[--color-danger] border-[--color-danger]/30",
-  info: "bg-[--color-info-bg] text-[--color-info] border-[--color-info]/30",
-  neutral: "bg-[--color-neutral-bg] text-[--color-neutral] border-[--color-border-strong]",
-  violet: "bg-[--color-violet-bg] text-[--color-violet] border-[--color-violet]/30",
+  ok: "bg-(--color-ok-bg) text-(--color-ok) border-(--color-ok)/30",
+  warn: "bg-(--color-warn-bg) text-(--color-warn) border-(--color-warn)/30",
+  danger: "bg-(--color-danger-bg) text-(--color-danger) border-(--color-danger)/30",
+  info: "bg-(--color-info-bg) text-(--color-info) border-(--color-info)/30",
+  neutral: "bg-(--color-neutral-bg) text-(--color-neutral) border-(--color-border-strong)",
+  violet: "bg-(--color-violet-bg) text-(--color-violet) border-(--color-violet)/30",
 };
 
 export function Badge({

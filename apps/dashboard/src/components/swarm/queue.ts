@@ -48,8 +48,13 @@ export interface QueueBreakdown {
   runningActive: number;
   judgingActive: number;
   mergingActive: number;
-  /** Čekající úkoly v projektech, které teď neběží — farma na nich pracovat nebude. */
+  /** Čekající úkoly v pozastavených projektech — farma na nich pracovat nebude, dokud je někdo nepustí. */
   queuedPaused: number;
+  /**
+   * Čekající úkoly v projektech `budget_hold`. NEJSOU pozastavené: pustí se samy
+   * po přetočení rozpočtového dne, proto se nesmí schovat do „v pozastavených".
+   */
+  queuedBudgetHold: number;
   parkedLive: number;
   parkedArchived: number;
 }
@@ -61,6 +66,7 @@ export function queueBreakdown(rows: readonly TaskRollupInput[]): QueueBreakdown
     judgingActive: 0,
     mergingActive: 0,
     queuedPaused: 0,
+    queuedBudgetHold: 0,
     parkedLive: 0,
     parkedArchived: 0,
   };
@@ -72,6 +78,8 @@ export function queueBreakdown(rows: readonly TaskRollupInput[]): QueueBreakdown
       b.runningActive += n(r.running);
       b.judgingActive += n(r.judging);
       b.mergingActive += n(r.merging);
+    } else if (r.project_status === "budget_hold") {
+      b.queuedBudgetHold += n(r.queued);
     } else {
       b.queuedPaused += n(r.queued);
     }
@@ -94,6 +102,7 @@ export function queueSubline(b: QueueBreakdown): string | null {
   if (b.runningActive > 0) casti.push(`${b.runningActive} v práci`);
   if (b.judgingActive > 0) casti.push(`${b.judgingActive} u soudce`);
   if (b.mergingActive > 0) casti.push(`${b.mergingActive} ${plural(b.mergingActive, SLUCUJE)}`);
+  if (b.queuedBudgetHold > 0) casti.push(`${b.queuedBudgetHold} ${plural(b.queuedBudgetHold, CEKA)} na rozpočet`);
   if (b.queuedPaused > 0) casti.push(`${b.queuedPaused} v pozastavených projektech`);
   return casti.length > 0 ? casti.join(" · ") : null;
 }
@@ -162,17 +171,20 @@ export function progressBreakdown(p: ProjectProgress): string {
 export interface WishBreakdown {
   /** Otevřená přání v běžících projektech — to, co farma reálně řeší. */
   openActive: number;
-  /** Otevřená přání v projektech, které stojí. */
+  /** Otevřená přání v pozastavených (nebo zastavených) projektech. */
   openPaused: number;
+  /** Otevřená přání v projektech, které čekají na rozpočet — pustí se samy. */
+  openBudgetHold?: number;
   openByProject: Map<string, number>;
 }
 
 export function wishBreakdown(rows: readonly WishRollupInput[]): WishBreakdown {
-  const out: WishBreakdown = { openActive: 0, openPaused: 0, openByProject: new Map() };
+  const out: WishBreakdown = { openActive: 0, openPaused: 0, openBudgetHold: 0, openByProject: new Map() };
   for (const r of rows) {
     const c = n(r.cnt);
     out.openByProject.set(r.project_id, (out.openByProject.get(r.project_id) ?? 0) + c);
     if (isProjectRunning(r.project_status)) out.openActive += c;
+    else if (r.project_status === "budget_hold") out.openBudgetHold = (out.openBudgetHold ?? 0) + c;
     else out.openPaused += c;
   }
   return out;
@@ -183,6 +195,8 @@ const ROZPRACOVANE = ["rozpracované", "rozpracovaná", "rozpracovaných"] as co
 /** „1 rozpracované · 27 čeká v pozastavených projektech". */
 export function wishBreakdownLine(b: WishBreakdown): string {
   const casti = [`${b.openActive} ${plural(b.openActive, ROZPRACOVANE)}`];
+  const naRozpocet = b.openBudgetHold ?? 0;
+  if (naRozpocet > 0) casti.push(`${naRozpocet} ${plural(naRozpocet, CEKA)} na rozpočet`);
   if (b.openPaused > 0) casti.push(`${b.openPaused} ${plural(b.openPaused, CEKA)} v pozastavených projektech`);
   return casti.join(" · ");
 }

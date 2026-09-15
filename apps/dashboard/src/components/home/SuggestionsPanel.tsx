@@ -64,14 +64,27 @@ export async function SuggestionsPanel({
     .select("id, project_id, title, status, decided_at, decided_reason, wish_id, projects(name, status)")
     .in("status", ["converted", "dismissed", "accepted"])
     .not("decided_at", "is", null)
+    // Seznam patří ke stejným 7 dnům jako souhrn „Za 7 dní: …" — dřív tu byly
+    // převody z 13. 8. pod hlavičkou „Za 7 dní: 0 zadáno".
+    .gte("decided_at", od)
     .order("decided_at", { ascending: false })
     .limit(10);
   if (jenProjekt) recentQ = recentQ.eq("project_id", jenProjekt);
 
+  // Kdy farma rozhodla naposledy — ať prázdný týden neznamená „nikdy nic".
+  let posledniQ = supabase
+    .from("suggestions")
+    .select("decided_at")
+    .in("status", ["converted", "dismissed", "accepted"])
+    .not("decided_at", "is", null)
+    .order("decided_at", { ascending: false })
+    .limit(1);
+  if (jenProjekt) posledniQ = posledniQ.eq("project_id", jenProjekt);
+
   let cekaQ = supabase.from("suggestions").select("id", { count: "exact", head: true }).eq("status", "new");
   if (jenProjekt) cekaQ = cekaQ.eq("project_id", jenProjekt);
 
-  const [recent, zadano, zahozeno, duplicit, mimoRepo, pozastavene, napric, ceka] = await Promise.all([
+  const [recent, zadano, zahozeno, duplicit, mimoRepo, pozastavene, napric, ceka, posledni] = await Promise.all([
     recentQ,
     pocet(["converted", "accepted"]),
     pocet(["dismissed"]),
@@ -83,7 +96,9 @@ export async function SuggestionsPanel({
     pocet(["dismissed"], "decided_reason.like.project_paused%,decided_reason.like.paused%"),
     pocet(["dismissed"], "decided_reason.like.cross_project%,decided_reason.like.no_project%"),
     cekaQ,
+    posledniQ.maybeSingle<{ decided_at: string | null }>(),
   ]);
+  const posledniRozhodnuti = posledni.error ? null : (posledni.data?.decided_at ?? null);
 
   const chybaPoctu = [zadano, zahozeno, duplicit, mimoRepo, pozastavene, napric].some((r) => r.error);
   const rows = (recent.data as DecisionRow[] | null) ?? [];
@@ -111,7 +126,7 @@ export async function SuggestionsPanel({
     <Card>
       <CardHeader
         title="Co farma sama zadala"
-        description="Farma sama vybírá další práci, zahazuje duplicity a nerealistické nápady."
+        description="Rozhodnutí za posledních 7 dní. Farma sama vybírá další práci, zahazuje duplicity a nerealistické nápady."
         action={
           !ceka.error && (ceka.count ?? 0) > 0 ? (
             <Badge tone="neutral">{countLabel(ceka.count ?? 0, TVARY.navrh)} k posouzení farmou</Badge>
@@ -119,16 +134,20 @@ export async function SuggestionsPanel({
         }
       />
       <CardBody>
-        <p className="mb-3 text-xs text-[--color-muted]">{souhrn}</p>
+        <p className="mb-3 text-xs text-(--color-muted)">{souhrn}</p>
         {recent.error ? (
-          <p role="alert" className="rounded-lg border border-[--color-warn]/30 bg-[--color-warn-bg]/40 px-3 py-2 text-xs text-[--color-warn]">
+          <p role="alert" className="rounded-lg border border-(--color-warn)/30 bg-(--color-warn-bg)/40 px-3 py-2 text-xs text-(--color-warn)">
             Rozhodnutí farmy se nepodařilo načíst: {recent.error.message}
           </p>
         ) : rows.length === 0 ? (
           <EmptyState
             icon={<Lightbulb className="size-5" />}
-            title="Farma zatím nic nerozhodla"
-            description="Jakmile farma posoudí první návrhy, uvidíš tu, co zadala a co zahodila."
+            title={posledniRozhodnuti ? "Za posledních 7 dní farma nic nerozhodla" : "Farma zatím nic nerozhodla"}
+            description={
+              posledniRozhodnuti
+                ? `Naposledy rozhodla ${formatDate(posledniRozhodnuti)} (Europe/Prague).`
+                : "Jakmile farma posoudí první návrhy, uvidíš tu, co zadala a co zahodila."
+            }
           />
         ) : (
           <ul className="space-y-2">
@@ -139,21 +158,21 @@ export async function SuggestionsPanel({
               return (
                 <li
                   key={s.id}
-                  className="flex items-start justify-between gap-3 rounded-lg border border-[--color-border] bg-[--color-surface-2] px-3 py-2.5"
+                  className="flex items-start justify-between gap-3 rounded-lg border border-(--color-border) bg-(--color-surface-2) px-3 py-2.5"
                 >
                   <div className="flex min-w-0 items-start gap-2.5">
                     {zadano ? (
-                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[--color-ok]" aria-label="Zadáno" />
+                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-(--color-ok)" aria-label="Zadáno" />
                     ) : (
-                      <MinusCircle className="mt-0.5 size-4 shrink-0 text-[--color-faint]" aria-label="Zahozeno" />
+                      <MinusCircle className="mt-0.5 size-4 shrink-0 text-(--color-faint)" aria-label="Zahozeno" />
                     )}
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-[--color-fg]">{s.title}</div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-[--color-muted]">
+                      <div className="truncate text-sm font-medium text-(--color-fg)">{s.title}</div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-(--color-muted)">
                         {zadano && s.wish_id && s.project_id ? (
                           <Link
                             href={`/projects/${s.project_id}/wishes/${s.wish_id}`}
-                            className="text-[--color-brand] hover:underline"
+                            className="text-(--color-brand) hover:underline"
                           >
                             {d.label}
                           </Link>
@@ -163,14 +182,14 @@ export async function SuggestionsPanel({
                         {d.refWishId && s.project_id ? (
                           <Link
                             href={`/projects/${s.project_id}/wishes/${d.refWishId}`}
-                            className="text-[--color-brand] hover:underline"
+                            className="text-(--color-brand) hover:underline"
                           >
                             původní přání
                           </Link>
                         ) : null}
-                        {d.detail ? <span className="text-[--color-faint]">({d.detail})</span> : null}
+                        {d.detail ? <span className="text-(--color-faint)">({d.detail})</span> : null}
                       </div>
-                      <div className="mt-0.5 text-[11px] text-[--color-faint]">
+                      <div className="mt-0.5 text-[11px] text-(--color-faint)">
                         {scope === "home" ? (p ? `${p.name} · ` : "napříč projekty · ") : ""}
                         {s.decided_at ? (
                           <span title={formatDate(s.decided_at)} suppressHydrationWarning>

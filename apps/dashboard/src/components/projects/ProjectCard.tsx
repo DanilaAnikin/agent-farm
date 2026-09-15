@@ -63,13 +63,13 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
     <Card className={cn("relative flex flex-col overflow-hidden p-5", busy && "lifeline")}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link href={`/projects/${project.id}`} className="t-heading truncate hover:text-[--color-brand]">
+          <Link href={`/projects/${project.id}`} className="t-heading truncate hover:text-(--color-brand)">
             {project.name}
           </Link>
           <div className="mt-1.5 flex items-center gap-2">
             <StatusBadge meta={PROJECT_KIND_META[project.kind]} />
             {busy ? (
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[--color-brand]">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-(--color-brand)">
                 <StatusPulse />
                 {countLabel(busyAgents, TVARY.agent)} {plural(busyAgents, PRACUJE)}
               </span>
@@ -80,7 +80,7 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
       </div>
 
       {/* Stav farmy NAD stavem projektu — aktivní projekt na stojící farmě nepracuje. */}
-      <p className={cn("mt-2 text-xs", bezi && farmStopReason ? "text-[--color-warn]" : "text-[--color-muted]")}>
+      <p className={cn("mt-2 text-xs", bezi && farmStopReason ? "text-(--color-warn)" : "text-(--color-muted)")}>
         {projectStatusLine(project.status)} · {farmStopReason ? `farma stojí: ${farmStopReason}` : "farma běží"}
       </p>
 
@@ -88,15 +88,15 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
       <div className="mt-4 space-y-1.5">
         <div className="flex items-center justify-between gap-2">
           <span className="t-eyebrow">Postup</span>
-          <span className="t-metric text-xs text-[--color-tertiary]">{formatPercent(progress.ratio)}</span>
+          <span className="t-metric text-xs text-(--color-tertiary)">{formatPercent(progress.ratio)}</span>
         </div>
         <ProgressBar ratio={progress.ratio} />
-        <p className="text-[11px] text-[--color-faint]">{progressBreakdown(progress)}</p>
+        <p className="text-[11px] text-(--color-faint)">{progressBreakdown(progress)}</p>
       </div>
 
       {/* Přání: u stojícího projektu jen jeden řádek, jinak rozpracovaná s postupem */}
       {!bezi ? (
-        <p className="mt-4 text-xs text-[--color-muted]">
+        <p className="mt-4 text-xs text-(--color-muted)">
           {openWishCount > 0
             ? `${countLabel(openWishCount, TVARY.prani)} ${plural(openWishCount, CEKA)}, projekt ${projectWaitingPredicate(project.status)}.`
             : projectIdleSentence(project.status)}
@@ -107,10 +107,10 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
             <li key={w.id}>
               <Link
                 href={`/projects/${project.id}/wishes/${w.id}`}
-                className="group block rounded-[--radius-md] border border-[--color-border-subtle] bg-[--color-bg-sunken]/40 px-2.5 py-2 transition-colors hover:border-[--color-border-strong] hover:bg-[--color-surface-2]"
+                className="group block rounded-(--radius-md) border border-(--color-border-subtle) bg-(--color-bg-sunken)/40 px-2.5 py-2 transition-colors hover:border-(--color-border-strong) hover:bg-(--color-surface-2)"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate text-sm text-[--color-muted] group-hover:text-[--color-fg]">
+                  <span className="min-w-0 truncate text-sm text-(--color-muted) group-hover:text-(--color-fg)">
                     {w.title}
                   </span>
                   <span title={w.hint ?? undefined}>
@@ -119,7 +119,7 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
                 </div>
                 <div className="mt-1.5 flex items-center gap-2">
                   <ProgressBar ratio={w.total > 0 ? w.done / w.total : 0} className="flex-1" />
-                  <span className="t-metric shrink-0 text-[11px] text-[--color-tertiary]">
+                  <span className="t-metric shrink-0 text-[11px] text-(--color-tertiary)">
                     {formatPercent(w.total > 0 ? w.done / w.total : 0)}
                   </span>
                 </div>
@@ -127,13 +127,13 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
             </li>
           ))}
           {activeWishes.length > 3 ? (
-            <li className="text-xs text-[--color-faint]">
+            <li className="text-xs text-(--color-faint)">
               + další {countLabel(activeWishes.length - 3, TVARY.prani)}
             </li>
           ) : null}
         </ul>
       ) : (
-        <p className="mt-4 text-xs text-[--color-muted]">
+        <p className="mt-4 text-xs text-(--color-muted)">
           {farmStopReason
             ? `Žádná rozpracovaná přání — práce se doplní, až farma naběhne (${farmStopReason}).`
             : "Žádná rozpracovaná přání — farma sama doplní další práci v příštím kole."}
@@ -152,10 +152,10 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
           <span className="t-metric text-xs">
             {maRozpocet ? (
               <>
-                {formatUsd(todaySpend)} <span className="text-[--color-tertiary]">/ {formatUsd(cap, "cap")}</span>
+                {formatUsd(todaySpend)} <span className="text-(--color-tertiary)">/ {formatUsd(cap, "cap")}</span>
               </>
             ) : (
-              <span className="text-[--color-tertiary]">
+              <span className="text-(--color-tertiary)">
                 {todaySpend > 0 ? `${formatUsd(todaySpend)} · ` : ""}bez rozpočtu
               </span>
             )}
@@ -166,21 +166,21 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
 
       {lastEvent ? (
         <div className="mt-3 truncate text-xs" title={lastEvent.message}>
-          <span className="text-[--color-tertiary]" suppressHydrationWarning>
+          <span className="text-(--color-tertiary)" suppressHydrationWarning>
             {formatRelative(lastEvent.ts)}:{" "}
           </span>
-          <span className="text-[--color-muted]">{lastEvent.label}</span>
+          <span className="text-(--color-muted)">{lastEvent.label}</span>
         </div>
       ) : null}
 
       {/* Akce: zadat úkol + pauza/spuštění */}
       <div className="mt-auto pt-4">
-        <div className="flex flex-wrap items-center gap-2 border-t border-[--color-border-subtle] pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-(--color-border-subtle) pt-3">
           <button
             type="button"
             onClick={() => setMessaging((v) => !v)}
             aria-expanded={messaging}
-            className="ring-focus inline-flex h-8 items-center gap-1.5 rounded-[--radius-sm] border border-[--color-border] bg-[--color-surface-2] px-3 text-xs font-medium text-[--color-muted] transition-colors hover:border-[--color-border-strong] hover:text-[--color-fg]"
+            className="ring-focus inline-flex h-8 items-center gap-1.5 rounded-(--radius-sm) border border-(--color-border) bg-(--color-surface-2) px-3 text-xs font-medium text-(--color-muted) transition-colors hover:border-(--color-border-strong) hover:text-(--color-fg)"
           >
             <MessageSquare className="size-3.5" /> {messaging ? "Zavřít" : "Zadat úkol"}
           </button>
@@ -188,7 +188,7 @@ export function ProjectCard({ data }: { data: ProjectCardData }) {
         </div>
 
         {messaging ? (
-          <div className="mt-3 rounded-lg border border-[--color-border] bg-[--color-surface-2]/50 p-3">
+          <div className="mt-3 rounded-lg border border-(--color-border) bg-(--color-surface-2)/50 p-3">
             <ProjectMessageBox
               projectId={project.id}
               initialNote={managerNote}

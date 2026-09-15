@@ -19,13 +19,13 @@ export function ProgressBar({
   const color =
     kind === "budget"
       ? ratio >= 0.85
-        ? "bg-[--color-budget-over]"
+        ? "bg-(--color-budget-over)"
         : ratio >= 0.6
-          ? "bg-[--color-budget-caution]"
-          : "bg-[--color-budget-safe]"
-      : "bg-[--color-brand]";
+          ? "bg-(--color-budget-caution)"
+          : "bg-(--color-budget-safe)"
+      : "bg-(--color-brand)";
   return (
-    <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-[--color-track]", className)}>
+    <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-(--color-track)", className)}>
       <div
         className={cn("h-full rounded-full transition-[width] duration-500", color)}
         style={{ width: `${pct}%` }}

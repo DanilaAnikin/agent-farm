@@ -98,24 +98,24 @@ export function SpecApproval({
           className="min-h-64 font-mono text-xs"
         />
       ) : (
-        <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-[--color-border] bg-[--color-surface-2] p-4 text-xs text-[--color-fg]">
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-(--color-border) bg-(--color-surface-2) p-4 text-xs text-(--color-fg)">
           {content}
         </pre>
       )}
 
       {criteria.length > 0 ? (
         <div>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[--color-muted]">
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-(--color-muted)">
             Akceptační kritéria
           </h4>
           <ul className="space-y-1.5">
             {criteria.map((c) => (
               <li key={c.id} className="flex gap-2 text-sm">
-                <span className="text-[--color-accent]">◦</span>
+                <span className="text-(--color-accent)">◦</span>
                 <span>
                   {c.description}
                   {c.check ? (
-                    <code className="ml-2 rounded bg-[--color-surface-2] px-1.5 py-0.5 text-xs text-[--color-muted]">
+                    <code className="ml-2 rounded bg-(--color-surface-2) px-1.5 py-0.5 text-xs text-(--color-muted)">
                       {c.check}
                     </code>
                   ) : null}
@@ -126,7 +126,7 @@ export function SpecApproval({
         </div>
       ) : null}
 
-      {error ? <p className="text-xs text-[--color-danger]">{error}</p> : null}
+      {error ? <p className="text-xs text-(--color-danger)">{error}</p> : null}
 
       {rucniSchvaleni ? (
         <div className="flex gap-2">

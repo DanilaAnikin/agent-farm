@@ -89,7 +89,7 @@ export function UserRow({
     <TR>
       <TD>
         <div className="font-medium">{displayName ?? "—"}</div>
-        <div className="text-xs text-[--color-muted]">{email}</div>
+        <div className="text-xs text-(--color-muted)">{email}</div>
       </TD>
       <TD>
         <Select
@@ -111,7 +111,7 @@ export function UserRow({
           wrapperClassName="max-w-32"
           aria-label="Denní strop jazykových modelů"
         />
-        <div className="mt-1 text-[11px] text-[--color-muted]">
+        <div className="mt-1 text-[11px] text-(--color-muted)">
           platí {formatUsd(effectiveDailyCap, "cap")}/den · {sourceLabel}
         </div>
       </TD>
@@ -122,7 +122,7 @@ export function UserRow({
           wrapperClassName="max-w-32"
           aria-label="Denní strop médií"
         />
-        <div className="mt-1 text-[11px] text-[--color-muted]">
+        <div className="mt-1 text-[11px] text-(--color-muted)">
           platí {formatUsd(effectiveMediaCap, "cap")}/den · {sourceLabel}
         </div>
       </TD>
