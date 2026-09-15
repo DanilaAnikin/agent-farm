@@ -182,34 +182,34 @@ export async function QaReport({ wishId }: { wishId: string }) {
         const extraShots = shots.filter((s) => !used.has(s.assetId));
 
         return (
-          <div key={run.id} className="rounded-xl border border-[--color-border] bg-[--color-surface-2]">
+          <div key={run.id} className="rounded-xl border border-(--color-border) bg-(--color-surface-2)">
             {/* hlavička běhu */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[--color-border] px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-(--color-border) px-4 py-3">
               <div className="flex items-center gap-2">
                 <QaStatusBadge status={run.status} dot />
                 {scenarios.length > 0 ? (
-                  <span className="text-xs text-[--color-muted]">
+                  <span className="text-xs text-(--color-muted)">
                     {passed}/{scenarios.length} scénářů prošlo
                     {failed > 0 ? ` · ${failed} ${plural(failed, PROBLEM)}` : ""}
                   </span>
                 ) : null}
               </div>
-              <span className="text-xs text-[--color-muted]" title={formatDate(run.created_at)}>
+              <span className="text-xs text-(--color-muted)" title={formatDate(run.created_at)}>
                 {formatRelative(run.finished_at ?? run.created_at)}
               </span>
             </div>
 
             {/* souhrn + meta */}
             {(run.summary || run.app_url || run.cost_usd > 0) && (
-              <div className="border-b border-[--color-border] px-4 py-3 text-sm">
-                {run.summary ? <p className="text-[--color-fg]">{run.summary}</p> : null}
-                <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-[--color-muted]">
+              <div className="border-b border-(--color-border) px-4 py-3 text-sm">
+                {run.summary ? <p className="text-(--color-fg)">{run.summary}</p> : null}
+                <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-(--color-muted)">
                   {run.app_url ? (
                     <a
                       href={run.app_url}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-[--color-accent] hover:underline"
+                      className="text-(--color-accent) hover:underline"
                     >
                       Testovaná aplikace ↗
                     </a>
@@ -221,11 +221,11 @@ export async function QaReport({ wishId }: { wishId: string }) {
 
             {/* scénáře */}
             {scenarios.length === 0 ? (
-              <p className="px-4 py-4 text-sm text-[--color-muted]">
+              <p className="px-4 py-4 text-sm text-(--color-muted)">
                 {run.status === "running" ? "Tester právě prochází aplikaci…" : "Žádné scénáře k zobrazení."}
               </p>
             ) : (
-              <ul className="divide-y divide-[--color-border]">
+              <ul className="divide-y divide-(--color-border)">
                 {scenarios.map((sc) => {
                   const shot = shotByScenario.get(sc.id);
                   return (
@@ -242,21 +242,21 @@ export async function QaReport({ wishId }: { wishId: string }) {
                           <Badge tone={sc.passed ? "ok" : "danger"} dot>
                             {sc.passed ? "Prošlo" : "Selhalo"}
                           </Badge>
-                          <span className="text-[10px] uppercase tracking-wide text-[--color-muted]">
+                          <span className="text-[10px] uppercase tracking-wide text-(--color-muted)">
                             {KIND_LABEL[sc.kind] ?? sc.kind}
                           </span>
-                          <span className="min-w-0 truncate text-sm font-medium text-[--color-fg]">{sc.name}</span>
+                          <span className="min-w-0 truncate text-sm font-medium text-(--color-fg)">{sc.name}</span>
                         </div>
                         {sc.criterionId ? (
-                          <p className="mt-1 text-xs text-[--color-muted]">
+                          <p className="mt-1 text-xs text-(--color-muted)">
                             Kritérium: <span className="font-mono">{sc.criterionId}</span>
                           </p>
                         ) : null}
                         {sc.detail ? (
-                          <p className="mt-1 text-sm text-[--color-fg]/80">{sc.detail}</p>
+                          <p className="mt-1 text-sm text-(--color-fg)/80">{sc.detail}</p>
                         ) : null}
                         {typeof sc.visionScore === "number" ? (
-                          <p className="mt-1 text-xs text-[--color-muted]">
+                          <p className="mt-1 text-xs text-(--color-muted)">
                             Vizuální skóre: {Math.round(sc.visionScore * 100)} %
                           </p>
                         ) : null}
@@ -269,8 +269,8 @@ export async function QaReport({ wishId }: { wishId: string }) {
 
             {/* screenshoty nepřiřazené ke konkrétnímu scénáři */}
             {extraShots.length > 0 ? (
-              <div className="border-t border-[--color-border] px-4 py-3">
-                <p className="mb-2 text-xs text-[--color-muted]">Další snímky obrazovky</p>
+              <div className="border-t border-(--color-border) px-4 py-3">
+                <p className="mb-2 text-xs text-(--color-muted)">Další snímky obrazovky</p>
                 <div className="flex flex-wrap gap-2">
                   {extraShots.map((s) => (
                     <QaScreenshot key={s.assetId} url={s.url} label="Snímek z testu" />

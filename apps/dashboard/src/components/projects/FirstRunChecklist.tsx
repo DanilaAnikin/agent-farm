@@ -46,19 +46,19 @@ export function FirstRunChecklist({
           <Link
             key={item.label}
             href={item.href}
-            className="flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm hover:bg-[--color-surface-2]"
+            className="flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm hover:bg-(--color-surface-2)"
           >
             <span
               className={
                 "flex h-5 w-5 items-center justify-center rounded-full border text-xs " +
                 (item.done
-                  ? "border-[--color-ok] bg-[--color-ok-bg] text-[--color-ok]"
-                  : "border-[--color-border-strong] text-[--color-muted]")
+                  ? "border-(--color-ok) bg-(--color-ok-bg) text-(--color-ok)"
+                  : "border-(--color-border-strong) text-(--color-muted)")
               }
             >
               {item.done ? "✓" : ""}
             </span>
-            <span className={item.done ? "text-[--color-muted] line-through" : "text-[--color-fg]"}>
+            <span className={item.done ? "text-(--color-muted) line-through" : "text-(--color-fg)"}>
               {item.label}
             </span>
           </Link>

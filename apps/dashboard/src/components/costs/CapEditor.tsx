@@ -157,7 +157,7 @@ export function CapEditor({
         />
         <CardBody>
           {projects.length === 0 ? (
-            <p className="text-sm text-[--color-muted]">Žádné projekty.</p>
+            <p className="text-sm text-(--color-muted)">Žádné projekty.</p>
           ) : (
             <ul className="space-y-2">
               {projects.map((p) => (

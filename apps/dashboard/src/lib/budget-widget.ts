@@ -130,38 +130,63 @@ function vetsi(a: number | null, b: number | null): number | null {
   return Math.max(a, b);
 }
 
+export interface FarmSpend {
+  source: BudgetSource;
+  day: number | null;
+  month: number | null;
+  reserved: number | null;
+  warning: string | null;
+}
+
+/**
+ * Útrata farmy tak, jak o blokaci rozhoduje hlídač — JEDNO číslo pro hlavičku
+ * i pás „Stav farmy". Dřív hlavička ukazovala započtených 5,89 US$ a pás na
+ * velínu změřených 2,40 US$ pod stejným měsíčním stropem.
+ */
+export function farmSpend(input: Pick<BudgetWidgetInput, "isAdmin" | "snapshot" | "ledger">): FarmSpend {
+  const snap = input.isAdmin && input.snapshot?.admin ? input.snapshot : null;
+  const hlidacOdpovida = snap !== null && snap.ready !== null;
+
+  if (snap && hlidacOdpovida) {
+    // Orchestrátor i brána rozhodují podle max(ledger, hlídač) — ukazujeme totéž.
+    return {
+      source: "guard",
+      day: vetsi(cisloNeboNull(snap.day_counted), cisloNeboNull(snap.day_settled)),
+      month: vetsi(cisloNeboNull(snap.month_counted), cisloNeboNull(snap.month_settled)),
+      reserved: cisloNeboNull(snap.day_reserved),
+      warning: null,
+    };
+  }
+  if (snap) {
+    return {
+      source: "ledger",
+      day: vetsi(cisloNeboNull(snap.day_settled), input.ledger.day),
+      month: vetsi(cisloNeboNull(snap.month_settled), input.ledger.month),
+      reserved: null,
+      warning: "Rozpočtový hlídač neodpovídá — čísla jsou jen z pohybů, rezervace v nich chybí.",
+    };
+  }
+  return {
+    source: "ledger",
+    day: input.ledger.day,
+    month: input.ledger.month,
+    reserved: null,
+    warning: input.isAdmin ? "Přehled rozpočtového hlídače se nepodařilo načíst — čísla jsou jen z pohybů." : null,
+  };
+}
+
+/** Krátký popisek původu čísel pod pruhy útraty. */
+export function spendSourceLabel(source: BudgetSource): string {
+  return source === "guard" ? "započteno hlídačem (o blokaci rozhoduje tohle číslo)" : "započteno z pohybů";
+}
+
 export function budgetWidget(input: BudgetWidgetInput): BudgetWidget {
   const now = input.now ?? new Date();
   const dayCap = input.caps.dailyUsd;
   const monthCap = input.caps.monthlyUsd;
-  const snap = input.isAdmin && input.snapshot?.admin ? input.snapshot : null;
-  const hlidacOdpovida = snap !== null && snap.ready !== null;
-
-  let source: BudgetSource;
-  let day: number | null;
-  let month: number | null;
-  let reserved: number | null = null;
-  let warning: string | null = null;
-
-  if (snap && hlidacOdpovida) {
-    // Orchestrátor i brána rozhodují podle max(ledger, hlídač) — ukazujeme totéž.
-    source = "guard";
-    day = vetsi(cisloNeboNull(snap.day_counted), cisloNeboNull(snap.day_settled));
-    month = vetsi(cisloNeboNull(snap.month_counted), cisloNeboNull(snap.month_settled));
-    reserved = cisloNeboNull(snap.day_reserved);
-  } else if (snap) {
-    source = "ledger";
-    day = vetsi(cisloNeboNull(snap.day_settled), input.ledger.day);
-    month = vetsi(cisloNeboNull(snap.month_settled), input.ledger.month);
-    warning = "Rozpočtový hlídač neodpovídá — čísla jsou jen z pohybů, rezervace v nich chybí.";
-  } else {
-    source = "ledger";
-    day = input.ledger.day;
-    month = input.ledger.month;
-    if (input.isAdmin) {
-      warning = "Přehled rozpočtového hlídače se nepodařilo načíst — čísla jsou jen z pohybů.";
-    }
-  }
+  const spend = farmSpend(input);
+  const { source, day, month, reserved } = spend;
+  let warning = spend.warning;
 
   if (day === null && month === null && warning === null) {
     warning = "Útratu se nepodařilo načíst.";

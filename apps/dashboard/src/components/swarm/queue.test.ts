@@ -43,6 +43,27 @@ test("fronta: hlavní číslo jen z aktivních projektů, pozastavené do podř�
   assert.equal(queueSubline(b), "1 u soudce · 100 v pozastavených projektech");
 });
 
+test("fronta: projekty čekající na rozpočet nejsou „pozastavené“", () => {
+  const b = queueBreakdown([
+    radek({ project_id: "contentgen" }),
+    radek({ project_id: "ripieno", project_status: "budget_hold", queued: 1 }),
+    radek({ project_id: "ivanweb", project_status: "budget_hold", queued: 1 }),
+    radek({ project_id: "explain", project_status: "paused", queued: 100 }),
+  ]);
+  assert.equal(b.queuedActive, 0);
+  assert.equal(b.queuedBudgetHold, 2);
+  assert.equal(b.queuedPaused, 100);
+  assert.equal(queueSubline(b), "2 čekají na rozpočet · 100 v pozastavených projektech");
+
+  const w = wishBreakdown([
+    { project_id: "ripieno", project_status: "budget_hold", status: "active", cnt: 1 },
+    { project_id: "explain", project_status: "paused", status: "active", cnt: 27 },
+  ]);
+  assert.equal(w.openBudgetHold, 1);
+  assert.equal(w.openPaused, 27);
+  assert.equal(wishBreakdownLine(w), "0 rozpracovaných · 1 čeká na rozpočet · 27 čeká v pozastavených projektech");
+});
+
 test("fronta: bigint jako řetězec i null se čte bezpečně", () => {
   const b = queueBreakdown([radek({ queued: "5", running: null })]);
   assert.equal(b.queuedActive, 5);
@@ -105,6 +126,7 @@ test("fronta: sloveso u 2–4 v množném čísle („2 se slučují“)", () =>
     judgingActive: 0,
     mergingActive: 0,
     queuedPaused: 0,
+    queuedBudgetHold: 0,
     parkedLive: 0,
     parkedArchived: 0,
   };

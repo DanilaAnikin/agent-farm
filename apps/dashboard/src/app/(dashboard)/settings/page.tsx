@@ -10,7 +10,7 @@ import { ProfileForm } from "@/components/settings/ProfileForm";
 import { ConnectionsForm } from "@/components/settings/ConnectionsForm";
 import type { ConnectionRow, PreferenceProfile } from "@/lib/types";
 
-export const metadata = { title: "Nastavení — Perennial" };
+export const metadata = { title: "Nastavení" };
 
 export default async function SettingsPage() {
   const user = await requireUser();
@@ -63,15 +63,15 @@ export default async function SettingsPage() {
             />
             <CardBody>
               <dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-[1fr_auto]">
-                <dt className="text-[--color-muted]">Měsíční strop farmy</dt>
+                <dt className="text-(--color-muted)">Měsíční strop farmy</dt>
                 <dd className="tabular-nums">{formatUsd(farmCaps.monthlyUsd, "cap")}</dd>
-                <dt className="text-[--color-muted]">Denní strop farmy (modely)</dt>
+                <dt className="text-(--color-muted)">Denní strop farmy (modely)</dt>
                 <dd className="tabular-nums">{formatUsd(farmCaps.dailyUsd, "cap")}</dd>
-                <dt className="text-[--color-muted]">Denní strop médií farmy</dt>
+                <dt className="text-(--color-muted)">Denní strop médií farmy</dt>
                 <dd className="tabular-nums">{formatUsd(farmCaps.dailyMediaUsd, "cap")}</dd>
-                <dt className="text-[--color-muted]">Tvůj denní strop (modely)</dt>
+                <dt className="text-(--color-muted)">Tvůj denní strop (modely)</dt>
                 <dd className="tabular-nums">{formatUsd(userCaps.dailyCapUsd, "cap")}</dd>
-                <dt className="text-[--color-muted]">Tvůj denní strop (média)</dt>
+                <dt className="text-(--color-muted)">Tvůj denní strop (média)</dt>
                 <dd className="tabular-nums">{formatUsd(userCaps.dailyMediaCapUsd, "cap")}</dd>
               </dl>
               <p className="t-meta mt-3">
@@ -82,7 +82,7 @@ export default async function SettingsPage() {
                     ? " Stropy farmy se nepodařilo načíst, jsou zobrazené výchozí hodnoty."
                     : " Stropy farmy jsou přečtené záložní cestou přímo z nastavení farmy."
                   : ""}{" "}
-                <Link href="/costs" className="text-[--color-accent] hover:underline">
+                <Link href="/costs" className="text-(--color-accent) hover:underline">
                   Čerpání a úpravy v Nákladech →
                 </Link>
               </p>

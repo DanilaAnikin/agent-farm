@@ -99,7 +99,7 @@ export function NewWishForm({
                   key={t.id}
                   type="button"
                   onClick={() => applyTemplate(t)}
-                  className="rounded-lg border border-[--color-border-strong] bg-[--color-surface-2] px-3 py-1.5 text-xs text-[--color-muted] hover:text-[--color-fg]"
+                  className="rounded-lg border border-(--color-border-strong) bg-(--color-surface-2) px-3 py-1.5 text-xs text-(--color-muted) hover:text-(--color-fg)"
                 >
                   {t.label}
                 </button>
@@ -193,7 +193,7 @@ export function NewWishForm({
                 />
               </Field>
 
-              {error ? <p role="alert" className="text-xs text-[--color-danger]">{error}</p> : null}
+              {error ? <p role="alert" className="text-xs text-(--color-danger)">{error}</p> : null}
 
               <div className="flex justify-end">
                 <Button type="submit" loading={pending}>
@@ -216,7 +216,7 @@ export function NewWishForm({
                 router.push(`/projects/${projectId}/wishes/${wishId}`);
               }}
             />
-            <p className="mt-3 text-xs text-[--color-muted]">
+            <p className="mt-3 text-xs text-(--color-muted)">
               Audio se nahraje do Knihovny a přepíše se automaticky. Přepis pak uvidíš u přání.
             </p>
           </CardBody>

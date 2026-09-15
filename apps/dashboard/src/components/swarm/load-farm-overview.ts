@@ -2,6 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { capsFromState, getBudgetSnapshot, getFarmRunState } from "@/lib/server/farm-state";
 import { farmState, type FarmState } from "@/lib/farm-state";
+import { farmSpend, spendSourceLabel, type BudgetSource } from "@/lib/budget-widget";
 import { RPC, type CostSummaryRow, type FarmRunState, type TaskRollupRow, type WishRollupRow } from "@/lib/rpc";
 import { isOffpeakUtc, nextOffpeakStart, parseOffpeakWindows, startOfUtcDayIso, startOfUtcMonthIso, type UtcWindow } from "@/lib/time";
 import { monthLabelCs } from "./FarmStatusBand";
@@ -29,8 +30,15 @@ export interface FarmOverview {
   rollupError: string | null;
   wishRollup: WishRollupRow[];
   wishRollupError: string | null;
+  /**
+   * Útrata farmy dnes a za měsíc — STEJNÉ číslo jako v hlavičce: u admina
+   * započtené hlídačem (o blokaci rozhoduje ono), jinak z pohybů.
+   */
   todaySpend: number | null;
   monthSpend: number | null;
+  spendSource: BudgetSource;
+  spendSourceLabel: string;
+  /** Změřeno z pohybů po projektech (karty projektů, denní stropy projektů). */
   todaySpendByProject: Record<string, number>;
   spendError: string | null;
 }
@@ -52,22 +60,29 @@ export async function loadFarmOverview(now: Date = new Date()): Promise<FarmOver
   const state = farmState({ ...run.state, guard_ready: guardReady }, now);
   const windows = parseOffpeakWindows(run.state.offpeak_windows_utc);
 
-  // Útrata: jeden agregovaný dotaz za měsíc, dnešek z něj (klíč dne je UTC, jako strop).
-  let todaySpend: number | null = null;
-  let monthSpend: number | null = null;
+  // Pohyby: jeden agregovaný dotaz za měsíc, dnešek z něj (klíč dne je UTC, jako strop).
+  let ledgerDen: number | null = null;
+  let ledgerMesic: number | null = null;
   const todaySpendByProject: Record<string, number> = {};
   if (!costRes.error) {
-    todaySpend = 0;
-    monthSpend = 0;
+    ledgerDen = 0;
+    ledgerMesic = 0;
     for (const r of (costRes.data as CostSummaryRow[] | null) ?? []) {
       const castka = Number(r.cost_usd) || 0;
-      monthSpend += castka;
+      ledgerMesic += castka;
       if (String(r.day).slice(0, 10) === dnesKlic) {
-        todaySpend += castka;
+        ledgerDen += castka;
         if (r.project_id) todaySpendByProject[r.project_id] = (todaySpendByProject[r.project_id] ?? 0) + castka;
       }
     }
   }
+  // Pás „Stav farmy" dřív ukazoval „Září 2,40 / 20,00 US$" z pohybů, zatímco hlavička
+  // nad ním „Měsíc 5,89 / 20,00 US$" od hlídače. Obojí teď jde přes farmSpend().
+  const spend = farmSpend({
+    isAdmin: budget.snapshot.admin,
+    snapshot: budget.snapshot.admin ? budget.snapshot : null,
+    ledger: { day: ledgerDen, month: ledgerMesic },
+  });
 
   // Od kdy stav platí: u zamčeného hlídače jeho čas, u pauzy poslední zápis nastavení.
   const sinceIso =
@@ -97,9 +112,11 @@ export async function loadFarmOverview(now: Date = new Date()): Promise<FarmOver
     rollupError: rollupRes.error ? `Frontu úkolů se nepodařilo načíst (${rollupRes.error.message}).` : null,
     wishRollup: (wishRes.data as WishRollupRow[] | null) ?? [],
     wishRollupError: wishRes.error ? `Přehled přání se nepodařilo načíst (${wishRes.error.message}).` : null,
-    todaySpend,
-    monthSpend,
+    todaySpend: spend.day,
+    monthSpend: spend.month,
+    spendSource: spend.source,
+    spendSourceLabel: spendSourceLabel(spend.source),
     todaySpendByProject,
-    spendError: costRes.error ? `Útratu se nepodařilo načíst (${costRes.error.message}).` : null,
+    spendError: costRes.error ? `Útratu po projektech se nepodařilo načíst (${costRes.error.message}).` : null,
   };
 }

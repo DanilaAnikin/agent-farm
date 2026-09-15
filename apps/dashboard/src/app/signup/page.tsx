@@ -4,7 +4,7 @@ import { SignupForm } from "@/components/auth/SignupForm";
 import { supabaseServiceRoleKey, supabaseUrl } from "@/lib/env";
 import { inviteRejection } from "@/lib/admin-guards";
 
-export const metadata = { title: "Registrace — Perennial" };
+export const metadata = { title: "Registrace" };
 export const dynamic = "force-dynamic";
 
 /*
@@ -46,20 +46,20 @@ export default async function SignupPage({
     <main className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-[--color-accent] text-xl font-bold text-white">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-(--color-accent) text-xl font-bold text-white">
             ⬢
           </div>
           <h1 className="text-xl font-semibold">Registrace do Perennial</h1>
-          <p className="mt-1 text-sm text-[--color-muted]">Účet vzniká jen z pozvánky od administrátora.</p>
+          <p className="mt-1 text-sm text-(--color-muted)">Účet vzniká jen z pozvánky od administrátora.</p>
         </div>
         {"email" in pozvanka ? (
           <SignupForm token={token} email={pozvanka.email} />
         ) : (
-          <p role="alert" className="text-center text-sm text-[--color-danger]">
+          <p role="alert" className="text-center text-sm text-(--color-danger)">
             {pozvanka.chyba}
           </p>
         )}
-        <p className="mt-6 text-center text-xs text-[--color-faint]">
+        <p className="mt-6 text-center text-xs text-(--color-faint)">
           Už máš účet?{" "}
           <Link href="/login" className="underline">
             Přihlas se

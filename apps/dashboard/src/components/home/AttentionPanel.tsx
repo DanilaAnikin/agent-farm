@@ -15,14 +15,14 @@ function Polozka({ item, projectNames }: { item: AttentionItem; projectNames: Re
   const obsah = (
     <div className="flex min-w-0 items-start gap-2.5">
       {chyba ? (
-        <XCircle className="mt-0.5 size-4 shrink-0 text-[--color-danger]" />
+        <XCircle className="mt-0.5 size-4 shrink-0 text-(--color-danger)" />
       ) : (
-        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[--color-warn]" />
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-(--color-warn)" />
       )}
       <div className="min-w-0">
-        <div className="text-sm font-medium text-[--color-fg]">{item.title}</div>
-        <div className="mt-0.5 text-xs text-[--color-muted]">{item.detail}</div>
-        <div className="mt-0.5 text-[11px] text-[--color-faint]">
+        <div className="text-sm font-medium text-(--color-fg)">{item.title}</div>
+        <div className="mt-0.5 text-xs text-(--color-muted)">{item.detail}</div>
+        <div className="mt-0.5 text-[11px] text-(--color-faint)">
           {projekt ? `${projekt} · ` : ""}
           {item.since ? (
             // „od před 3 hodinami" není česky — relativní čas stojí sám, přesný v title.
@@ -36,8 +36,8 @@ function Polozka({ item, projectNames }: { item: AttentionItem; projectNames: Re
   );
   const tridy = `block rounded-lg border px-3 py-2.5 transition-colors ${
     chyba
-      ? "border-[--color-danger]/30 bg-[--color-danger-bg]/40 hover:border-[--color-danger]/60"
-      : "border-[--color-warn]/30 bg-[--color-warn-bg]/30 hover:border-[--color-warn]/60"
+      ? "border-(--color-danger)/30 bg-(--color-danger-bg)/40 hover:border-(--color-danger)/60"
+      : "border-(--color-warn)/30 bg-(--color-warn-bg)/30 hover:border-(--color-warn)/60"
   }`;
   return item.project_id ? (
     <Link href={`/projects/${item.project_id}`} className={tridy}>
@@ -67,7 +67,7 @@ export function AttentionPanel({
 }) {
   if (error) {
     return (
-      <p role="alert" className="rounded-lg border border-[--color-warn]/30 bg-[--color-warn-bg]/40 px-4 py-2.5 text-sm text-[--color-warn]">
+      <p role="alert" className="rounded-lg border border-(--color-warn)/30 bg-(--color-warn-bg)/40 px-4 py-2.5 text-sm text-(--color-warn)">
         {error}
       </p>
     );
@@ -78,7 +78,7 @@ export function AttentionPanel({
   const polozky = sortAttention(attention.items ?? []);
   if (polozky.length === 0) {
     return (
-      <p className="flex items-center gap-2 rounded-lg border border-[--color-ok]/25 bg-[--color-ok-bg]/30 px-4 py-2.5 text-sm text-[--color-ok]">
+      <p className="flex items-center gap-2 rounded-lg border border-(--color-ok)/25 bg-(--color-ok-bg)/30 px-4 py-2.5 text-sm text-(--color-ok)">
         <CheckCircle2 className="size-4 shrink-0" />
         Vše běží samo — žádný incident, který by potřeboval tvou pozornost.
       </p>
@@ -108,7 +108,7 @@ export function AttentionPanel({
         </ul>
         {zbytek.length > 0 ? (
           <details className="mt-3">
-            <summary className="cursor-pointer text-xs font-medium text-[--color-brand] hover:underline">
+            <summary className="cursor-pointer text-xs font-medium text-(--color-brand) hover:underline">
               Zobrazit vše ({polozky.length})
             </summary>
             <ul className="mt-2 max-h-[28rem] space-y-2 overflow-y-auto">

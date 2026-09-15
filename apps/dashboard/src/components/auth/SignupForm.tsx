@@ -37,7 +37,7 @@ export function SignupForm({ token, email }: { token: string; email: string }) {
           />
         </Field>
 
-        {state.message ? <p className="text-xs text-[--color-danger]">{state.message}</p> : null}
+        {state.message ? <p className="text-xs text-(--color-danger)">{state.message}</p> : null}
 
         <Button type="submit" loading={pending} className="w-full">
           Vytvořit účet a začít

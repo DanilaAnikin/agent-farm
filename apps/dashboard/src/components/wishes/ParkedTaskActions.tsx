@@ -97,7 +97,7 @@ export function ParkedTaskActions({
         )}
       </div>
       {confirmingCancel ? (
-        <p className="text-xs text-[--color-muted]">
+        <p className="text-xs text-(--color-muted)">
           Úkol zůstane zaparkovaný jako zrušený majitelem a farma ho sama znovu nespustí.
         </p>
       ) : null}

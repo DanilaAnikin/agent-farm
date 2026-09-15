@@ -172,19 +172,19 @@ export function DialogContent({
         aria-describedby={description ? descId : undefined}
         tabIndex={-1}
         className={cn(
-          "ring-focus relative z-10 my-8 w-full max-w-lg rounded-xl border border-[--color-border-strong] bg-[--color-surface] shadow-2xl focus:outline-none",
+          "ring-focus relative z-10 my-8 w-full max-w-lg rounded-xl border border-(--color-border-strong) bg-(--color-surface) shadow-2xl focus:outline-none",
           className,
         )}
       >
         {(title || description) && (
-          <div className="border-b border-[--color-border] px-5 py-4">
+          <div className="border-b border-(--color-border) px-5 py-4">
             {title ? (
-              <h2 id={titleId} className="text-base font-semibold text-[--color-fg]">
+              <h2 id={titleId} className="text-base font-semibold text-(--color-fg)">
                 {title}
               </h2>
             ) : null}
             {description ? (
-              <p id={descId} className="mt-1 text-sm text-[--color-muted]">
+              <p id={descId} className="mt-1 text-sm text-(--color-muted)">
                 {description}
               </p>
             ) : null}

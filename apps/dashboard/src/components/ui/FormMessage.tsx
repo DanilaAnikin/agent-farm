@@ -26,7 +26,7 @@ export function FormMessage({
       aria-live={isError ? "assertive" : "polite"}
       className={cn(
         "inline-flex items-center gap-1.5 text-xs",
-        isError ? "text-[--color-danger]" : "text-[--color-brand]",
+        isError ? "text-(--color-danger)" : "text-(--color-brand)",
         className,
       )}
     >

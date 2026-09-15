@@ -20,6 +20,23 @@ import { getBudgetSnapshot, getFarmRunState } from "@/lib/server/farm-state";
 import { formatDateShort, formatUsd } from "@/lib/format";
 import { countLabel, TVARY } from "@/lib/plural";
 import type { AttemptRow, ProjectStatus, ReviewRow, SpecRow, TaskRow, WishRow } from "@/lib/types";
+import type { Metadata } from "next";
+
+/** Titulek karty: „Název přání · projekt" (layout doplní „· Perennial"). */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string; wishId: string }>;
+}): Promise<Metadata> {
+  const { id, wishId } = await params;
+  const supabase = await createClient();
+  const [{ data: prani }, { data: projekt }] = await Promise.all([
+    supabase.from("wishes").select("title").eq("id", wishId).maybeSingle<{ title: string }>(),
+    supabase.from("projects").select("name").eq("id", id).maybeSingle<{ name: string }>(),
+  ]);
+  const nazev = prani?.title ?? "Přání";
+  return { title: projekt?.name ? `${nazev} · ${projekt.name}` : nazev };
+}
 
 export default async function WishDetailPage({
   params,
@@ -49,7 +66,7 @@ export default async function WishDetailPage({
       .limit(500),
     supabase
       .from("events")
-      .select("id, ts, type, level, message, project_id, wish_id, task_id, run_id:data->>run_id, pr_url:data->>prUrl")
+      .select("id, ts, type, level, message, project_id, wish_id, task_id, run_id:data->>run_id, pr_url:data->>prUrl, scope:data->>scope")
       .eq("wish_id", wishId)
       .order("ts", { ascending: false })
       .limit(200),
@@ -158,7 +175,7 @@ export default async function WishDetailPage({
           </span>
         }
         description={
-          <Link href={`/projects/${id}`} className="hover:text-[--color-fg]">
+          <Link href={`/projects/${id}`} className="hover:text-(--color-fg)">
             ← {projectData?.name ?? "Projekt"}
           </Link>
         }
@@ -223,11 +240,11 @@ export default async function WishDetailPage({
             <CardHeader title="Úkoly" description={`${countLabel(tasks.length, TVARY.ukol)} celkem`} />
             <CardBody>
               {tasksRes.error ? (
-                <p role="alert" className="text-xs text-[--color-warn]">
+                <p role="alert" className="text-xs text-(--color-warn)">
                   Úkoly se nepodařilo načíst ({tasksRes.error.message}).
                 </p>
               ) : activeItems.length === 0 ? (
-                <p className="text-sm text-[--color-muted]">Žádné úkoly v práci.</p>
+                <p className="text-sm text-(--color-muted)">Žádné úkoly v práci.</p>
               ) : (
                 <TaskTree items={activeItems} projectId={id} wishId={wishId} />
               )}
@@ -267,7 +284,7 @@ export default async function WishDetailPage({
               />
               <CardBody>
                 <details>
-                  <summary className="cursor-pointer text-sm text-[--color-muted] hover:text-[--color-fg]">
+                  <summary className="cursor-pointer text-sm text-(--color-muted) hover:text-(--color-fg)">
                     Zobrazit {countLabel(archivedItems.length, TVARY.ukol)} v archivu
                   </summary>
                   <div className="mt-3">
@@ -285,7 +302,7 @@ export default async function WishDetailPage({
             <CardBody>
               <div className="flex items-baseline justify-between">
                 <span className="text-2xl font-semibold tabular-nums">{formatUsd(wish.spent_usd)}</span>
-                <span className="text-sm text-[--color-muted]">z {formatUsd(wish.budget_usd)}</span>
+                <span className="text-sm text-(--color-muted)">z {formatUsd(wish.budget_usd)}</span>
               </div>
             </CardBody>
           </Card>
@@ -294,7 +311,7 @@ export default async function WishDetailPage({
             <Card>
               <CardHeader title="Zadání" />
               <CardBody>
-                <pre className="whitespace-pre-wrap text-sm text-[--color-fg]">{wish.description}</pre>
+                <pre className="whitespace-pre-wrap text-sm text-(--color-fg)">{wish.description}</pre>
               </CardBody>
             </Card>
           ) : null}

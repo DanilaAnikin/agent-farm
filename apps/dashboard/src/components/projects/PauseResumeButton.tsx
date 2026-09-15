@@ -43,7 +43,7 @@ export function PauseResumeButton({
   if (status === "stopped") {
     return (
       <span
-        className="inline-flex items-center gap-1.5 text-xs text-[--color-muted]"
+        className="inline-flex items-center gap-1.5 text-xs text-(--color-muted)"
         title="Postupné zapínání spouští projekty po jednom, když projdou kontroly zdraví."
       >
         <Hourglass className="size-3.5 shrink-0" />
@@ -111,12 +111,12 @@ export function PauseResumeButton({
           description="Farma na projektu začne pracovat sama v příštím kole."
         >
           {!preview ? (
-            <p className="text-sm text-[--color-muted]">Načítám frontu projektu…</p>
+            <p className="text-sm text-(--color-muted)">Načítám frontu projektu…</p>
           ) : !preview.ok ? (
             <FormMessage tone="error">{preview.message ?? "Frontu se nepodařilo načíst."}</FormMessage>
           ) : (
             <div className="space-y-3 text-sm">
-              <p className="text-[--color-fg]">
+              <p className="text-(--color-fg)">
                 Ve frontě čeká {countLabel(preview.queued, TVARY.ukol)}
                 {preview.oldestQueuedAt ? (
                   <>
@@ -138,7 +138,7 @@ export function PauseResumeButton({
                     <span>
                       Archivovat {countLabel(preview.stale, TVARY.ukol)} starších než {preview.staleDays} dní a začít
                       od aktuálního stavu repozitáře
-                      <span className="block text-xs text-[--color-muted]">
+                      <span className="block text-xs text-(--color-muted)">
                         Doporučeno. Úkoly se nesmažou, jen se odloží jako historická fronta.
                       </span>
                     </span>

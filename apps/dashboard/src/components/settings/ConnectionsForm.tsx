@@ -23,22 +23,22 @@ function StavPripojeni({ status, tokenSaved }: { status: GithubStatus | null; to
     if (status.ok) {
       const pres = status.source === "env" ? "serverové prostředí" : "tvůj uložený token";
       return (
-        <p className="text-sm text-[--color-fg]">
+        <p className="text-sm text-(--color-fg)">
           Připojeno přes {pres}{" "}
-          <span className="text-[--color-muted]" title={status.checked_at ? formatDate(status.checked_at) : undefined}>
+          <span className="text-(--color-muted)" title={status.checked_at ? formatDate(status.checked_at) : undefined}>
             ({ucet}, {overeno})
           </span>
         </p>
       );
     }
     return (
-      <p className="text-sm text-[--color-danger]">
+      <p className="text-sm text-(--color-danger)">
         Připojení selhalo ({overeno}){status.error ? `: ${status.error}` : "."}
       </p>
     );
   }
   return (
-    <p className="text-sm text-[--color-muted]">
+    <p className="text-sm text-(--color-muted)">
       {tokenSaved
         ? "Token je uložený. Orchestrátor zatím nenahlásil, jestli s ním na GitHub dosáhne."
         : "Orchestrátor zatím nenahlásil stav připojení."}
@@ -95,9 +95,9 @@ export function ConnectionsForm({
       <CardBody className="space-y-4">
         <StavPripojeni status={githubStatus} tokenSaved={tokenSaved} />
 
-        <div className="space-y-3 border-t border-[--color-border-subtle] pt-4">
+        <div className="space-y-3 border-t border-(--color-border-subtle) pt-4">
           <div>
-            <h4 className="text-sm font-medium text-[--color-fg]">Vlastní token (volitelné přepsání)</h4>
+            <h4 className="text-sm font-medium text-(--color-fg)">Vlastní token (volitelné přepsání)</h4>
             <p className="t-meta mt-1">
               Fine-grained PAT s právy k repozitářům (contents a pull requests: čtení i zápis).
               {tokenSaved && updatedAt ? ` Uložený token naposledy změněn ${formatDate(updatedAt)}.` : ""}

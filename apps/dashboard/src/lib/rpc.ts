@@ -29,6 +29,20 @@ export interface FarmRunState {
   next_resume_at: unknown;
   offpeak_windows_utc: unknown;
   updated_at: string | null;
+  /**
+   * Od migrace 0017 (souhrny, ne tajemství): kolik projektů čeká v `budget_hold`,
+   * kolik mají čekajících úkolů, od kdy nejstarší čeká a kolik práce mají aktivní
+   * projekty. Záložní čtení z `farm_settings` je nemá → stav je pak neuvádí.
+   */
+  budget_hold_projects?: unknown;
+  budget_hold_queued?: unknown;
+  budget_hold_since?: unknown;
+  /**
+   * Proč držené projekty čekají: `{ day, month, credits, other }` (počty).
+   * O půlnoci UTC se vrací jen `day`; měsíční strop a kredity ne.
+   */
+  budget_hold_reasons?: unknown;
+  active_work?: unknown;
 }
 
 /** Stav připojení k GitHubu, jak ho do DB zapisuje orchestrátor. NIKDY neobsahuje token. */
@@ -73,7 +87,8 @@ export type AttentionKind =
   | "pause_overdue"
   | "agent_stalled"
   | "task_stuck"
-  | "task_merge_stuck";
+  | "task_merge_stuck"
+  | "deploy_failed";
 
 export interface AttentionItem {
   kind: AttentionKind;

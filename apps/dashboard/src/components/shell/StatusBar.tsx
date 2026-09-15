@@ -122,7 +122,11 @@ function useFarmStatus(props: StatusBarProps) {
   }, [supabase, isAdmin]);
 
   const realtime = useRealtime({
-    tables: ["farm_settings", "cost_ledger"],
+    // `projects`: přechod do/z budget_hold mění stav farmy („Farma čeká na rozpočet").
+    // `tasks`, `wishes`: „čeká na rozpočet" platí jen bez práce v aktivních projektech,
+    // takže nový úkol nebo přání musí stav přepočítat hned, ne až po minutovém obnovení.
+    // Agenti se mění s úkoly; jejich heartbeat by jen zbytečně spouštěl dotazy.
+    tables: ["farm_settings", "cost_ledger", "projects", "tasks", "wishes"],
     onChange: () => void refresh(),
     throttleMs: 2000,
     fallbackPollMs: 30_000,
@@ -194,28 +198,28 @@ export function StatusBar(props: StatusBarProps) {
 
   if (variant === "drawer") {
     return (
-      <section aria-label="Stav farmy a rozpočet" className="flex flex-col gap-3 border-b border-[--color-border-subtle] p-4">
+      <section aria-label="Stav farmy a rozpočet" className="flex flex-col gap-3 border-b border-(--color-border-subtle) p-4">
         <div role="status" aria-live="polite" className="flex flex-col items-start gap-1.5">
           {pilulka}
-          <p className="text-xs text-[--color-muted]">{popisStavu}</p>
+          <p className="text-xs text-(--color-muted)">{popisStavu}</p>
         </div>
 
         <dl aria-label={widget.ariaLabel} className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-          <dt className="text-[--color-muted]">Dnes</dt>
+          <dt className="text-(--color-muted)">Dnes</dt>
           <dd className="tabular-nums">{widget.dayText}</dd>
-          <dt className="text-[--color-muted]">Měsíc</dt>
+          <dt className="text-(--color-muted)">Měsíc</dt>
           <dd className="tabular-nums">{widget.monthText}</dd>
           {widget.reservedText ? (
             <>
               <dt className="sr-only">Rezervace</dt>
-              <dd className="col-start-2 text-[--color-faint]">{widget.reservedText}</dd>
+              <dd className="col-start-2 text-(--color-faint)">{widget.reservedText}</dd>
             </>
           ) : null}
         </dl>
         <ProgressBar ratio={widget.ratio} kind="budget" />
-        <p className="t-micro text-[--color-faint]">{widget.title.split("\n")[0]}</p>
+        <p className="t-micro text-(--color-faint)">{widget.title.split("\n")[0]}</p>
         {widget.warning ? (
-          <p role="alert" className="flex items-start gap-1.5 text-xs text-[--color-warn]">
+          <p role="alert" className="flex items-start gap-1.5 text-xs text-(--color-warn)">
             <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
             {widget.warning}
           </p>
@@ -238,10 +242,10 @@ export function StatusBar(props: StatusBarProps) {
         title={widget.title}
         className="flex shrink-0 items-baseline gap-1 text-xs tabular-nums sm:hidden"
       >
-        <span aria-hidden className="text-[10px] text-[--color-faint]">
+        <span aria-hidden className="text-[10px] text-(--color-faint)">
           {widget.compactLabel}
         </span>
-        <span aria-hidden className={cn(widget.warning && "text-[--color-warn]")}>
+        <span aria-hidden className={cn(widget.warning && "text-(--color-warn)")}>
           {widget.compactText}
         </span>
       </span>
@@ -250,21 +254,21 @@ export function StatusBar(props: StatusBarProps) {
       <div title={widget.title} className="hidden min-w-[15rem] flex-col gap-1 sm:flex">
         <dl aria-label={widget.ariaLabel} className="flex items-center gap-x-3 text-xs">
           <div className="flex items-baseline gap-x-1.5">
-            <dt className="text-[--color-muted]">Dnes</dt>
+            <dt className="text-(--color-muted)">Dnes</dt>
             <dd className="tabular-nums">{widget.dayText}</dd>
           </div>
-          <div className="flex items-baseline gap-x-1.5 border-l border-[--color-border-subtle] pl-3">
-            <dt className="text-[--color-muted]">Měsíc</dt>
+          <div className="flex items-baseline gap-x-1.5 border-l border-(--color-border-subtle) pl-3">
+            <dt className="text-(--color-muted)">Měsíc</dt>
             <dd className="tabular-nums">{widget.monthText}</dd>
           </div>
           {widget.reservedText ? (
             <div className="hidden items-baseline xl:flex">
               <dt className="sr-only">Rezervace</dt>
-              <dd className="text-[--color-faint]">{widget.reservedText}</dd>
+              <dd className="text-(--color-faint)">{widget.reservedText}</dd>
             </div>
           ) : null}
           {widget.warning ? (
-            <div className="flex items-center text-[--color-warn]">
+            <div className="flex items-center text-(--color-warn)">
               <dt className="sr-only">Upozornění</dt>
               <dd className="flex items-center gap-1">
                 <AlertTriangle aria-hidden className="size-3.5" />
@@ -275,7 +279,7 @@ export function StatusBar(props: StatusBarProps) {
         </dl>
         <div className="flex items-center gap-2">
           <ProgressBar ratio={widget.ratio} kind="budget" className="flex-1" />
-          <span className="t-micro hidden shrink-0 text-[--color-faint] lg:inline">{widget.sourceLabel}</span>
+          <span className="t-micro hidden shrink-0 text-(--color-faint) lg:inline">{widget.sourceLabel}</span>
         </div>
       </div>
 

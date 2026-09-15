@@ -17,7 +17,8 @@ export type AttentionKindCode =
   | "pause_overdue"
   | "agent_stalled"
   | "task_stuck"
-  | "task_merge_stuck";
+  | "task_merge_stuck"
+  | "deploy_failed";
 
 export interface AttentionLike {
   kind: string;
@@ -33,6 +34,7 @@ const TVARY_DRUHU: Record<AttentionKindCode, PluralForms> = {
   agent_stalled: ["agent bez signálu", "agenti bez signálu", "agentů bez signálu"],
   task_stuck: ["uvízlý úkol", "uvízlé úkoly", "uvízlých úkolů"],
   task_merge_stuck: ["úkol čeká na sloučení", "úkoly čekají na sloučení", "úkolů čeká na sloučení"],
+  deploy_failed: ["selhané nasazení", "selhaná nasazení", "selhaných nasazení"],
 };
 
 /** Pořadí druhů: co blokuje celou farmu, jde první. */
@@ -41,9 +43,10 @@ const PRIORITA: Record<string, number> = {
   pause_overdue: 1,
   budget_block: 2,
   owner_pause: 3,
-  task_stuck: 4,
-  task_merge_stuck: 5,
-  agent_stalled: 6,
+  deploy_failed: 4,
+  task_stuck: 5,
+  task_merge_stuck: 6,
+  agent_stalled: 7,
 };
 
 export function sortAttention<T extends AttentionLike>(items: readonly T[]): T[] {

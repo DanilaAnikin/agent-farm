@@ -50,12 +50,12 @@ export function SuggestionActions({
           value={target}
           onChange={(e) => setTarget(e.target.value)}
           aria-label="Cílový projekt"
-          className="ring-focus h-8 rounded-[--radius-sm] border border-[--color-border] bg-[--color-surface-2] px-2 text-xs text-[--color-fg] focus:outline-none"
+          className="ring-focus h-8 rounded-(--radius-sm) border border-(--color-border) bg-(--color-surface-2) px-2 text-xs text-(--color-fg) focus:outline-none"
         >
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
-              {p.status !== "active" ? " (pozastaveno)" : ""}
+              {p.status === "budget_hold" ? " (čeká na rozpočet)" : p.status !== "active" ? " (pozastaveno)" : ""}
             </option>
           ))}
         </select>
@@ -83,7 +83,7 @@ export function SuggestionActions({
         </Button>
       </div>
       {vybrany && vybrany.status !== "active" ? (
-        <span className="text-[11px] text-[--color-muted]">Projekt je pozastavený — přání počká.</span>
+        <span className="text-[11px] text-(--color-muted)">Projekt je pozastavený — přání počká.</span>
       ) : null}
       {error ? <FormMessage tone="error">{error}</FormMessage> : null}
     </div>

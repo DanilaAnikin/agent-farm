@@ -7,7 +7,7 @@ import { NewWishForm } from "@/components/wishes/NewWishForm";
 import { capsFromState, getFarmRunState } from "@/lib/server/farm-state";
 import type { ProjectRow } from "@/lib/types";
 
-export const metadata = { title: "Nové přání — Perennial" };
+export const metadata = { title: "Nové přání" };
 
 export default async function NewWishPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -28,7 +28,7 @@ export default async function NewWishPage({ params }: { params: Promise<{ id: st
       <PageHeader
         title="Nové přání"
         description={
-          <Link href={`/projects/${id}`} className="hover:text-[--color-fg]">
+          <Link href={`/projects/${id}`} className="hover:text-(--color-fg)">
             ← {project.name}
           </Link>
         }

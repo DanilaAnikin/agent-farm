@@ -8,7 +8,7 @@ import {
 import { cn } from "@/lib/cn";
 
 const base =
-  "w-full rounded-lg border border-[--color-border-strong] bg-[--color-surface-2] px-3 py-2 text-sm text-[--color-fg] placeholder:text-[--color-muted] focus:border-[--color-accent] focus:outline-none focus:ring-1 focus:ring-[--color-accent] disabled:opacity-50";
+  "w-full rounded-lg border border-(--color-border-strong) bg-(--color-surface-2) px-3 py-2 text-sm text-(--color-fg) placeholder:text-(--color-muted) focus:border-(--color-accent) focus:outline-none focus:ring-1 focus:ring-(--color-accent) disabled:opacity-50";
 
 /**
  * Popisek pole. Nápověda (`hint`) je SAMOSTATNÝ prvek vpravo — dřív byla
@@ -26,10 +26,10 @@ export function Label({
 }) {
   return (
     <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-      <label htmlFor={htmlFor} className="block text-xs font-medium text-[--color-muted]">
+      <label htmlFor={htmlFor} className="block text-xs font-medium text-(--color-muted)">
         {children}
       </label>
-      {hint ? <span className="text-[11px] font-normal text-[--color-faint]">{hint}</span> : null}
+      {hint ? <span className="text-[11px] font-normal text-(--color-faint)">{hint}</span> : null}
     </div>
   );
 }
@@ -86,7 +86,7 @@ export const MoneyInput = forwardRef<
         className={cn(base, "pr-11 text-right tabular-nums", className)}
         {...props}
       />
-      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-[--color-muted]">
+      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-(--color-muted)">
         {suffix}
       </span>
     </div>

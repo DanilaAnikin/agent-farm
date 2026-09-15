@@ -19,7 +19,7 @@ export function QaScreenshot({
         <button
           type="button"
           aria-label={`Zvětšit screenshot: ${label}`}
-          className="group relative block h-20 w-32 shrink-0 overflow-hidden rounded-lg border border-[--color-border] bg-[--color-surface-2] transition hover:border-[--color-border-strong]"
+          className="group relative block h-20 w-32 shrink-0 overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface-2) transition hover:border-(--color-border-strong)"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -38,7 +38,7 @@ export function QaScreenshot({
         <img
           src={url}
           alt={label}
-          className="max-h-[70vh] w-full rounded-lg border border-[--color-border] object-contain"
+          className="max-h-[70vh] w-full rounded-lg border border-(--color-border) object-contain"
         />
       </DialogContent>
     </Dialog>

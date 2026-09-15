@@ -33,14 +33,14 @@ export function StatusPulse({
 }) {
   const color =
     tone === "info"
-      ? "bg-[--color-info]"
+      ? "bg-(--color-info)"
       : tone === "warn"
-        ? "bg-[--color-warn]"
+        ? "bg-(--color-warn)"
         : tone === "danger"
-          ? "bg-[--color-danger]"
+          ? "bg-(--color-danger)"
           : tone === "muted"
-            ? "bg-[--color-faint]"
-            : "bg-[--color-brand]";
+            ? "bg-(--color-faint)"
+            : "bg-(--color-brand)";
   return (
     <span
       aria-hidden
@@ -75,7 +75,7 @@ export function LiveIndicator({
 
   if (connected) {
     return (
-      <span className={cn("inline-flex items-center gap-1.5 text-xs text-[--color-muted]", className)}>
+      <span className={cn("inline-flex items-center gap-1.5 text-xs text-(--color-muted)", className)}>
         <StatusPulse className="h-1.5 w-1.5" />
         živě
       </span>
@@ -84,7 +84,7 @@ export function LiveIndicator({
   if (now === null || lastRefreshAt === null) return null;
   return (
     <span
-      className={cn("inline-flex items-center gap-1.5 text-xs text-[--color-faint]", className)}
+      className={cn("inline-flex items-center gap-1.5 text-xs text-(--color-faint)", className)}
       title="Živé změny teď nechodí — stránka se obnovuje pravidelně."
     >
       <StatusPulse tone="muted" pulse={false} className="h-1.5 w-1.5" />

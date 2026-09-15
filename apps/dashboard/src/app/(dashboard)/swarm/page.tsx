@@ -20,7 +20,7 @@ import { modelLabel } from "@/lib/admin-guards";
 import type { AgentRow, AttemptStatus, ProjectStatus } from "@/lib/types";
 
 // Titulek odpovídá položce navigace (NAV_ITEMS).
-export const metadata = { title: "Roj — Perennial" };
+export const metadata = { title: "Roj" };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -101,13 +101,13 @@ export default async function SwarmPage() {
       }>(),
     supabase
       .from("events")
-      .select("id, ts, type, level, message, project_id, wish_id, task_id, run_id:data->>run_id, pr_url:data->>prUrl")
+      .select("id, ts, type, level, message, project_id, wish_id, task_id, run_id:data->>run_id, pr_url:data->>prUrl, scope:data->>scope")
       .gte("ts", pred7d)
       .order("ts", { ascending: false })
       .limit(200),
     supabase
       .from("events")
-      .select("id, ts, type, level, message, project_id, wish_id, task_id")
+      .select("id, ts, type, level, message, project_id, wish_id, task_id, scope:data->>scope")
       .in("level", ["error", "warn"])
       .gte("ts", pred7d)
       .order("ts", { ascending: false })
@@ -259,8 +259,8 @@ export default async function SwarmPage() {
 
       <div className="mb-5">
         <div className="t-eyebrow">Napříč projekty</div>
-        <h1 className="t-title mt-2 text-[--color-fg]">Roj</h1>
-        <p className="mt-1.5 t-body text-[--color-muted]">
+        <h1 className="t-title mt-2 text-(--color-fg)">Roj</h1>
+        <p className="mt-1.5 t-body text-(--color-muted)">
           Celý roj na jeden pohled — napříč všemi tvými projekty. {capacityLine}
         </p>
       </div>
@@ -278,13 +278,14 @@ export default async function SwarmPage() {
           monthlyCap={overview.caps.monthlyUsd}
           monthLabel={overview.monthLabel}
           spendError={overview.spendError}
+          spendSourceLabel={overview.spendSourceLabel}
         />
       </div>
 
       {/* KPI */}
       <SwarmKpiStrip kpis={kpis} />
       {overview.rollupError ? (
-        <p role="alert" className="mt-2 text-xs text-[--color-warn]">
+        <p role="alert" className="mt-2 text-xs text-(--color-warn)">
           {overview.rollupError}
         </p>
       ) : null}
@@ -294,23 +295,23 @@ export default async function SwarmPage() {
         <CardHeader title="Poslední běh" description="Nejnovější pokus agenta napříč projekty." />
         <CardBody>
           {lastRunRes.error ? (
-            <p role="alert" className="text-xs text-[--color-warn]">
+            <p role="alert" className="text-xs text-(--color-warn)">
               Poslední běh se nepodařilo načíst ({lastRunRes.error.message}).
             </p>
           ) : !lastRun ? (
-            <p className="text-sm text-[--color-muted]">Farma zatím neběžela.</p>
+            <p className="text-sm text-(--color-muted)">Farma zatím neběžela.</p>
           ) : (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
               <StatusBadge meta={ATTEMPT_STATUS_META[lastRun.status] ?? { label: lastRun.status, tone: "neutral" }} dot />
               <span
-                className="text-[--color-muted]"
+                className="text-(--color-muted)"
                 title={formatDate(lastRun.finished_at ?? lastRun.started_at)}
                 suppressHydrationWarning
               >
                 {formatRelative(lastRun.finished_at ?? lastRun.started_at)}
               </span>
               {lastRunProject ? (
-                <Link href={`/projects/${lastRunProject.id}`} className="text-[--color-muted] hover:text-[--color-fg]">
+                <Link href={`/projects/${lastRunProject.id}`} className="text-(--color-muted) hover:text-(--color-fg)">
                   {lastRunProject.name}
                 </Link>
               ) : null}
@@ -321,14 +322,14 @@ export default async function SwarmPage() {
                       ? `/projects/${lastRunTask.project_id}/wishes/${lastRunTask.wish_id}`
                       : `/projects/${lastRunTask.project_id}`
                   }
-                  className="min-w-0 truncate font-medium text-[--color-fg] hover:text-[--color-brand]"
+                  className="min-w-0 truncate font-medium text-(--color-fg) hover:text-(--color-brand)"
                 >
                   {lastRunTask.title}
                 </Link>
               ) : null}
-              {lastRun.model ? <span className="text-xs text-[--color-faint]">{modelLabel(lastRun.model)}</span> : null}
+              {lastRun.model ? <span className="text-xs text-(--color-faint)">{modelLabel(lastRun.model)}</span> : null}
               {lastRunPrUrl ? (
-                <a href={lastRunPrUrl} target="_blank" rel="noreferrer" className="text-xs text-[--color-brand] hover:underline">
+                <a href={lastRunPrUrl} target="_blank" rel="noreferrer" className="text-xs text-(--color-brand) hover:underline">
                   Pull request #{lastRun.pr_number}
                 </a>
               ) : null}
@@ -345,8 +346,8 @@ export default async function SwarmPage() {
             description={`${countLabel(fleet.length, TVARY.agent)} ${plural(fleet.length, PRACUJE)} právě teď`}
             action={
               fleet.length > 0 ? (
-                <span className="inline-flex items-center gap-1.5 text-xs text-[--color-brand]">
-                  <span className="h-2 w-2 rounded-full bg-[--color-brand] animate-farm-pulse" />
+                <span className="inline-flex items-center gap-1.5 text-xs text-(--color-brand)">
+                  <span className="h-2 w-2 rounded-full bg-(--color-brand) animate-farm-pulse" />
                   živě
                 </span>
               ) : null
@@ -354,7 +355,7 @@ export default async function SwarmPage() {
           />
           <CardBody className="space-y-4">
             {agentsRes.error ? (
-              <p role="alert" className="text-xs text-[--color-warn]">
+              <p role="alert" className="text-xs text-(--color-warn)">
                 Agenty se nepodařilo načíst ({agentsRes.error.message}).
               </p>
             ) : null}
@@ -363,10 +364,10 @@ export default async function SwarmPage() {
                 {ROLE_ORDER.filter((r) => (busyByRole.get(r) ?? 0) > 0).map((r) => {
                   const meta = roleMeta(r);
                   return (
-                    <span key={r} className="inline-flex items-center gap-1.5 text-xs text-[--color-muted]">
+                    <span key={r} className="inline-flex items-center gap-1.5 text-xs text-(--color-muted)">
                       <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
                       {meta.label}
-                      <span className="tabular-nums text-[--color-faint]">{formatNumber(busyByRole.get(r) ?? 0)}</span>
+                      <span className="tabular-nums text-(--color-faint)">{formatNumber(busyByRole.get(r) ?? 0)}</span>
                     </span>
                   );
                 })}
@@ -397,16 +398,16 @@ export default async function SwarmPage() {
         />
         <CardBody>
           {overview.rollupError ? (
-            <p role="alert" className="text-xs text-[--color-warn]">
+            <p role="alert" className="text-xs text-(--color-warn)">
               {overview.rollupError}
             </p>
           ) : radkyFronty.length === 0 ? (
-            <p className="text-sm text-[--color-muted]">Žádné projekty.</p>
+            <p className="text-sm text-(--color-muted)">Žádné projekty.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[40rem] text-sm">
                 <thead>
-                  <tr className="border-b border-[--color-border] text-left text-xs text-[--color-muted]">
+                  <tr className="border-b border-(--color-border) text-left text-xs text-(--color-muted)">
                     <th className="py-2 pr-3 font-medium">Projekt</th>
                     <th className="py-2 pr-3 font-medium">Stav</th>
                     <th className="py-2 pr-3 text-right font-medium">Ve frontě</th>
@@ -422,9 +423,9 @@ export default async function SwarmPage() {
                     const p = projectById.get(r.project_id)!;
                     const archiv = Number(r.parked_archived) || 0;
                     return (
-                      <tr key={r.project_id} className="border-b border-[--color-border-subtle] last:border-0">
+                      <tr key={r.project_id} className="border-b border-(--color-border-subtle) last:border-0">
                         <td className="py-2 pr-3">
-                          <Link href={`/projects/${p.id}`} className="font-medium hover:text-[--color-brand]">
+                          <Link href={`/projects/${p.id}`} className="font-medium hover:text-(--color-brand)">
                             {p.name}
                           </Link>
                         </td>
@@ -438,10 +439,10 @@ export default async function SwarmPage() {
                         <td className="py-2 pr-3 text-right tabular-nums">
                           {formatNumber(Number(r.parked_live) || 0)}
                           {archiv > 0 ? (
-                            <span className="ml-1 text-xs text-[--color-faint]">(+{formatNumber(archiv)} v archivu)</span>
+                            <span className="ml-1 text-xs text-(--color-faint)">(+{formatNumber(archiv)} v archivu)</span>
                           ) : null}
                         </td>
-                        <td className="py-2 pr-3 text-xs text-[--color-muted]" suppressHydrationWarning>
+                        <td className="py-2 pr-3 text-xs text-(--color-muted)" suppressHydrationWarning>
                           {r.last_activity ? formatRelative(r.last_activity) : "—"}
                         </td>
                       </tr>
@@ -459,17 +460,17 @@ export default async function SwarmPage() {
         <CardHeader title="Poslední chyby" description="Chyby a varování za 7 dní, seskupené podle druhu." />
         <CardBody>
           {errorsRes.error ? (
-            <p role="alert" className="text-xs text-[--color-warn]">
+            <p role="alert" className="text-xs text-(--color-warn)">
               Chyby se nepodařilo načíst ({errorsRes.error.message}).
             </p>
           ) : chyby.length === 0 ? (
-            <p className="text-sm text-[--color-muted]">Za posledních 7 dní žádné chyby ani varování.</p>
+            <p className="text-sm text-(--color-muted)">Za posledních 7 dní žádné chyby ani varování.</p>
           ) : (
             <ul className="space-y-2">
               {chyby.map((c) => (
                 <li
                   key={c.type}
-                  className="flex items-start justify-between gap-3 rounded-lg border border-[--color-border] px-3 py-2"
+                  className="flex items-start justify-between gap-3 rounded-lg border border-(--color-border) px-3 py-2"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
@@ -477,11 +478,11 @@ export default async function SwarmPage() {
                       <span className="text-sm font-medium">{c.label}</span>
                     </div>
                     {c.lastMessage ? (
-                      <p className="mt-0.5 line-clamp-2 text-xs text-[--color-muted]">{c.lastMessage}</p>
+                      <p className="mt-0.5 line-clamp-2 text-xs text-(--color-muted)">{c.lastMessage}</p>
                     ) : null}
                   </div>
                   <span
-                    className="shrink-0 text-xs text-[--color-faint]"
+                    className="shrink-0 text-xs text-(--color-faint)"
                     title={`${formatDate(c.lastTs)} (Europe/Prague)`}
                     suppressHydrationWarning
                   >

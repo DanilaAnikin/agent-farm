@@ -5,8 +5,9 @@
    Tmavý mission-control motiv: vrstvené povrchy + elevace horní světelnou hranou,
    sémantické rozdělení hue (zelená=růst, teplá=rozpočet, chladná=info), tabulární
    mono telemetrie, jeden signature „lifeline / data-bus" living prvek.
-   Tailwind v4: tokeny přes @theme. Názvy stávajících tokenů zachovány (zpětná
-   kompatibilita se všemi `text-[--color-x]` třídami), hodnoty povýšeny.
+   Tailwind v4: tokeny přes @theme. Třídy s proměnnou se píšou `text-(--color-x)`.
+   POZOR: starý zápis `text-[--color-x]` v4 zkompiluje na neplatné
+   `color:--color-x` a třída tiše nedělá nic (tečka u „živě" byla prázdná).
    ============================================================================= */
 @theme {
   /* ── BASE / ELEVACE (vrstvy místo jednoho surface) ─────────────────────── */
