@@ -18,6 +18,8 @@ const PRODUKCE = {
   budget_hold_projects: 2,
   budget_hold_queued: 2,
   budget_hold_since: "2026-09-15T18:40:12.519Z",
+  // Obě události budget_hold mají data->>scope = project (denní strop).
+  budget_hold_reasons: { day: 2, month: 0, credits: 0, other: 0 },
   active_work: 0,
 };
 
@@ -57,7 +59,10 @@ test("budget_wait: práce čeká na rozpočet → ne „běží a nemá práci�
 });
 
 test("budget_wait: plurály pro 1 projekt a prázdnou frontu", () => {
-  const s = farmState({ ...PRODUKCE, budget_hold_projects: 1, budget_hold_queued: 0 }, VECER);
+  const s = farmState(
+    { ...PRODUKCE, budget_hold_projects: 1, budget_hold_queued: 0, budget_hold_reasons: { day: 1, month: 0, credits: 0, other: 0 } },
+    VECER,
+  );
   assert.match(s.detail, /^1 projekt čeká na nový rozpočtový den\. /);
   const h = farmHeadline({ state: s, busyAgents: 0, queuedActive: 0, now: VECER });
   assert.equal(h.title, "1 projekt čeká na nový rozpočtový den — farma pokračuje sama ve 02:00");
@@ -72,6 +77,59 @@ test("budget_wait: den se už přetočil → žádný čas zítra, ale „během
   assert.match(s.detail, /během několika minut/);
   const h = farmHeadline({ state: s, busyAgents: 0, queuedActive: 0, now: poPulnoci });
   assert.equal(h.title, "Rozpočtový den se přetočil — farma vrací projekty do práce");
+});
+
+test("budget_wait: „během několika minut“ jen do 10 minut po půlnoci, pak neutrálně", () => {
+  const pozde = new Date("2026-09-16T00:30:00Z");
+  const s = farmState(PRODUKCE, pozde);
+  assert.equal(s.code, "budget_wait");
+  assert.equal(s.budgetWaitKind, "waiting");
+  assert.equal(s.nextResumeAt, null);
+  assert.doesNotMatch(s.detail, /několika minut|02:00/);
+  assert.equal(s.detail, "2 projekty čekají na rozpočet (ve frontě 2 úkoly). Farma je vrátí do práce, až to rozpočet dovolí.");
+  const h = farmHeadline({ state: s, busyAgents: 0, queuedActive: 0, now: pozde });
+  assert.equal(h.title, "2 projekty čekají na rozpočet");
+  // Hranice okna: přesně 10 minut ještě platí.
+  assert.equal(farmState(PRODUKCE, new Date("2026-09-16T00:10:00Z")).budgetWaitKind, "day_rolled");
+});
+
+test("budget_wait: měsíční strop ani kredity o půlnoci neslibují pokračování", () => {
+  const mesic = farmState({ ...PRODUKCE, budget_hold_reasons: { day: 0, month: 2, credits: 0, other: 0 } }, VECER);
+  assert.equal(mesic.code, "budget_wait");
+  assert.equal(mesic.nextResumeAt, null);
+  assert.doesNotMatch(mesic.detail, /02:00|několika minut|půlnoci/);
+  assert.match(mesic.detail, /^2 projekty čekají na nový měsíc \(ve frontě 2 úkoly\)\. Měsíční strop farmy je vyčerpaný/);
+  assert.equal(
+    farmHeadline({ state: mesic, busyAgents: 0, queuedActive: 0, now: VECER }).title,
+    "2 projekty čekají na nový měsíc — měsíční strop farmy je vyčerpaný",
+  );
+  // Po půlnoci UTC měsíční strop dál drží → žádné „během několika minut“.
+  const mesicPoPulnoci = farmState(
+    { ...PRODUKCE, budget_hold_reasons: { day: 0, month: 2, credits: 0, other: 0 } },
+    new Date("2026-09-16T00:02:00Z"),
+  );
+  assert.doesNotMatch(mesicPoPulnoci.detail, /několika minut/);
+
+  const kredity = farmState({ ...PRODUKCE, budget_hold_projects: 1, budget_hold_reasons: { day: 0, month: 0, credits: 1, other: 0 } }, VECER);
+  assert.equal(kredity.budgetWaitKind, "credits");
+  assert.match(kredity.detail, /^1 projekt čeká na navýšení kreditů/);
+  assert.doesNotMatch(kredity.detail, /02:00/);
+  assert.equal(farmHeadline({ state: kredity, busyAgents: 0, queuedActive: 0, now: VECER }).title, "1 projekt čeká na navýšení kreditů");
+});
+
+test("budget_wait: smíšené nebo neznámé důvody → rozpis bez slibu času", () => {
+  const smisene = farmState({ ...PRODUKCE, budget_hold_reasons: { day: 1, month: 1, credits: 0, other: 0 } }, VECER);
+  assert.equal(smisene.budgetWaitKind, "waiting");
+  assert.equal(smisene.nextResumeAt, null);
+  assert.equal(
+    smisene.detail,
+    "2 projekty čekají na rozpočet (ve frontě 2 úkoly). Důvody: denní strop 1 projekt, měsíční strop farmy 1 projekt. Farma je vrátí do práce, až to rozpočet dovolí.",
+  );
+  // Dashboard proti staré funkci bez důvodů: nevíme proč → neslibujeme „ve 02:00“.
+  const bezDuvodu = farmState({ ...PRODUKCE, budget_hold_reasons: undefined }, VECER);
+  assert.equal(bezDuvodu.code, "budget_wait");
+  assert.equal(bezDuvodu.nextResumeAt, null);
+  assert.doesNotMatch(bezDuvodu.detail, /02:00/);
 });
 
 test("budget_wait se neukáže, když aktivní projekty mají práci, nic nečeká nebo data chybí", () => {

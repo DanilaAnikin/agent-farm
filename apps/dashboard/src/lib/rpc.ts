@@ -37,6 +37,11 @@ export interface FarmRunState {
   budget_hold_projects?: unknown;
   budget_hold_queued?: unknown;
   budget_hold_since?: unknown;
+  /**
+   * Proč držené projekty čekají: `{ day, month, credits, other }` (počty).
+   * O půlnoci UTC se vrací jen `day`; měsíční strop a kredity ne.
+   */
+  budget_hold_reasons?: unknown;
   active_work?: unknown;
 }
 

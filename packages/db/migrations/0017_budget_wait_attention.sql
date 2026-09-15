@@ -5,8 +5,13 @@
 -- Proč:
 --   * Hlavička psala „Farma běží — pracuje a práci si doplňuje sama" a velín
 --     „Farma běží a nemá práci", zatímco projekty s frontou stály v `budget_hold`
---     a čekaly na přetočení rozpočtového dne. `farm_run_state()` proto nově vrací
---     i souhrny projektů (jen počty, žádná data jiných uživatelů).
+--     a čekaly na rozpočet. `farm_run_state()` proto nově vrací i souhrny
+--     projektů: jen počty a důvody čekání, a to jen z projektů, které volající
+--     smí vidět (admin všechny, člen své). Funkce je SECURITY DEFINER, takže by
+--     jinak RLS `projects_self` obešla a člen by viděl počty cizích projektů.
+--   * Důvod čekání (denní strop / měsíční strop / kredity) je potřeba, protože
+--     o půlnoci UTC se vrací jen projekty držené DENNÍM stropem. Měsíční strop
+--     a vyčerpané kredity budget-hold.ts o půlnoci nepustí.
 --   * Opakovaně selhané nasazení („compose up selhal — prod vrácen ze zálohy")
 --     bylo vidět jen jako poslední událost na kartě projektu, ne jako incident.
 --   * `project_last_event()` vybíral i šumové typy (např. „Souboj řešení začal"),
@@ -45,35 +50,79 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT coalesce(jsonb_object_agg(h.key, h.value), '{}'::jsonb) AS obj,
            max(h.updated_at) AS updated_at
     FROM hodnoty h
+  ), ja AS (
+    SELECT public.is_admin() AS admin, auth.uid() AS uid
+  ), viditelne AS (
+    -- Stejné pravidlo jako RLS `projects_self`: admin vidí vše, člen jen své.
+    SELECT p.id, p.status, p.updated_at
+    FROM public.projects p, ja
+    WHERE ja.admin OR (ja.uid IS NOT NULL AND p.user_id = ja.uid)
+  ), duvody AS (
+    -- Důvod čekání podle poslední rozpočtové události projektu (dispatch.ts, judge.ts):
+    --   day     = budget_hold s denním stropem (project/farm/user) → vrací se o půlnoci UTC,
+    --   month   = budget_hold s měsíčním stropem farmy → až s novým měsícem,
+    --   credits = out_of_credits → až po navýšení kreditů nebo s novým měsícem,
+    --   other   = cokoli jiného (rozpočet přání, soudce bez scope, chybějící událost).
+    SELECT v.id, v.updated_at,
+           CASE
+             WHEN e.type = 'out_of_credits' THEN 'credits'
+             WHEN e.data ->> 'scope' IN ('project', 'farm', 'user') THEN 'day'
+             WHEN e.data ->> 'scope' = 'farm_month' THEN 'month'
+             ELSE 'other'
+           END AS duvod
+    FROM viditelne v
+    LEFT JOIN LATERAL (
+      SELECT ev.type, ev.data
+      FROM public.events ev
+      WHERE ev.project_id = v.id
+        AND ev.type IN ('budget_hold', 'out_of_credits')
+        -- Jen událost TOHOTO držení (zapisuje se hned po změně stavu). Přechod bez
+        -- události (media-loop) nesmí převzít důvod ze starého držení → 'other'.
+        AND ev.ts >= v.updated_at - interval '2 minutes'
+      ORDER BY ev.ts DESC
+      LIMIT 1
+    ) e ON true
+    WHERE v.status = 'budget_hold'
   ), drzene AS (
     -- `updated_at` se bumpne při přechodu do budget_hold (viz budget-hold.ts).
-    SELECT count(*)::int AS projekty, min(p.updated_at) AS od
-    FROM public.projects p
-    WHERE p.status = 'budget_hold'
+    SELECT count(*)::int AS projekty,
+           min(d.updated_at) AS od,
+           jsonb_build_object(
+             'day', count(*) FILTER (WHERE d.duvod = 'day'),
+             'month', count(*) FILTER (WHERE d.duvod = 'month'),
+             'credits', count(*) FILTER (WHERE d.duvod = 'credits'),
+             'other', count(*) FILTER (WHERE d.duvod = 'other')
+           ) AS duvody
+    FROM duvody d
   ), fronta_drzenych AS (
     SELECT count(*)::int AS ukoly
     FROM public.tasks t
-    JOIN public.projects p ON p.id = t.project_id
-    WHERE p.status = 'budget_hold' AND t.status = 'queued'
+    JOIN viditelne v ON v.id = t.project_id
+    WHERE v.status = 'budget_hold' AND t.status = 'queued'
   ), prace_aktivnich AS (
     SELECT (
       (SELECT count(*)
          FROM public.tasks t
-         JOIN public.projects p ON p.id = t.project_id
-        WHERE p.status = 'active' AND t.status IN ('queued', 'running', 'judging', 'merging'))
+         JOIN viditelne v ON v.id = t.project_id
+        WHERE v.status = 'active' AND t.status IN ('queued', 'running', 'judging', 'merging'))
       + (SELECT count(*)
            FROM public.wishes w
-           JOIN public.projects p ON p.id = w.project_id
-          WHERE p.status = 'active' AND w.status IN ('new', 'specifying'))
+           JOIN viditelne v ON v.id = w.project_id
+          WHERE v.status = 'active' AND w.status IN ('new', 'specifying'))
+      -- Agent bez projektu (sdílený) počítá jen admin; člen jen agenty svých projektů.
       + (SELECT count(*)
            FROM public.agents a
-          WHERE a.status = 'busy' AND a.last_heartbeat >= now() - interval '3 minutes')
+           CROSS JOIN ja
+           LEFT JOIN viditelne v ON v.id = a.project_id
+          WHERE a.status = 'busy' AND a.last_heartbeat >= now() - interval '3 minutes'
+            AND (v.id IS NOT NULL OR (ja.admin AND a.project_id IS NULL)))
     )::int AS polozky
   )
   SELECT n.obj || jsonb_build_object(
            'updated_at', n.updated_at,
            'budget_hold_projects', d.projekty,
            'budget_hold_since', d.od,
+           'budget_hold_reasons', d.duvody,
            'budget_hold_queued', f.ukoly,
            'active_work', a.polozky
          )
@@ -271,8 +320,9 @@ BEGIN
           'kind', 'deploy_failed',
           'severity', 'error',
           'title', 'Nasazení selhalo',
-          'detail', coalesce(nullif(zaznam.detail, ''), 'Nasazení skončilo chybou.')
-                    || ' Selhání za 7 dní: ' || zaznam.pocet || '×.',
+          -- „compose up selhal — prod vrácen ze zálohy · Selhání za 7 dní: 2×"
+          'detail', rtrim(coalesce(nullif(zaznam.detail, ''), 'Nasazení skončilo chybou'), '. ')
+                    || ' · Selhání za 7 dní: ' || zaznam.pocet || '×',
           'since', zaznam.kdy,
           'project_id', zaznam.project_id
         );

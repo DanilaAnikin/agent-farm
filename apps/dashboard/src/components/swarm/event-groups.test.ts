@@ -87,7 +87,7 @@ test("poslední chyby: seskupené podle typu, nejčerstvější první, jen warn
 
 test("lidský text: budget_hold bez syrových kódů a s pravdivým pokračováním", () => {
   const zprava = "Projekt v budget_hold — překročen strop: project.";
-  const label = "Projekt pozastaven rozpočtem";
+  const label = "Projekt čeká na rozpočet";
   assert.equal(
     humanEventText({ type: "budget_hold", message: zprava, scope: "project" }, label),
     "Další pokus by překročil denní strop projektu. Projekt pokračuje sám po přetočení dne o půlnoci UTC.",

@@ -19,9 +19,16 @@ test("migrace 0017: farm_attention hlásí deploy_failed a odmítnutí kvůli za
   assert.match(sql, /'kind', 'deploy_failed'/);
   assert.match(sql, /ILIKE '%zamítnut%'/);
   // Stav farmy potřebuje souhrny, se kterými počítá farmState().
-  for (const klic of ["budget_hold_projects", "budget_hold_queued", "budget_hold_since", "active_work"]) {
+  for (const klic of ["budget_hold_projects", "budget_hold_queued", "budget_hold_since", "budget_hold_reasons", "active_work"]) {
     assert.match(sql, new RegExp(`'${klic}'`));
   }
+  // SECURITY DEFINER obchází RLS → souhrny musí filtrovat projekty jako `projects_self`.
+  const runState = sql.slice(sql.indexOf("FUNCTION public.farm_run_state()"), sql.indexOf("FUNCTION public.farm_attention()"));
+  assert.match(runState, /public\.is_admin\(\)/);
+  assert.match(runState, /p\.user_id = ja\.uid/);
+  assert.doesNotMatch(runState, /FROM public\.projects p\s+WHERE p\.status/);
+  // Detail selhaného nasazení má mezi větami oddělovač.
+  assert.match(sql, /' · Selhání za 7 dní: '/);
   // Poslední událost projektu bere šum z dashboardu jako parametr.
   assert.match(sql, /project_last_event\(p_exclude text\[\]\)/);
   assert.ok(NOISE_EVENT_TYPES.includes("best_of_n_started"));

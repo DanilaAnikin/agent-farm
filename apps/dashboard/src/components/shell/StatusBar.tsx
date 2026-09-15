@@ -123,7 +123,10 @@ function useFarmStatus(props: StatusBarProps) {
 
   const realtime = useRealtime({
     // `projects`: přechod do/z budget_hold mění stav farmy („Farma čeká na rozpočet").
-    tables: ["farm_settings", "cost_ledger", "projects"],
+    // `tasks`, `wishes`: „čeká na rozpočet" platí jen bez práce v aktivních projektech,
+    // takže nový úkol nebo přání musí stav přepočítat hned, ne až po minutovém obnovení.
+    // Agenti se mění s úkoly; jejich heartbeat by jen zbytečně spouštěl dotazy.
+    tables: ["farm_settings", "cost_ledger", "projects", "tasks", "wishes"],
     onChange: () => void refresh(),
     throttleMs: 2000,
     fallbackPollMs: 30_000,

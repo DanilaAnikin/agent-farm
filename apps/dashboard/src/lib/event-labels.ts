@@ -172,7 +172,7 @@ export const EVENT_META: Record<string, EventMeta> = {
 
   // --- rozpočet a projekty --------------------------------------------------
   budget_changed: D("Změna rozpočtu", "warn"),
-  budget_hold: D("Projekt pozastaven rozpočtem", "warn"),
+  budget_hold: D("Projekt čeká na rozpočet", "warn"),
   budget_hold_resumed: D("Projekt znovu spuštěn po rozpočtu", "ok"),
   budget_rejected: N("Rozpočtová brána odmítla požadavky", "warn"),
   out_of_credits: D("Došel kredit u poskytovatele", "danger"),

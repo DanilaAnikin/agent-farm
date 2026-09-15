@@ -21,6 +21,7 @@ import { AttentionPanel } from "@/components/home/AttentionPanel";
 import { FarmStatusBand } from "@/components/swarm/FarmStatusBand";
 import { loadFarmOverview } from "@/components/swarm/load-farm-overview";
 import { farmHeadline, farmShortReason } from "@/components/swarm/farm-headline";
+import { humanEventText } from "@/components/swarm/event-groups";
 import { projectProgress, queueBreakdown, wishBreakdown, wishBreakdownLine } from "@/components/swarm/queue";
 import { farmBudgetDefaults } from "@/app/actions/project-defaults";
 import type { AgentRow, ProjectRow, WishRow } from "@/lib/types";
@@ -144,7 +145,14 @@ export default async function CommandCenterPage() {
       project,
       todaySpend: overview.todaySpendByProject[project.id] ?? 0,
       busyAgents: busyByProject.get(project.id) ?? 0,
-      lastEvent: posledni ? { label: eventLabel(posledni.type), message: posledni.message, ts: posledni.ts } : null,
+      // Tooltip karty: lidský text, ne interní „Projekt v budget_hold — překročen strop: project.".
+      lastEvent: posledni
+        ? {
+            label: eventLabel(posledni.type),
+            message: humanEventText(posledni, eventLabel(posledni.type)) || eventLabel(posledni.type),
+            ts: posledni.ts,
+          }
+        : null,
       progress: projectProgress(rollupById.get(project.id)),
       activeWishes: activeWishesByProject.get(project.id) ?? [],
       openWishCount: prehledPrani.openByProject.get(project.id) ?? 0,

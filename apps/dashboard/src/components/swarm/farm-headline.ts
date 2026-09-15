@@ -122,19 +122,24 @@ export function farmHeadline(input: FarmHeadlineInput): FarmHeadline {
       const n = state.heldProjects ?? 0;
       const q = state.heldQueued ?? 0;
       const veFronte = q > 0 ? `Ve frontě ${plural(q, CEKA)} ${countLabel(q, TVARY.ukol)}. ` : "";
-      if (!state.nextResumeAt) {
+      const kdo = n > 0 ? `${countLabel(n, TVARY.projekt)} ${plural(n, CEKA)}` : "Projekty čekají";
+      // Čas se slibuje jen u denního stropu (farmState ho u jiných důvodů nevyplní).
+      if (state.budgetWaitKind === "day" && state.nextResumeAt) {
         return {
-          title: "Rozpočtový den se přetočil — farma vrací projekty do práce",
-          detail: state.detail,
+          title: `${kdo} na nový rozpočtový den — farma pokračuje sama ${formatAtTime(state.nextResumeAt)}`,
+          detail: `${veFronte}Do přetočení denního stropu o půlnoci UTC na nich farma nepracuje, pak pokračuje sama.`,
           tone: "info",
         };
       }
-      const kdo = n > 0 ? `${countLabel(n, TVARY.projekt)} ${plural(n, CEKA)}` : "Projekty čekají";
-      return {
-        title: `${kdo} na nový rozpočtový den — farma pokračuje sama ${formatAtTime(state.nextResumeAt)}`,
-        detail: `${veFronte}Do přetočení denního stropu o půlnoci UTC na nich farma nepracuje, pak pokračuje sama.`,
-        tone: "info",
-      };
+      const title =
+        state.budgetWaitKind === "day_rolled"
+          ? "Rozpočtový den se přetočil — farma vrací projekty do práce"
+          : state.budgetWaitKind === "month"
+            ? `${kdo} na nový měsíc — měsíční strop farmy je vyčerpaný`
+            : state.budgetWaitKind === "credits"
+              ? `${kdo} na navýšení kreditů`
+              : `${kdo} na rozpočet`;
+      return { title, detail: state.detail, tone: "info" };
     }
     case "offpeak_expected": {
       const kdy = state.nextResumeAt;
