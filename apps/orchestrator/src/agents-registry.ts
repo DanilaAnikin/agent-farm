@@ -14,7 +14,7 @@
  */
 import { getDb, agents } from "@farm/db";
 import type { AgentRole } from "@farm/db";
-import { and, eq, isNull, isNotNull, lt } from "drizzle-orm";
+import { and, eq, inArray, isNull, isNotNull, lt } from "drizzle-orm";
 
 export interface RegisterAgentInput {
   role: AgentRole;
@@ -127,11 +127,6 @@ export async function releaseAgent(
 }
 
 /**
- * Úklid mrtvých agentů (volá reconciliation):
- *  - řádky se zastaralým heartbeatem (> staleMs) označí 'dead' (ať je vidět);
- *  - hodně staré 'dead' řádky (> 3× staleMs) smaže, aby registr nebobtnal.
- */
-/**
  * Container id workerů, kteří MAJÍ žít (agent status='busy' s containerId) — pro
  * přesné určení osiřelých kontejnerů v reconciliation. ZÁMĚRNĚ NEfiltrujeme na
  * čerstvý heartbeat: pomalá setup fáze (git clone/worktree) může mít starší
@@ -152,23 +147,38 @@ export async function liveContainerIds(): Promise<Set<string>> {
   }
 }
 
-export async function reapDeadAgents(staleMs: number): Promise<void> {
+/**
+ * Označí agenty se zastaralým heartbeatem (> staleMs) jako 'dead', ať je vidět,
+ * že netepou, a ať je `liveContainerIds` přestane chránit.
+ */
+export async function markStaleAgents(staleMs: number): Promise<void> {
   try {
-    const now = Date.now();
-    const staleBefore = new Date(now - staleMs);
-    const deleteBefore = new Date(now - 3 * staleMs);
-
+    const staleBefore = new Date(Date.now() - staleMs);
     await getDb()
       .update(agents)
       .set({ status: "dead" })
-      .where(and(lt(agents.lastHeartbeat, staleBefore), eq(agents.status, "busy")));
-    await getDb()
-      .update(agents)
-      .set({ status: "dead" })
-      .where(and(lt(agents.lastHeartbeat, staleBefore), eq(agents.status, "idle")));
+      .where(and(lt(agents.lastHeartbeat, staleBefore), inArray(agents.status, ["busy", "idle"])));
+  } catch (err) {
+    console.error("[agents-registry] markStaleAgents selhalo:", err);
+  }
+}
 
-    await getDb().delete(agents).where(lt(agents.lastHeartbeat, deleteBefore));
+/**
+ * Smaže řádky 'dead' se starým tepem, aby registr nebobtnal donekonečna.
+ * Den se drží schválně: mrtvý agent je stopa („kdo naposledy běžel a kdy"),
+ * dashboard 'dead' řádky do živé flotily nepočítá.
+ */
+export async function reapDeadAgents(olderThanHours = 24): Promise<void> {
+  try {
+    const before = new Date(Date.now() - olderThanHours * 3600_000);
+    await getDb()
+      .delete(agents)
+      .where(and(eq(agents.status, "dead"), lt(agents.lastHeartbeat, before)));
   } catch (err) {
     console.error("[agents-registry] reapDeadAgents selhalo:", err);
   }
 }
+
+/** Zdraví flotily {live, working, stalled} — čistá funkce sdílená s dashboardem. */
+export { agentHealth } from "@farm/core";
+export type { AgentHealth, AgentHealthInput } from "@farm/core";

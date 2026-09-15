@@ -373,6 +373,7 @@ async function dispatchBestOfN(
     if (!attemptId) continue;
 
     const agentId = await registerAgent({ role: "worker", projectId: project.id, model, currentTaskId: task.id });
+    await linkAgentToAttempt(attemptId, agentId);
     const key = await mintEphemeralKey({
       maxBudgetUsd: cfg.perAttemptBudgetUsd,
       duration: "35m",
@@ -410,6 +411,7 @@ async function dispatchBestOfN(
         void logEvent({
           projectId: project.id,
           taskId: task.id,
+          agentId,
           level: "warn",
           type: "attempt_setup_timeout",
           message: `Příprava pokusu překročila ${Math.round(SETUP_HEARTBEAT_MAX_MS / 60_000)} min — ukončuji.`,
@@ -492,6 +494,7 @@ async function dispatchBestOfN(
       await logEvent({
         projectId: project.id,
         taskId: task.id,
+        agentId,
         type: "best_of_n_candidate",
         message: `Kandidát #${idx} (${model}) oskórován: ${score}.`,
         data: { candidateIdx: idx, score, model },
@@ -678,6 +681,7 @@ async function dispatchTask(
     model,
     currentTaskId: task.id,
   });
+  await linkAgentToAttempt(attemptId, agentId);
 
   const key = await mintEphemeralKey({
     maxBudgetUsd: cfg.perAttemptBudgetUsd,
@@ -723,6 +727,7 @@ async function dispatchTask(
       void logEvent({
         projectId: project.id,
         taskId: task.id,
+        agentId,
         level: "warn",
         type: "attempt_setup_timeout",
         message: `Příprava pokusu překročila ${Math.round(SETUP_HEARTBEAT_MAX_MS / 60_000)} min — ukončuji.`,
@@ -755,6 +760,7 @@ async function dispatchTask(
     await logEvent({
       projectId: project.id,
       taskId: task.id,
+      agentId,
       type: "attempt_started",
       message: `Worker start (${isFix ? "worker-fix" : "worker-build"}): ${task.title}`,
       data: { attemptId, branch },
@@ -789,6 +795,7 @@ async function dispatchTask(
         projectId: project.id,
         taskId: task.id,
         level: "warn",
+        agentId,
         type: "attempt_aborted",
         message: `Pokus přerušen (${outcome.reason}) — requeue bez penalizace.`,
       });
@@ -806,7 +813,7 @@ async function dispatchTask(
         await enqueue(QUEUES.tasks, { ...message, resumeRef,
           note: "Continue the saved partial implementation; verify it before further edits." }, 3600);
         await ackDelete(QUEUES.tasks, msgId);
-        await logEvent({ projectId: project.id, taskId: task.id, type: "attempt_budget_deferred",
+        await logEvent({ projectId: project.id, taskId: task.id, agentId, type: "attempt_budget_deferred",
           message: "Práce čeká na rozpočet; rozpracované změny jsou uložené pro pokračování.",
           data: { attemptId, resumeRef } });
         return;
@@ -818,6 +825,7 @@ async function dispatchTask(
         projectId: project.id,
         taskId: task.id,
         level: "error",
+        agentId,
         type: "attempt_error",
         message: `Worker chyba: ${String(outcome.error)}`,
       });
@@ -863,6 +871,7 @@ async function dispatchTask(
     await logEvent({
       projectId: project.id,
       taskId: task.id,
+      agentId,
       type: "attempt_finished",
       message: `Pokus dokončen, předáno judgeovi. Kroků: ${outcome.steps}.`,
       data: { attemptId, committed: commit.committed },
@@ -875,6 +884,7 @@ async function dispatchTask(
       projectId: project.id,
       taskId: task.id,
       level: "error",
+      agentId,
       type: "dispatch_error",
       message: `Dispatch selhal: ${String(err)}`,
     });
@@ -998,6 +1008,20 @@ function isStepEvent(ev: OpencodeEvent): boolean {
   // { type:"message.part.updated", properties:{ part:{ type:"step-finish" }}}.
   const part = (ev.properties as { part?: { type?: string } } | undefined)?.part;
   return part?.type === "step-finish";
+}
+
+/**
+ * Spáruje pokus s řádkem registru agentů. Bez toho zůstávalo `attempts.agent_id`
+ * vždy NULL, velín nespároval agenta s pokusem a doba běhu byla „—".
+ * Defenzivní jako celý registr: observabilita nesmí shodit dispatch.
+ */
+async function linkAgentToAttempt(attemptId: string, agentId: string | null): Promise<void> {
+  if (!agentId) return;
+  try {
+    await getDb().update(attempts).set({ agentId }).where(eq(attempts.id, attemptId));
+  } catch (err) {
+    console.error("[dispatch] zápis agent_id k pokusu selhal:", err);
+  }
 }
 
 async function touchHeartbeat(attemptId: string, steps: number): Promise<void> {

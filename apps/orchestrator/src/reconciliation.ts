@@ -16,7 +16,8 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { loadConfig, isStaleHeartbeat } from "@farm/core";
 import { logEvent } from "./events.js";
 import { listWorkerContainers, killContainer } from "./docker.js";
-import { reapDeadAgents, liveContainerIds } from "./agents-registry.js";
+import { markStaleAgents, reapDeadAgents, liveContainerIds } from "./agents-registry.js";
+import { publishRuntimeConfig, publishGithubStatus } from "./runtime-config.js";
 import type { TaskMessage } from "./types.js";
 import { recoverOrphanedJudging } from "./judging-recovery.js";
 
@@ -28,6 +29,20 @@ const STALE_MS = Number(process.env.ATTEMPT_STALE_HEARTBEAT_MS ?? 3 * 60_000);
 const QUEUED_STALE_MS = Number(process.env.QUEUED_STALE_MS ?? 10 * 60_000);
 // 'judging' task uvázlý (ztracená judge zpráva) — delší práh, judge build/test trvá.
 const JUDGING_STALE_MS = Number(process.env.JUDGING_STALE_MS ?? 15 * 60_000);
+// Jak dlouho držet 'dead' řádky agentů jako stopu, než se smažou.
+const DEAD_AGENT_RETENTION_HOURS = 24;
+// GitHub se ověřuje nejvýš jednou za hodinu (GET /user) — stav se mění zřídka
+// a zbytečné volání API by jen pálilo rate limit.
+const GITHUB_STATUS_EVERY_MS = 60 * 60_000;
+let lastGithubStatusAt = 0;
+
+async function maybePublishGithubStatus(): Promise<void> {
+  const now = Date.now();
+  if (now - lastGithubStatusAt < GITHUB_STATUS_EVERY_MS) return;
+  // Značka PŘED voláním: i neúspěch se zkusí až za hodinu, ne každých 5 min.
+  lastGithubStatusAt = now;
+  await publishGithubStatus();
+}
 
 /** Jedna iterace reconciliation. Bezpečné volat i při startu. Každý krok je
  *  IZOLOVANÝ (vlastní try/catch) — selhání jednoho nesmí přeskočit ostatní
@@ -38,8 +53,13 @@ export async function runReconciliationOnce(): Promise<void> {
     reconcileStrandedRunning,
     reconcileOrphanedTasks,
     reconcileOrphanContainers,
-    () => reapDeadAgents(STALE_MS),
+    () => markStaleAgents(STALE_MS),
+    () => reapDeadAgents(DEAD_AGENT_RETENTION_HOURS),
     pruneWorktrees,
+    // Pravda o běžícím procesu pro dashboard. Tahle smyčka NENÍ pausable, takže
+    // údaje jsou čerstvé i ve chvíli, kdy farma stojí.
+    publishRuntimeConfig,
+    maybePublishGithubStatus,
   ]) {
     try {
       await step();
