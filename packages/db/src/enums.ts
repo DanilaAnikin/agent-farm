@@ -67,6 +67,9 @@ export const PARK_REASONS = [
   "infra", // infrastruktura (kontejner, git, síť)
   "judging_orphan", // osiřelé posuzování po restartu
   "owner_cancelled", // zrušil majitel z dashboardu
+  // Úkol opakovaně vyčerpal per-pokus příděl LiteLLM bez nového commitu — na jeden
+  // pokus je moc velký; farma přání přeplánuje na menší kroky (dispatch.ts).
+  "attempt_allowance_exhausted",
   "unknown", // důvod se nepodařilo dohledat (backfill)
 ] as const;
 export type ParkReason = (typeof PARK_REASONS)[number];

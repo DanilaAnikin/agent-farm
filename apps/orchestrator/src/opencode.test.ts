@@ -34,6 +34,26 @@ test("budget refusal wrapped in a provider 400 remains recognizable without leak
   });
 });
 
+test("guard and key refusals carry their budget class without leaking the provider body", () => {
+  const cases = [
+    { body: '{"error":{"message":"budget: daily limit reached","code":"402"},"api_key":"secret-test-value"}', status: 402, kind: "farm_window", label: /farm_window:daily/ },
+    { body: '{"error":{"message":"budget: farm is paused"},"api_key":"secret-test-value"}', status: 402, kind: "farm_blocked", label: /farm_blocked/ },
+    { body: '{"error":"Budget has been exceeded! Max budget: 0.15","api_key":"secret-test-value"}', status: 400, kind: "attempt_allowance", label: /attempt_allowance/ },
+    { body: "secret-test-value", status: 402, kind: "attempt_allowance", label: /unrecognized/ },
+  ];
+  for (const c of cases) {
+    assert.throws(() => parsePromptResponse({
+      info: { error: { name: "APIError", data: { statusCode: c.status, responseBody: c.body } } }, parts: [],
+    }), (error: unknown) => {
+      assert.ok(error instanceof OpencodePromptError);
+      assert.equal(error.budget?.kind, c.kind);
+      assert.match(error.message, c.label);
+      assert.doesNotMatch(String(error), /secret-test-value|api_key|limit reached|paused/);
+      return true;
+    });
+  }
+});
+
 test("ordinary provider and context errors never become budget pauses or success", () => {
   for (const detail of [
     { name: "APIError", data: { statusCode: 503, message: "temporarily unavailable" } },
@@ -43,6 +63,7 @@ test("ordinary provider and context errors never become budget pauses or success
     assert.throws(() => parsePromptResponse({ info: { error: detail }, parts: [] }), (error: unknown) => {
       assert.ok(error instanceof OpencodePromptError);
       assert.equal(error.errorType, detail.name);
+      assert.equal(error.budget, null);
       assert.doesNotMatch(error.message, /budget exceeded/);
       return true;
     });

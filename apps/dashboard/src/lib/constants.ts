@@ -84,6 +84,7 @@ export const PARK_REASON_META: Record<ParkReason, Meta> = {
   infra: { label: "Chyba infrastruktury", tone: "danger" },
   judging_orphan: { label: "Osiřelé posuzování", tone: "warn" },
   owner_cancelled: { label: "Zrušeno majitelem", tone: "neutral" },
+  attempt_allowance_exhausted: { label: "Na jeden pokus příliš velký", tone: "warn" },
   unknown: { label: "Důvod neznámý", tone: "neutral" },
 };
 

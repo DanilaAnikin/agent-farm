@@ -6,7 +6,8 @@
  */
 import { getDb, projects, events } from "@farm/db";
 import { and, eq, gte } from "drizzle-orm";
-import { projectMachine, shouldAutoResume, checkBudget, loadConfig } from "@farm/core";
+import { projectMachine, shouldAutoResume, loadConfig } from "@farm/core";
+import { admissionBlockedScope, guardAdmissionReserveUsd } from "./budget-deferral.js";
 import { creditBalance } from "@farm/billing";
 import { logEvent } from "./events.js";
 import { spendSnapshot } from "./cost.js";
@@ -31,12 +32,12 @@ export async function runBudgetHoldOnce(): Promise<void> {
       if (!shouldAutoResume(heldSince, now)) continue;
 
       // Po resetu okna ověř, že útrata je opravdu pod DENNÍM stropem — a to se STEJNOU
-      // rezervou (perAttemptBudgetUsd), jakou drží dispatch (checkBudget(spend,caps,perAttempt)
-      // v dispatch.ts). Bez shodné rezervy vzniká flapping pásmo [cap−perAttempt, cap]:
+      // branou, jakou drží dispatch (admissionBlockedScope: perAttempt nad všemi stropy
+      // + rezervace hlídače nad stropy farmy). Bez shodné rezervy vzniká flapping pásmo:
       // budget-hold obnoví „bezpečný" projekt, dispatch ho hned zas re-holdne.
       const caps = await getCaps(project.userId, project.id);
       const spend = await spendSnapshot(project.userId, project.id);
-      if (checkBudget(spend, caps, cfg.perAttemptBudgetUsd) !== null) continue;
+      if (admissionBlockedScope(spend, caps, cfg.perAttemptBudgetUsd, guardAdmissionReserveUsd()) !== null) continue;
 
       // A KRITICKY: pokud jsou vyčerpané MĚSÍČNÍ kredity (out_of_credits), NEobnovuj —
       // denní okno se resetuje každý den, ale kredity až s měsícem. Bez téhle brány
@@ -97,7 +98,7 @@ export async function runBudgetHoldOnce(): Promise<void> {
       if (Number.isFinite(resumeAt) ? now.getTime() < resumeAt : !shouldAutoResume(pausedSince, now)) continue;
       const caps = await getCaps(project.userId, project.id);
       const spend = await spendSnapshot(project.userId, project.id);
-      if (checkBudget(spend, caps, cfg.perAttemptBudgetUsd) !== null) continue;
+      if (admissionBlockedScope(spend, caps, cfg.perAttemptBudgetUsd, guardAdmissionReserveUsd()) !== null) continue;
       const credit = await creditBalance(project.userId);
       if (!credit.ok) continue;
 

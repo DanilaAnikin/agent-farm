@@ -11,6 +11,12 @@
 
 import { Agent } from "undici";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  budgetClassLabel,
+  classifyBudgetText,
+  UNRECOGNIZED_BUDGET_CLASS,
+  type BudgetDeferralClass,
+} from "./budget-deferral.js";
 
 const ENDPOINTS = {
   createSession: (base: string) => `${base}/session`,
@@ -54,9 +60,14 @@ export interface PromptResult {
 
 /** Provider failures can be embedded in a successful opencode HTTP response. */
 export class OpencodePromptError extends Error {
-  constructor(readonly errorType: string, readonly status?: number, budgetExceeded = false) {
+  /**
+   * @param budget Druh rozpočtové chyby (null = není rozpočtová). Tělo odpovědi se
+   * nekopíruje, jen z něj odvozený výčet — dispatch podle něj rozliší per-pokus
+   * příděl od zavřeného okna farmy (budget-deferral.ts).
+   */
+  constructor(readonly errorType: string, readonly status?: number, readonly budget: BudgetDeferralClass | null = null) {
     // Never copy provider response bodies: they can contain the request or credentials.
-    super(`opencode prompt failed: ${errorType}${status ? ` (provider status ${status})` : ""}${budgetExceeded ? ": budget exceeded" : ""}`);
+    super(`opencode prompt failed: ${errorType}${status ? ` (provider status ${status})` : ""}${budget ? `: budget exceeded [${budgetClassLabel(budget)}]` : ""}`);
     this.name = "OpencodePromptError";
   }
 }
@@ -85,7 +96,8 @@ export function parsePromptResponse(value: unknown): PromptResult {
       .filter((part): part is string => typeof part === "string")
       .map((part) => part.slice(0, 16_384)).join(" ");
     const budgetExceeded = status === 402 || /budget.{0,40}(exceed|exhaust|limit|unavailable|pause)|budget_exceeded/i.test(diagnostic);
-    throw new OpencodePromptError(name, status, budgetExceeded);
+    const budget = budgetExceeded ? classifyBudgetText(diagnostic) ?? UNRECOGNIZED_BUDGET_CLASS : null;
+    throw new OpencodePromptError(name, status, budget);
   }
   if (!info && !Array.isArray(raw.parts) && typeof raw.text !== "string"
       && typeof record(raw.message)?.content !== "string") {

@@ -118,6 +118,7 @@ export const EVENT_META: Record<string, EventMeta> = {
   task_unblocked: B("Úkol odblokován"),
   task_parked: D("Úkol zaparkován", "warn"),
   task_parked_infra: B("Úkol zaparkován kvůli infrastruktuře", "warn"),
+  task_parked_attempt_allowance: B("Úkol zaparkován — na jeden pokus příliš velký", "warn"),
   task_parked_empty_diff: B("Úkol zaparkován — žádná změna", "warn"),
   task_cancelled: B("Úkol zrušen", "neutral"),
   task_cancelled_bad_premise: B("Úkol zrušen — chybné zadání", "warn"),
