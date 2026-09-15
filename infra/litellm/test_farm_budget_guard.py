@@ -310,6 +310,28 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.pool.fetchval("SELECT ready FROM farm_budget_guard_meta"))
         with self.assertRaises(g.HTTPException): await self.store.reserve(uuid4(), self.estimate)
 
+    async def test_client_alias_restamp_keeps_admission_and_reservation(self):
+        # Non-streaming proxy responses are restamped with the client alias; a
+        # deferred success callback can observe that name before or after settlement.
+        first = uuid4(); await self.store.reserve(first, self.estimate)
+        await self.store.settle(first, "worker", 1000, 200)
+        self.assertTrue(await self.pool.fetchval("SELECT ready FROM farm_budget_guard_meta"))
+        self.assertEqual((await self.totals())["day_usd"], Decimal("0.12"))
+        await self.store.settle(first, "deepseek-flash", 1000, 200)
+        await self.store.settle(first, "worker", 1000, 200)
+        self.assertTrue(await self.pool.fetchval("SELECT ready FROM farm_budget_guard_meta"))
+        self.assertEqual((await self.totals())["day_usd"], Decimal("0.00054"))
+
+    async def test_repeated_settlement_with_other_model_does_not_close_admission(self):
+        req = uuid4(); await self.store.reserve(req, self.estimate)
+        await self.store.settle(req, "deepseek-flash", 1000, 200)
+        await self.store.settle(req, "unreviewed-model", 1000, 200)
+        self.assertTrue(await self.pool.fetchval("SELECT ready FROM farm_budget_guard_meta"))
+        self.assertEqual((await self.totals())["day_usd"], Decimal("0.00054"))
+        other = uuid4(); await self.store.reserve(other, self.estimate)
+        await self.store.settle(other, "judge", 1000, 200)
+        self.assertFalse(await self.pool.fetchval("SELECT ready FROM farm_budget_guard_meta"))
+
 
 if __name__ == "__main__":
     unittest.main()

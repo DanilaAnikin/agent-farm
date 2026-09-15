@@ -243,7 +243,7 @@ class PostgresStore:
             async with conn.transaction():
                 await conn.execute("SET LOCAL lock_timeout = '3s'")
                 await conn.execute("SELECT pg_advisory_xact_lock($1)", ADVISORY_LOCK)
-                row = await conn.fetchrow("""SELECT model_id,reserved_usd,actual_usd,status
+                row = await conn.fetchrow("""SELECT model_alias,model_id,reserved_usd,actual_usd,status
                     FROM public.farm_budget_requests WHERE request_id=$1 FOR UPDATE""", request_id)
                 if row is None:
                     notice("settlement row missing")
@@ -251,6 +251,18 @@ class PostgresStore:
                 if actual_model is None or tokens_in is None or tokens_out is None:
                     await conn.execute("""UPDATE public.farm_budget_requests SET status='ambiguous'
                         WHERE request_id=$1 AND status<>'settled'""", request_id)
+                    return
+                if actual_model == row["model_alias"] and actual_model != row["model_id"]:
+                    # The proxy restamps non-streaming responses with the client alias
+                    # while deferred success logging may still hold the same object.
+                    # That name proves nothing about the provider model: keep the
+                    # reservation charged and let the provider-named callback settle.
+                    notice("client alias in settlement ignored")
+                    return
+                if actual_model != row["model_id"] and row["status"] == "settled":
+                    # A repeated callback for the same response cannot change the
+                    # model already verified by the first settlement.
+                    notice("repeated settlement model differs; ignored")
                     return
                 if actual_model != row["model_id"]:
                     # A changed routing map invalidates our upper bound. Keep the

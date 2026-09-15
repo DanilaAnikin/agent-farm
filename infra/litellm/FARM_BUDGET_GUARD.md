@@ -68,6 +68,13 @@ count between zero and total input. Missing/invalid cache counts use no discount
 Legacy Flash response names `deepseek-v4-flash` and `deepseek-v4.1-flash` normalize
 to the same reviewed model. A different actual model or cost above its reserved
 upper bound disables further admission by clearing `ready` for review.
+The proxy restamps non-streaming responses with the client-requested alias
+(`judge`, `worker`, ...) while deferred success logging can still read the same
+response object. A settlement naming the reservation's own alias is therefore
+ignored (the reservation stays charged until the provider-named callback settles
+it), and a repeated callback on an already settled reservation cannot close
+admission. On 2026-09-14 22:19 UTC exactly this race cleared `ready` after a
+correctly settled judge request and stopped the farm.
 
 Both non-streaming post-call success and assembled streaming success callbacks
 settle the reservation. Repeated callbacks are idempotent. Storage errors,
