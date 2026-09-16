@@ -16,7 +16,7 @@ import { errorGroups, type FeedEvent } from "@/components/swarm/event-groups";
 import { ATTEMPT_STATUS_META, PROJECT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatNumber, formatRelative } from "@/lib/format";
 import { countLabel, plural, TVARY } from "@/lib/plural";
-import { modelLabel } from "@/lib/admin-guards";
+import { modelLabel, storedModelLabel } from "@/lib/admin-guards";
 import type { AgentRow, AttemptStatus, ProjectStatus } from "@/lib/types";
 
 // Titulek odpovídá položce navigace (NAV_ITEMS).
@@ -327,7 +327,7 @@ export default async function SwarmPage() {
                   {lastRunTask.title}
                 </Link>
               ) : null}
-              {lastRun.model ? <span className="text-xs text-(--color-faint)">{modelLabel(lastRun.model)}</span> : null}
+              {lastRun.model ? <span className="text-xs text-(--color-faint)">{storedModelLabel(lastRun.model)}</span> : null}
               {lastRunPrUrl ? (
                 <a href={lastRunPrUrl} target="_blank" rel="noreferrer" className="text-xs text-(--color-brand) hover:underline">
                   Pull request #{lastRun.pr_number}

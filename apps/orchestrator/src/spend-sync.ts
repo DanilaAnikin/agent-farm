@@ -24,6 +24,7 @@
  */
 import postgres from "postgres";
 import { getSql, getDb, costLedger } from "@farm/db";
+import { repricedSpendUsd } from "@farm/core";
 import { logEventDeduped } from "./events.js";
 
 const WATERMARK_KEY = "litellm_spend_watermark";
@@ -91,15 +92,25 @@ function parseUtc(text: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * Kolik vstupních tokenů poskytovatel potvrdil jako zásah cache.
+ *
+ * Bereme MINIMUM ze všech hlášených hodnot, stejně jako hlídač: rozporuplná
+ * metadata nesmí zvětšit slevu (a tím podhodnotit útratu v cost_ledger).
+ */
 function cachedTokens(meta: Record<string, unknown> | null): number {
   if (!meta) return 0;
   try {
     const auv = meta.additional_usage_values as { cache_read_input_tokens?: number } | undefined;
-    if (typeof auv?.cache_read_input_tokens === "number") return auv.cache_read_input_tokens;
     const uo = meta.usage_object as
-      | { prompt_tokens_details?: { cached_tokens?: number } }
+      | { prompt_tokens_details?: { cached_tokens?: number }; prompt_cache_hit_tokens?: number }
       | undefined;
-    return uo?.prompt_tokens_details?.cached_tokens ?? 0;
+    const reported = [
+      auv?.cache_read_input_tokens,
+      uo?.prompt_tokens_details?.cached_tokens,
+      uo?.prompt_cache_hit_tokens,
+    ].filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0);
+    return reported.length > 0 ? Math.min(...reported) : 0;
   } catch {
     return 0;
   }
@@ -223,15 +234,35 @@ export async function runSpendSyncOnce(): Promise<void> {
     // Bez UUID nejde deduplikovat: v okně překryvu by se řádek přičetl při každém
     // běhu. Takový řádek bereme jen jednou — když skončil až po watermarku.
     if (!refId && end.getTime() <= watermarkMs) continue;
-    const cost = Number(l.spend) || 0;
+    const litellmSpend = Number(l.spend) || 0;
 
     // Odmítnutý request (rozpočtová brána, per-pokus klíč, výpadek poskytovatele)
     // nic nestál. V ledgeru dělal řádky „prázdný poskytovatel · 0 tokenů · 0,00 US$",
     // které v UI vypadaly jako skutečná práce. Počítáme je jen do souhrnné události.
-    if (l.status === "failure" && cost === 0) {
+    // Rozhoduje ÚČTOVANÁ částka z LiteLLM, ne přepočet níž: odmítnutý požadavek
+    // poskytovatel nevyúčtoval, i kdyby jeho řádek nesl nějaké tokeny.
+    if (l.status === "failure" && litellmSpend === 0) {
       if (end.getTime() > watermarkMs) rejected += 1;
       continue;
     }
+
+    // PŘEPOČET NA SKUTEČNOU CENU: LiteLLM umí jen jednu cenu na model, takže jeho
+    // `spend` je v cenách mimo špičku. cost_ledger ale drží stropy projektu,
+    // uživatele i přání, takže chce cenu podle času požadavku — pásmo se určí ze
+    // stejné konzervativní obálky jako v hlídači (@farm/core). Neznámý model nebo
+    // řádek bez tokenů si nechá číslo z LiteLLM, aby se útrata nepodhodnotila.
+    const tokensIn = l.prompt_tokens ?? 0;
+    const tokensOut = l.completion_tokens ?? 0;
+    const cached = cachedTokens(l.metadata);
+    const cost = repricedSpendUsd({
+      model: l.model,
+      tokensIn,
+      tokensOut,
+      cachedTokens: cached,
+      start,
+      end,
+      litellmSpendUsd: litellmSpend,
+    });
 
     const ip = String(l.requester_ip_address ?? "");
     const scope: "attempt" | "system" = ip.startsWith(WORKERNET_PREFIX) ? "attempt" : "system";
@@ -255,9 +286,9 @@ export async function runSpendSyncOnce(): Promise<void> {
       refId,
       provider: l.custom_llm_provider || null,
       model: l.model || null,
-      tokensIn: l.prompt_tokens ?? 0,
-      tokensOut: l.completion_tokens ?? 0,
-      tokensCached: cachedTokens(l.metadata),
+      tokensIn,
+      tokensOut,
+      tokensCached: cached,
       costUsd: cost,
       isShadow: false,
     });

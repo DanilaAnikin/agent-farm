@@ -20,6 +20,7 @@ import {
   mergeCapsOverride,
   mergePreferenceProfile,
   modelLabel,
+  storedModelLabel,
   nearestCapKey,
   normalizeUserCap,
   parseDecimalInput,
@@ -270,9 +271,16 @@ test("agentHealthSummary: tepající idle manager je živý, netepající busy j
 // --- modely --------------------------------------------------------------------
 
 test("modelLabel: aliasy na skutečný model a zkrácený popisek", () => {
-  assert.equal(modelLabel("worker"), "DeepSeek V4 Pro");
+  assert.equal(modelLabel("worker"), "DeepSeek Flash");
+  assert.equal(modelLabel("worker-hard"), "DeepSeek V4 Pro");
   assert.equal(modelLabel("deepseek/deepseek-v4-flash"), "DeepSeek V4 Flash");
   assert.equal(modelLabel(null), "—");
+  // Uložené (historické) řádky se aliasem nepřekládají: alias worker jel do 16. 9. 2026
+  // na Pru, takže dnešní mapa by o starých pokusech lhala.
+  assert.equal(storedModelLabel("worker"), "worker");
+  assert.equal(storedModelLabel("cheap"), "cheap");
+  assert.equal(storedModelLabel("deepseek/deepseek-v4-pro"), "DeepSeek V4 Pro");
+  assert.equal(storedModelLabel(null), "—");
   assert.equal(poskytovatelLabel(""), "—");
   assert.equal(poskytovatelLabel("deepseek"), "DeepSeek");
 });

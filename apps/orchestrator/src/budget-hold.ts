@@ -35,6 +35,9 @@ export async function runBudgetHoldOnce(): Promise<void> {
       // branou, jakou drží dispatch (admissionBlockedScope: perAttempt nad všemi stropy
       // + rezervace hlídače nad stropy farmy). Bez shodné rezervy vzniká flapping pásmo:
       // budget-hold obnoví „bezpečný" projekt, dispatch ho hned zas re-holdne.
+      // Model tady neznáme (obnovuje se celý projekt), takže guardAdmissionReserveUsd
+      // počítá s nejdražším tierem žebříku — brána je pak nejvýš stejně volná jako
+      // dispatch se skutečným modelem, nikdy volnější.
       const caps = await getCaps(project.userId, project.id);
       const spend = await spendSnapshot(project.userId, project.id);
       if (admissionBlockedScope(spend, caps, cfg.perAttemptBudgetUsd, guardAdmissionReserveUsd()) !== null) continue;

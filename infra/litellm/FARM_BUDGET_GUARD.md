@@ -12,7 +12,14 @@ The guard removes Prisma-only DSN query parameters that LiteLLM adds at runtime
 asyncpg TLS parameters and `application_name` survive; otherwise asyncpg forwards
 unknown parameters as PostgreSQL settings and connection establishment fails.
 
-Apply `farm_budget_guard.sql` as a database administrator. It creates:
+Apply `farm_budget_guard.sql` as a database administrator BEFORE deploying an image
+that contains this version of the guard, and verify the columns it adds afterwards.
+The order is not cosmetic: a reservation writes `price_tier`, so a new image started
+against a table without that column fails every INSERT, and the guard then refuses
+100 % of paid traffic (fail-closed, but a complete stop). The migration itself is
+backward compatible — `ADD COLUMN IF NOT EXISTS` with `DEFAULT 'peak'`, which is
+exactly what the previous guard charged — so it can run safely while the old image
+is still serving. It creates:
 
 | Object | Purpose |
 | --- | --- |
@@ -36,17 +43,38 @@ ledger after guarded requests start: that would count requests twice. Host
 guards can compare the view with their other verified accounting, but must not
 add the two overlapping totals together.
 
-All seven reviewed routes (`manager`, `worker`, `worker-hard`, `worker-fallback`,
-`judge`, `cheap`, `media-vlm`) use `deepseek/deepseek-v4-pro`.
-The 2026-09-14 deployment switched the former Flash routes after a four-token
-Flash diagnostic request kept receiving provider keepalives for over ten minutes,
-while Pro completed its diagnostic in 2.39 seconds (9 input tokens, 1 output token,
-USD 0.00001584 settled). This is an observation of that deployment, not a lasting
-availability guarantee. The daily/monthly limits remain USD 0.60/20; one worker
-and a USD 0.05 attempt allowance remain in force. The old ambiguous Flash request
-stays charged at its original reserved amount across restart; do not refund it
-or reseed the baseline. Flash prices/response normalization remain for historical
-requests, while every new admission reserves the Pro peak price.
+Of the seven reviewed routes, `worker` and `cheap` use `deepseek/deepseek-flash`;
+`manager`, `judge`, `worker-hard`, `worker-fallback` and `media-vlm` stay on
+`deepseek/deepseek-v4-pro`. Everyday developer work is the cheap model, while
+planning, review and post-failure escalation keep the strong one, so a retry never
+repeats on the weaker model. `media-vlm` gains nothing from Flash: the guard rejects
+image input before any reservation.
+The 2026-09-14 deployment had moved every route to Pro after a four-token Flash
+diagnostic kept receiving provider keepalives for over ten minutes. That stall was
+the provider's own queue (it answered HTTP 400 "unable to start processing your
+request within the 900-second timeout limit"), not a routing fault; a 2026-09-15
+re-test answered 15 of 15 Flash requests in under 1.5 seconds. All routes therefore
+carry the same explicit idle timeouts (`timeout: 180`, `stream_timeout: 120`). They are
+deliberately not tighter: an idle timeout that cuts a legitimate wait settles the
+request as `ambiguous`, and an ambiguous request keeps its WHOLE reservation, because
+nothing is ever refunded — roughly 34 such cut requests would exhaust a day's cap
+without spending a cent.
+The deployment also sets `LITELLM_MAX_STREAMING_DURATION_SECONDS=600`, but NEITHER
+layer bounds a stream that receives only provider keepalives. The idle timeouts measure
+inactivity between reads, which a keepalive resets; and LiteLLM 1.95 evaluates the
+maximum streaming duration only at the start of `__anext__`, whose inner
+`async for chunk in ...` loop skips empty chunks with `continue` and therefore never
+returns to that check (verified in the deployed image). Such a request ends only with
+the attempt's wall clock, so its abandoned reservation is cleaned up by the guard
+itself (see the sweep below), and the keepalive behaviour must be re-checked on a live
+Flash request before Flash carries everyday traffic again.
+No retries or fallbacks are added: each paid attempt must reserve budget.
+The daily/monthly limits remain USD 0.60/20 and one worker remains in force. The old
+ambiguous Flash request stays charged at its original reserved amount across restart;
+do not refund it or reseed the baseline.
+DeepSeek's `/models` now lists only `deepseek-flash` and `deepseek-v4-pro`; the legacy
+names `deepseek-v4-flash` and `deepseek-v4.1-flash` are served by the same model and
+still normalize to `deepseek-flash` on settlement.
 In the proxy set `num_retries=0`, remove automatic
 fallbacks, and disable any paid health checks or routes bypassing this callback.
 Unknown aliases/provider overrides and multimodal payloads return HTTP 400.
@@ -58,11 +86,76 @@ function tools, tool results, and ordinary metadata remain supported. The
 server-controlled deployment setting `extra_body.thinking.type=disabled` is
 merged by LiteLLM routing after this hook; do not send it as a client override.
 
-Before contacting the provider, the guard reserves peak uncached input cost
-using serialized UTF-8 byte count plus envelope overhead and at most 4096 output
-tokens. Multiple completions, client retry overrides and extra request-body
-overrides are disabled. Peak prices per million tokens are input/output/cache:
-Flash `0.30/1.20/0.006`; Pro `1.32/3.96/0.044` (reviewed 2026-09-14).
+Before contacting the provider, the guard reserves uncached input cost using
+serialized UTF-8 byte count plus envelope overhead and at most 4096 output tokens.
+Multiple completions, client retry overrides and extra request-body overrides are
+disabled. Prices per million tokens are input/output/cache, peak and off-peak
+(official list, checked 2026-09-16): Flash `0.30/1.20/0.006` and `0.15/0.60/0.003`;
+Pro `1.32/3.96/0.044` and `0.66/1.98/0.022`.
+
+## Peak and off-peak tariff
+
+DeepSeek bills half price outside peak hours, which are 01:00-04:00 and 06:00-10:00
+UTC, Monday through Friday; all other hours, weekends included, are off-peak. The
+farm runs outside peak, so billing every request at the peak price spent only half
+the real budget (the provider balance fell USD 0.36 while the guard counted 0.69).
+
+The guard decides the tariff itself, from the clock, never from whether the off-peak
+pauser happens to be running. `is_peak()` answers one instant; `peak_overlaps()` tests
+a whole interval by walking the UTC hours it touches (window bounds and the weekday
+are constant within an hour); `price_tier()` returns off-peak ONLY when the interval,
+widened by `CLOCK_DRIFT_SEC` (120 s) on both sides, misses every peak window. Missing,
+naive or reversed timestamps, absurd spans and unknown tiers all bill peak.
+
+Settlement prices the interval from the row's `admitted_at` to the settling `now()`,
+both read from the one PostgreSQL clock inside the same transaction. Admission prices
+the worst case instead: a request admitted now may run for `MAX_REQUEST_SECONDS`
+(1200 s, covering the provider's 900-second queue limit plus the deployed timeouts),
+so a reservation is off-peak only when even that envelope stays outside peak. The
+reservation therefore always bounds what the same request can settle at in its own
+tier. `farm_budget_requests.price_tier` records which tariff a row carries; existing
+rows default to `peak`, which is exactly what they were charged, so no history moves.
+
+Two settlement cases follow from the split. A request that crossed into peak settles
+at the peak price even though it reserved off-peak: that is more than its reservation,
+so it is charged in full and merely logged, while admission stays open — only a
+genuine token-bound violation, measured at the row's OWN tier, still clears `ready`.
+An ambiguous request (no usable usage) that could have reached peak has its held
+reservation doubled to the peak price it was never allowed to assume; off-peak is
+exactly half of peak, the upgrade is guarded by `price_tier='offpeak'`, so repeated
+failure callbacks cannot raise it twice. Nothing is ever refunded.
+
+`price_tier` names the tariff the RESERVATION is denominated in and is never rewritten
+by a settlement; the tariff the settled amount was measured at goes to `settled_tier`.
+They differ exactly when a request crossed into peak. This is load-bearing, not
+bookkeeping: LiteLLM fires both the post-call success hook and the success log event
+for one response, so `settle()` runs twice, and a settlement tier written into
+`price_tier` made the second call measure a peak bound against an off-peak reservation
+and clear `ready` — stopping the whole farm for the very case the split introduced.
+
+A reservation whose settlement never arrives (proxy restart, an abandoned stream, a
+request dropped by the provider) would otherwise stay in 'reserved' forever, and since
+the split it would hold only HALF of what the provider may have charged — the one path
+that could bill too little. Admission therefore sweeps first: rows older than
+`STALE_RESERVATION_SECONDS` (the attempt wall clock of 30 minutes plus clock drift,
+the real bound on a keepalive-stalled request) become `ambiguous`, and an off-peak one
+whose envelope could have touched peak is doubled the same idempotent way. The sweep
+runs inside the admission transaction under the same advisory lock, which is the only
+moment the amount can still matter; it never refunds anything.
+
+LiteLLM itself knows only one price per model, so `model_info` in `config.yaml`
+carries the off-peak price this farm actually pays. That feeds LiteLLM's own spend:
+`LiteLLM_SpendLogs`, its `max_budget` 0.60 USD/1d net and per-attempt key allowances.
+Leaving those at peak would have stopped the farm at half the real budget, because
+that net is denominated in the same numbers. The flip side is worth stating plainly:
+everything LiteLLM meters is denominated in off-peak dollars, so during peak hours its
+0.60 USD/1d net and the per-attempt key allowance (`PER_ATTEMPT_BUDGET_USD`) permit up
+to twice their nominal real cost. Both are secondary backstops only; the farm's hard
+0.60/20 USD caps are enforced by the guard at the correct tariff, so peak hours cannot
+push real spend past them. Authoritative accounting stays with the
+guard, which checks every request atomically at its correct tariff; `cost_ledger` does
+not depend on `model_info` either, as the orchestrator's spend-sync reprices each
+spend log from its tokens, model and time window with the same rules.
 Cached input is discounted only after a successful response reports a valid
 count between zero and total input. Missing/invalid cache counts use no discount.
 Legacy Flash response names `deepseek-v4-flash` and `deepseek-v4.1-flash` normalize
