@@ -374,6 +374,11 @@ export function refillPrompt(input: {
         `- Do NOT recreate anything from ALREADY DONE (listed below), in ANY wording or language. ` +
         `Key-based dedup cannot see that "Nastavit Jest s ts-jest" and "Set up Jest with ts-jest" are the same task, ` +
         `so this is on you. If the done work is incomplete, propose the concrete MISSING piece, never a re-do.\n` +
+        `- NEVER make landing code in the main branch part of a task. Merging is the delivery loop's job: ` +
+        `the worker only commits to the task branch, the Judge reviews it and the merge gate merges the PR. ` +
+        `A done_condition like "the change is in main" or "nothing blocks the merge" can never be satisfied by the ` +
+        `worker, so the task burns attempts forever. Phrase goals so they are verifiable INSIDE the task branch. ` +
+        `For the same reason do not plan tasks whose goal is to finish or merge an existing pull request.\n` +
         `- Every task needs an objectively verifiable done_condition and a concrete verify_method for the Tester.\n` +
         `- If the user gave a steering note, it OUTRANKS everything else — address it first.` +
         briefBlock(input.projectBrief),
