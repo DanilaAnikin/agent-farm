@@ -59,7 +59,7 @@ export interface GithubStatus {
 /**
  * Rozpočet očima hlídače. Tři různá čísla, která se NIKDY nesčítají:
  *   *_settled — zaúčtované pohyby v našem ledgeru (co LiteLLM skutečně změřil),
- *   *_counted — konzervativní součet hlídače (špičkové ceny + rezervace),
+ *   *_counted — konzervativní součet hlídače (skutečná cena podle času + rezervace),
  *   deepseek_balance_usd — zůstatek u poskytovatele.
  * Práci blokuje `*_counted`, ne `*_settled` — to musí UI říct nahlas.
  */

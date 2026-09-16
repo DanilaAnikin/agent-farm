@@ -26,6 +26,20 @@ CREATE TABLE IF NOT EXISTS public.farm_budget_requests (
 );
 CREATE INDEX IF NOT EXISTS farm_budget_requests_admitted_idx
   ON public.farm_budget_requests(admitted_at);
+-- Tariff the RESERVATION is denominated in. Existing rows were admitted and settled
+-- while the guard billed peak unconditionally, so 'peak' is their true, unchanged
+-- value. Settlement must never rewrite this column: the token bound that decides
+-- whether admission stays open is measured against the tariff the row reserved at,
+-- and repeated callbacks for one response would otherwise compare tariffs.
+ALTER TABLE public.farm_budget_requests
+  ADD COLUMN IF NOT EXISTS price_tier text NOT NULL DEFAULT 'peak'
+  CHECK (price_tier IN ('peak','offpeak'));
+-- Tariff the settled amount was charged at; NULL until a settlement measures it.
+-- A request admitted off-peak that ran on into peak settles at the peak price, so
+-- the two columns legitimately differ.
+ALTER TABLE public.farm_budget_requests
+  ADD COLUMN IF NOT EXISTS settled_tier text
+  CHECK (settled_tier IN ('peak','offpeak'));
 
 CREATE OR REPLACE VIEW public.farm_budget_totals AS
 WITH charges AS (
