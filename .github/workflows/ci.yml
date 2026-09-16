@@ -48,8 +48,13 @@ jobs:
       # dashboardu, llm i billingu v CI mrtvé — a merge brána farmy („všechny checky
       # zelené") slučovala PR, které je mohly rozbít. Pouští se všechno kromě
       # @farm/integration: ta potřebuje živou DATABASE_URL, kterou CI nemá.
+      #
+      # MUSÍ jít přes turbo, ne přes `pnpm -r`: balíčky se navzájem importují přes
+      # `dist/` (main je ./dist/index.js), takže bez předchozího buildu testy padnou
+      # na ERR_MODULE_NOT_FOUND. `turbo.json` má u úlohy test `dependsOn: ["^build"]`,
+      # takže si závislosti postaví samo; `pnpm -r` tenhle graf obchází.
       - name: Test (všechny balíčky kromě integračních)
-        run: pnpm -r --filter '!@farm/integration' test
+        run: pnpm turbo run test --filter='!@farm/integration'
 
       - name: Typecheck
         run: pnpm typecheck
