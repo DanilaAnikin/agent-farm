@@ -6,6 +6,7 @@ UTC accounting window rolls over. No tokens, prompts, or credentials are stored.
 """
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_CEILING
 import json
 import logging
@@ -33,18 +34,94 @@ def notice(event: str):
         _last_notice[event] = now
         LOGGER.warning("farm budget guard: %s; existing reservations remain charged", event)
 
-# Peak USD per million tokens: input, output, verified cache-hit input.
+# USD per million tokens: input, output, verified cache-hit input.
+# Official price list, checked 2026-09-16 (https://api-docs.deepseek.com/quick_start/pricing):
+# "Off-peak rates are half of the peak rates. Peak hours are 01:00 - 04:00 and
+# 06:00 - 10:00 UTC, Monday through Friday (all other hours are off-peak)."
 # Admission ignores cache; settlement discounts only provider-reported hits.
+PEAK, OFFPEAK = "peak", "offpeak"
 PRICES = {
-    "deepseek-flash": (Decimal("0.30"), Decimal("1.20"), Decimal("0.006")),
-    "deepseek-v4-pro": (Decimal("1.32"), Decimal("3.96"), Decimal("0.044")),
+    PEAK: {
+        "deepseek-flash": (Decimal("0.30"), Decimal("1.20"), Decimal("0.006")),
+        "deepseek-v4-pro": (Decimal("1.32"), Decimal("3.96"), Decimal("0.044")),
+    },
+    OFFPEAK: {
+        "deepseek-flash": (Decimal("0.15"), Decimal("0.60"), Decimal("0.003")),
+        "deepseek-v4-pro": (Decimal("0.66"), Decimal("1.98"), Decimal("0.022")),
+    },
 }
 MODEL_ALIASES = {
-    "manager": "deepseek-v4-pro", "worker": "deepseek-v4-pro",
+    "manager": "deepseek-v4-pro", "worker": "deepseek-flash",
     "worker-hard": "deepseek-v4-pro", "worker-fallback": "deepseek-v4-pro",
-    "judge": "deepseek-v4-pro", "cheap": "deepseek-v4-pro",
+    "judge": "deepseek-v4-pro", "cheap": "deepseek-flash",
     "media-vlm": "deepseek-v4-pro",
 }
+# Provider model id behind each reviewed price key. The routing map in config.yaml
+# must use exactly these; `usage()` normalizes the name a response reports back.
+PROVIDER_MODELS = {
+    "deepseek-flash": "deepseek/deepseek-flash",
+    "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+}
+
+# Peak windows are hour-aligned in UTC and apply Monday through Friday only.
+PEAK_WINDOWS_UTC = ((1, 4), (6, 10))
+# Clock skew between this process, PostgreSQL and the provider's own billing
+# timestamp. The provider documents neither the billing instant nor its clock.
+CLOCK_DRIFT_SEC = 120
+# Worst case a single admitted request can still be running: the provider closes
+# a queued request after 900 s (rate_limit docs) and the deployed non-streaming
+# timeout is 120-180 s. A reservation may use the off-peak price only when even
+# this envelope stays outside peak.
+MAX_REQUEST_SECONDS = 1200
+
+
+def is_peak(moment: datetime) -> bool:
+    """Peak tariff at `moment`? Windows are whole UTC hours, weekdays only."""
+    return moment.weekday() < 5 and any(start <= moment.hour < end for start, end in PEAK_WINDOWS_UTC)
+
+
+def as_utc(value) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    # A naive timestamp has no verifiable zone: treat it as unusable, not as UTC.
+    return value.astimezone(timezone.utc) if value.tzinfo is not None else None
+
+
+def peak_overlaps(start: datetime, end: datetime) -> bool:
+    """Does any instant of [start, end] fall into a peak window?
+
+    Both window bounds and the weekday are constant within one UTC hour, so it is
+    enough to test every hour the interval touches. Unusable input charges peak.
+    """
+    if end < start or end - start > timedelta(days=7):
+        return True
+    moment = start.replace(minute=0, second=0, microsecond=0)
+    while moment <= end:
+        if is_peak(moment):
+            return True
+        moment += timedelta(hours=1)
+    return False
+
+
+def price_tier(start, end, margin_sec: int = CLOCK_DRIFT_SEC) -> str:
+    """Off-peak only when the WHOLE request, widened by clock drift, avoids peak.
+
+    Anything uncertain (missing or naive timestamps, reversed clocks, an interval
+    touching a window boundary) is charged at the peak price.
+    """
+    first, last = as_utc(start), as_utc(end)
+    if first is None or last is None:
+        return PEAK
+    margin = timedelta(seconds=max(0, margin_sec))
+    return PEAK if peak_overlaps(first - margin, last + margin) else OFFPEAK
+
+
+def reservation_tier(admitted, max_seconds: int = MAX_REQUEST_SECONDS) -> str:
+    """Tier for a request admitted now and running for the longest possible time."""
+    moment = as_utc(admitted)
+    if moment is None:
+        return PEAK
+    return price_tier(moment, moment + timedelta(seconds=max(0, max_seconds)))
 
 
 def reject(reason: str, status: int = 402):
@@ -74,8 +151,10 @@ def cap(value, fallback: str) -> Decimal:
     return amount(value)
 
 
-def charge(model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0) -> Decimal:
-    incoming, outgoing, cached = PRICES[model]
+def charge(model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
+           tier: str = PEAK) -> Decimal:
+    # Default stays peak: an unknown or unpassed tier must never bill less.
+    incoming, outgoing, cached = PRICES[tier if tier in PRICES else PEAK][model]
     return ((incoming * (input_tokens - cached_tokens) + cached * cached_tokens
              + outgoing * output_tokens) / MILLION).quantize(
         CENT_PRECISION, rounding=ROUND_CEILING
@@ -89,6 +168,12 @@ class Estimate:
     input_bound: int
     output_bound: int
     usd: Decimal
+
+    def usd_for(self, tier: str) -> Decimal:
+        """Reservation for one tier. `usd` stays the peak upper bound."""
+        if tier == PEAK:
+            return self.usd
+        return charge(self.model_id, self.input_bound, self.output_bound, 0, tier)
 
 
 def farm_database_dsn(source: str) -> str:
@@ -228,13 +313,19 @@ class PostgresStore:
                 totals = await conn.fetchrow("SELECT day_usd,month_usd FROM public.farm_budget_totals")
                 if totals is None:
                     reject("accounting is unavailable")
-                if amount(totals["month_usd"]) + estimated.usd > month_cap:
+                # One clock for the tier and for the stored admission time: now() is
+                # the transaction timestamp, identical to the admitted_at written below.
+                admitted_at = await conn.fetchval("SELECT now()")
+                tier = reservation_tier(admitted_at)
+                reserved = estimated.usd_for(tier)
+                if amount(totals["month_usd"]) + reserved > month_cap:
                     reject("monthly limit reached")
-                if amount(totals["day_usd"]) + estimated.usd > day_cap:
+                if amount(totals["day_usd"]) + reserved > day_cap:
                     reject("daily limit reached")
                 await conn.execute("""INSERT INTO public.farm_budget_requests
-                    (request_id,model_alias,model_id,reserved_usd) VALUES ($1,$2,$3,$4)""",
-                                   request_id, estimated.model_alias, estimated.model_id, estimated.usd)
+                    (request_id,admitted_at,model_alias,model_id,reserved_usd,price_tier)
+                    VALUES ($1,$2,$3,$4,$5,$6)""", request_id, admitted_at,
+                                   estimated.model_alias, estimated.model_id, reserved, tier)
 
     async def settle(self, request_id: UUID, actual_model: str | None,
                      tokens_in: int | None, tokens_out: int | None, cached_tokens: int = 0):
@@ -243,12 +334,25 @@ class PostgresStore:
             async with conn.transaction():
                 await conn.execute("SET LOCAL lock_timeout = '3s'")
                 await conn.execute("SELECT pg_advisory_xact_lock($1)", ADVISORY_LOCK)
-                row = await conn.fetchrow("""SELECT model_alias,model_id,reserved_usd,actual_usd,status
-                    FROM public.farm_budget_requests WHERE request_id=$1 FOR UPDATE""", request_id)
+                row = await conn.fetchrow("""SELECT model_alias,model_id,reserved_usd,actual_usd,status,
+                    admitted_at,price_tier FROM public.farm_budget_requests
+                    WHERE request_id=$1 FOR UPDATE""", request_id)
                 if row is None:
                     notice("settlement row missing")
                     return
+                # Same clock for both ends of the billed interval as on admission.
+                settled_at = await conn.fetchval("SELECT now()")
+                tier = price_tier(row["admitted_at"], settled_at)
                 if actual_model is None or tokens_in is None or tokens_out is None:
+                    # An unknown charge keeps its full reservation. If the request could
+                    # still have reached peak, raise that held amount to the peak price
+                    # it was never allowed to assume (off-peak is exactly half). Bounded
+                    # and idempotent: only an off-peak row is ever upgraded.
+                    if tier == PEAK:
+                        await conn.execute("""UPDATE public.farm_budget_requests
+                            SET reserved_usd=reserved_usd*2, price_tier='peak'
+                            WHERE request_id=$1 AND status<>'settled' AND price_tier='offpeak'""",
+                                           request_id)
                     await conn.execute("""UPDATE public.farm_budget_requests SET status='ambiguous'
                         WHERE request_id=$1 AND status<>'settled'""", request_id)
                     return
@@ -270,14 +374,22 @@ class PostgresStore:
                     await conn.execute("UPDATE public.farm_budget_guard_meta SET ready=false WHERE singleton")
                     notice("model mismatch; admission disabled")
                     return
-                usd = charge(actual_model, tokens_in, tokens_out, cached_tokens)
-                if usd > amount(row["reserved_usd"]):
+                usd = charge(actual_model, tokens_in, tokens_out, cached_tokens, tier)
+                # The reservation bounds TOKENS, at the tier it was taken. Compare like
+                # with like: only a broken token bound may close admission. A request
+                # that merely crossed into peak is charged the higher price and stays
+                # inside the caps through its settled amount.
+                bound = charge(actual_model, tokens_in, tokens_out, cached_tokens, row["price_tier"] or PEAK)
+                if bound > amount(row["reserved_usd"]):
                     await conn.execute("UPDATE public.farm_budget_guard_meta SET ready=false WHERE singleton")
                     notice("reservation estimate exceeded; admission disabled")
+                elif usd > amount(row["reserved_usd"]):
+                    notice("request reached peak hours; settled above its off-peak reservation")
                 if row["actual_usd"] is not None:
                     usd = max(usd, amount(row["actual_usd"]))
                 await conn.execute("""UPDATE public.farm_budget_requests
-                    SET actual_usd=$2,status='settled',settled_at=now() WHERE request_id=$1""", request_id, usd)
+                    SET actual_usd=$2,status='settled',settled_at=now(),price_tier=$3
+                    WHERE request_id=$1""", request_id, usd, tier)
 
 
 def reservation_id(data: dict) -> UUID | None:

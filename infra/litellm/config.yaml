@@ -1,10 +1,23 @@
 # Active budgeted routing. All paid calls pass the durable PostgreSQL reservation guard.
 # Global limits are read from farm_settings: 0.60 USD/day and 20 USD/month.
-# Price source checked 2026-09-14: https://api-docs.deepseek.com/quick_start/pricing/
-# PEAK rates are deliberately used for conservative budget accounting even off-peak.
+# Price source checked 2026-09-16: https://api-docs.deepseek.com/quick_start/pricing/
+# Off-peak rates are half of peak; peak is 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri.
+# model_info below carries the OFF-PEAK rates, which is what this farm actually pays:
+# it runs outside peak hours. These numbers only feed LiteLLM's own spend (SpendLogs,
+# its 0.60 USD/1d net, per-attempt key allowances). Authoritative accounting is the
+# guard, which prices every request by its own clock and charges peak whenever the
+# request could have touched a peak window; cost_ledger is repriced from tokens by
+# the orchestrator's spend-sync, so it never depends on these values either.
+# Everyday developer work (worker, cheap) runs on Flash; planning (manager), review
+# (judge) and post-failure escalation (worker-hard, worker-fallback) stay on Pro.
+# media-vlm stays on Pro: the guard rejects image input outright and neither model
+# accepts it, so switching it would buy nothing.
+# Flash keepalive stalls on 2026-09-14 were a provider-side queue (HTTP 400 after
+# 900 s), not a routing fault; timeout/stream_timeout below bound a repeat, and
+# LITELLM_MAX_STREAMING_DURATION_SECONDS in compose bounds a stalled stream.
 # No internal retries/fallbacks: every separately billed attempt must reserve budget.
-# Non-thinking tool calls avoid dropping reasoning_content in the OpenCode adapter.
-# All aliases use Pro after Flash keepalive stalls observed 2026-09-14; caps unchanged.
+# Non-thinking tool calls avoid dropping reasoning_content in the OpenCode adapter,
+# and keep Flash from billing reasoning tokens it enables by default.
 model_list:
 - model_name: manager
   litellm_params:
@@ -13,27 +26,29 @@ model_list:
     api_base: https://api.deepseek.com
     max_tokens: 4096
     timeout: 180
+    stream_timeout: 120
     extra_body:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 1.32e-06
-    output_cost_per_token: 3.96e-06
-    cache_read_input_token_cost: 4.4e-08
+    input_cost_per_token: 6.6e-07
+    output_cost_per_token: 1.98e-06
+    cache_read_input_token_cost: 2.2e-08
 - model_name: worker
   litellm_params:
-    model: deepseek/deepseek-v4-pro
+    model: deepseek/deepseek-flash
     api_key: os.environ/DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com
     max_tokens: 4096
-    timeout: 180
+    timeout: 120
+    stream_timeout: 60
     extra_body:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 1.32e-06
-    output_cost_per_token: 3.96e-06
-    cache_read_input_token_cost: 4.4e-08
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 6.0e-07
+    cache_read_input_token_cost: 3.0e-09
 - model_name: worker-hard
   litellm_params:
     model: deepseek/deepseek-v4-pro
@@ -41,13 +56,14 @@ model_list:
     api_base: https://api.deepseek.com
     max_tokens: 4096
     timeout: 180
+    stream_timeout: 120
     extra_body:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 1.32e-06
-    output_cost_per_token: 3.96e-06
-    cache_read_input_token_cost: 4.4e-08
+    input_cost_per_token: 6.6e-07
+    output_cost_per_token: 1.98e-06
+    cache_read_input_token_cost: 2.2e-08
 - model_name: worker-fallback
   litellm_params:
     model: deepseek/deepseek-v4-pro
@@ -55,13 +71,14 @@ model_list:
     api_base: https://api.deepseek.com
     max_tokens: 4096
     timeout: 180
+    stream_timeout: 120
     extra_body:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 1.32e-06
-    output_cost_per_token: 3.96e-06
-    cache_read_input_token_cost: 4.4e-08
+    input_cost_per_token: 6.6e-07
+    output_cost_per_token: 1.98e-06
+    cache_read_input_token_cost: 2.2e-08
 - model_name: judge
   litellm_params:
     model: deepseek/deepseek-v4-pro
@@ -69,27 +86,29 @@ model_list:
     api_base: https://api.deepseek.com
     max_tokens: 4096
     timeout: 180
+    stream_timeout: 120
     extra_body:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 1.32e-06
-    output_cost_per_token: 3.96e-06
-    cache_read_input_token_cost: 4.4e-08
+    input_cost_per_token: 6.6e-07
+    output_cost_per_token: 1.98e-06
+    cache_read_input_token_cost: 2.2e-08
 - model_name: cheap
   litellm_params:
-    model: deepseek/deepseek-v4-pro
+    model: deepseek/deepseek-flash
     api_key: os.environ/DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com
     max_tokens: 4096
-    timeout: 180
+    timeout: 120
+    stream_timeout: 60
     extra_body:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 1.32e-06
-    output_cost_per_token: 3.96e-06
-    cache_read_input_token_cost: 4.4e-08
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 6.0e-07
+    cache_read_input_token_cost: 3.0e-09
 - model_name: media-vlm
   litellm_params:
     model: deepseek/deepseek-v4-pro
@@ -97,13 +116,14 @@ model_list:
     api_base: https://api.deepseek.com
     max_tokens: 4096
     timeout: 180
+    stream_timeout: 120
     extra_body:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 1.32e-06
-    output_cost_per_token: 3.96e-06
-    cache_read_input_token_cost: 4.4e-08
+    input_cost_per_token: 6.6e-07
+    output_cost_per_token: 1.98e-06
+    cache_read_input_token_cost: 2.2e-08
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 0

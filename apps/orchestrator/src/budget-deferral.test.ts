@@ -10,7 +10,7 @@ import {
   decideFarmWindowDelay,
   farmGuardScope,
   guardAdmissionReserveUsd,
-  guardPeakReservationUsd,
+  guardReservationUsd,
   oversizedParkFollowUp,
   refineBudgetClass,
   remainingStalledAttempts,
@@ -22,6 +22,11 @@ import {
 const A = "a".repeat(40);
 const B = "b".repeat(40);
 const C = "c".repeat(40);
+
+// Pásmo rezervace závisí na čase, takže ho testy pinují: 2026-09-16 je středa,
+// 02:00 UTC padá do špičky (01–04), 20:00 UTC je mimo ni.
+const PEAK_NOW = new Date("2026-09-16T02:00:00Z");
+const OFFPEAK_NOW = new Date("2026-09-16T20:00:00Z");
 
 // --- klasifikace -----------------------------------------------------------------
 
@@ -135,18 +140,28 @@ test("total allowance ceiling parks even a task that keeps committing", () => {
 
 // --- vstupní brána -----------------------------------------------------------------
 
-test("guard peak reservation is derived from guard constants and matches observed production maximum", () => {
-  const usd = guardPeakReservationUsd();
-  assert.ok(Math.abs(usd - 0.20166) < 0.0001, String(usd));
-  assert.ok(usd <= 0.2022);
-  assert.equal(guardAdmissionReserveUsd({}), usd);
-  assert.equal(guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "nonsense" }), usd);
-  assert.ok(guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "0" }) < 0.02);
+test("guard reservation follows the alias model and the tariff of the admission window", () => {
+  // Pro ve špičce = dosavadní produkční maximum (~141 kB kontextu).
+  const proPeak = guardReservationUsd({ alias: "worker-hard", now: PEAK_NOW });
+  assert.ok(Math.abs(proPeak - 0.20166) < 0.0001, String(proPeak));
+  assert.ok(proPeak <= 0.2022);
+  // Mimo špičku je to přesně polovina; worker navíc jede na Flashi.
+  assert.ok(Math.abs(guardReservationUsd({ alias: "worker-hard", now: OFFPEAK_NOW }) - proPeak / 2) < 1e-9);
+  const workerOff = guardReservationUsd({ alias: "worker", now: OFFPEAK_NOW });
+  assert.ok(Math.abs(workerOff - 0.0235344) < 0.0001, String(workerOff));
+  assert.ok(workerOff < proPeak / 4);
+  // Neznámý i chybějící alias počítá s nejdražším tierem žebříku (nikdy volnější).
+  assert.equal(guardReservationUsd({ alias: "nonsense", now: PEAK_NOW }), proPeak);
+  assert.equal(guardReservationUsd({ now: PEAK_NOW }), proPeak);
+  const pinned = { alias: "worker-hard", now: PEAK_NOW };
+  assert.equal(guardAdmissionReserveUsd({}, pinned), proPeak);
+  assert.equal(guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "nonsense" }, pinned), proPeak);
+  assert.ok(guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "0" }, pinned) < 0.02);
 });
 
 test("admission gate blocks farm-wide when the guard would refuse, never loosens, and spares project caps", () => {
   const caps = { farmMonthlyCapUsd: 20, farmDailyCapUsd: 0.6, userDailyCapUsd: 5, projectDailyCapUsd: 0.3 };
-  const reserve = guardPeakReservationUsd();
+  const reserve = guardReservationUsd({ alias: "worker-hard", now: PEAK_NOW });
   // Produkce 15. 9.: 0,40 + 0,15 ≤ 0,60 prošlo, hlídač pak odmítl 0,40 + 0,20.
   const spend = { farmMonthUsd: 3, farmTodayUsd: 0.41, userTodayUsd: 0.41, projectTodayUsd: 0.1 };
   assert.equal(admissionBlockedScope(spend, caps, 0.15, 0), null);
@@ -197,10 +212,10 @@ test("farm_window waits for the reset only when the orchestrator's own spend con
 test("guard reserve larger than a farm cap never blocks at zero spend and never loosens checkBudget", () => {
   const zero = { farmMonthUsd: 0, farmTodayUsd: 0, userTodayUsd: 0, projectTodayUsd: 0 };
   const tight = { farmMonthlyCapUsd: 20, farmDailyCapUsd: 0.2, userDailyCapUsd: 5, projectDailyCapUsd: 0.3 };
-  const reserve = guardPeakReservationUsd();
+  const reserve = guardReservationUsd({ alias: "worker-hard", now: PEAK_NOW });
   assert.equal(admissionBlockedScope(zero, tight, 0.15, reserve), null);
   // Nesmyslně velký kontext v env (rezerva > 0,60) farmu trvale nezastaví.
-  const huge = guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "1000000" });
+  const huge = guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "1000000" }, { alias: "worker-hard", now: PEAK_NOW });
   assert.ok(huge > 0.6);
   assert.equal(admissionBlockedScope(zero, { ...tight, farmDailyCapUsd: 0.6 }, 0.15, huge), null);
   assert.equal(farmGuardScope({ ...zero, farmMonthUsd: 0 }, { ...tight, farmMonthlyCapUsd: 0.2 }, 0.15, reserve), null);

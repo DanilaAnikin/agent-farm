@@ -135,13 +135,27 @@ export async function runDispatchOnce(): Promise<void> {
   // Projekt musí být aktivní; jinak zprávu nezacházíme (znovu se objeví po vt).
   if (project.status !== "active") return;
 
+  // --- Model pokusu (kvůli rozpočtové bráně) ---
+  // ADAPTIVNÍ MODEL ROUTING: levný model na první pokus, eskalace při opakování
+  // A podle obtížnosti úkolu (těžké téma/dlouhé zadání → rovnou silnější model).
+  // attemptsCount je 0-based počet PŘEDCHOZÍCH pokusů; routeWorkerModel čeká
+  // 1-based číslo pokusu → +1 (jinak by eskalace naskočila až o pokus později).
+  // HISTORIE PROJEKTU: když levný `worker` model v tomhle projektu opakovaně
+  // selhává, začni rovnou silněji (méně promarněných levných pokusů).
+  // Počítá se UŽ TEĎ, protože na modelu závisí rezervace hlídače (worker = Flash,
+  // eskalace = Pro). Stejná hodnota se použije při založení pokusu níž.
+  const baseDifficulty = estimateTaskDifficulty(`${task.title}\n${task.description}\n${task.doneCondition}`);
+  const difficulty =
+    baseDifficulty !== "hard" && (await projectPrefersStrongModel(project.id)) ? "hard" : baseDifficulty;
+  const routedModel = routeWorkerModel({ attempt: task.attemptsCount + 1, difficulty });
+
   // --- Rozpočtová brána (před dispatchem) ---
   const caps = await getCaps(project.userId, project.id, task.wishId);
   const spend = await spendSnapshot(project.userId, project.id, task.wishId);
-  // Rezerva = per-pokus příděl nad všemi stropy + špičková rezervace hlídače nad
-  // stropy farmy (budget-deferral.ts): pokus, který hlídač zastaví hned u prvního
-  // většího požadavku, by jen spálil kontext.
-  const guardReserveUsd = guardAdmissionReserveUsd();
+  // Rezerva = per-pokus příděl nad všemi stropy + rezervace hlídače nad stropy farmy
+  // (budget-deferral.ts) pro model, na kterém pokus opravdu poběží: pokus, který
+  // hlídač zastaví hned u prvního většího požadavku, by jen spálil kontext.
+  const guardReserveUsd = guardAdmissionReserveUsd(process.env, { alias: routedModel });
   const overscope = admissionBlockedScope(spend, caps, cfg.perAttemptBudgetUsd, guardReserveUsd);
   if (overscope) {
     // Strop dosažen → projekt do budget_hold; zprávu NEackujeme (znovu po vt/resetu).
@@ -153,7 +167,7 @@ export async function runDispatchOnce(): Promise<void> {
       level: "warn",
       type: "budget_hold",
       message: `Projekt v budget_hold — překročen strop: ${overscope}.`,
-      data: { scope: overscope, perAttemptUsd: cfg.perAttemptBudgetUsd, guardReserveUsd },
+      data: { scope: overscope, perAttemptUsd: cfg.perAttemptBudgetUsd, guardReserveUsd, model: routedModel },
     });
     return;
   }
@@ -246,7 +260,7 @@ export async function runDispatchOnce(): Promise<void> {
     return;
   }
 
-  await dispatchTask(task, project, msg.message, msgId);
+  await dispatchTask(task, project, msg.message, msgId, routedModel);
 }
 
 interface TaskRow {
@@ -360,7 +374,14 @@ async function dispatchBestOfN(
     const credit = await creditBalance(project.userId);
     const scopedCaps = await getCaps(project.userId, project.id, task.wishId);
     const scopedSpend = await spendSnapshot(project.userId, project.id, task.wishId);
-    const overBudget = admissionBlockedScope(scopedSpend, scopedCaps, cfg.perAttemptBudgetUsd, guardAdmissionReserveUsd());
+    // Kandidát idx eskaluje o tier výš, takže i rezervace hlídače patří JEHO modelu.
+    const candidateModel = routeWorkerModel({ attempt: task.attemptsCount + 1, difficulty, candidateIdx: idx });
+    const overBudget = admissionBlockedScope(
+      scopedSpend,
+      scopedCaps,
+      cfg.perAttemptBudgetUsd,
+      guardAdmissionReserveUsd(process.env, { alias: candidateModel }),
+    );
     if (!credit.ok || overBudget) {
       await logEvent({
         projectId: project.id,
@@ -389,7 +410,7 @@ async function dispatchBestOfN(
     // Bump updated_at, ať reconcileStrandedRunning nepovažuje AKTIVNÍ best-of-N za stranded.
     await getDb().update(tasks).set({ updatedAt: new Date() }).where(eq(tasks.id, task.id));
 
-    const model = routeWorkerModel({ attempt: task.attemptsCount + 1, difficulty, candidateIdx: idx });
+    const model = candidateModel;
     const candMsgId = `${msgId}#c${idx}`; // syntetický msgId kvůli unique (task_id, msg_id)
     const inserted = await getDb()
       .insert(attempts)
@@ -629,6 +650,8 @@ async function dispatchTask(
   projectRaw: typeof projects.$inferSelect,
   message: TaskMessage,
   msgId: string,
+  /** Model vybraný nad rozpočtovou bránou — rezervace hlídače se počítá z něj. */
+  routedModel: string,
 ): Promise<void> {
   const cfg = loadConfig();
   const task: TaskRow = {
@@ -674,17 +697,9 @@ async function dispatchTask(
 
   // Založ attempt (idempotentně díky unique (task_id, msg_id)).
   const isFix = message.isFix === true || task.attemptsCount > 0;
-  // ADAPTIVNÍ MODEL ROUTING: levný model na první pokus, eskalace při opakování
-  // A podle obtížnosti úkolu (těžké téma/dlouhé zadání → rovnou silnější model).
-  // attemptsCount je 0-based počet PŘEDCHOZÍCH pokusů; routeWorkerModel čeká
-  // 1-based číslo pokusu → +1 (jinak by eskalace naskočila až o pokus později).
-  const baseDifficulty = estimateTaskDifficulty(`${task.title}\n${task.description}\n${task.doneCondition}`);
-  // HISTORIE PROJEKTU: když levný `worker` model v tomhle projektu opakovaně
-  // selhává, začni rovnou silněji (méně promarněných levných pokusů). Adaptivní
-  // signál z reálné úspěšnosti, ne jen z textu tasku.
-  const difficulty =
-    baseDifficulty !== "hard" && (await projectPrefersStrongModel(project.id)) ? "hard" : baseDifficulty;
-  const model = routeWorkerModel({ attempt: task.attemptsCount + 1, difficulty });
+  // Model už je vybraný nad rozpočtovou bránou (rezervace hlídače na něm závisí),
+  // takže se historie projektu nečte podruhé.
+  const model = routedModel;
   const insertedAttempt = await getDb()
     .insert(attempts)
     .values({

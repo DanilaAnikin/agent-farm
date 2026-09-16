@@ -270,7 +270,8 @@ test("agentHealthSummary: tepající idle manager je živý, netepající busy j
 // --- modely --------------------------------------------------------------------
 
 test("modelLabel: aliasy na skutečný model a zkrácený popisek", () => {
-  assert.equal(modelLabel("worker"), "DeepSeek V4 Pro");
+  assert.equal(modelLabel("worker"), "DeepSeek Flash");
+  assert.equal(modelLabel("worker-hard"), "DeepSeek V4 Pro");
   assert.equal(modelLabel("deepseek/deepseek-v4-flash"), "DeepSeek V4 Flash");
   assert.equal(modelLabel(null), "—");
   assert.equal(poskytovatelLabel(""), "—");

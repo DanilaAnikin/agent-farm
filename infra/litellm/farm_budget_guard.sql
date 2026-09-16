@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS public.farm_budget_requests (
 );
 CREATE INDEX IF NOT EXISTS farm_budget_requests_admitted_idx
   ON public.farm_budget_requests(admitted_at);
+-- Tariff the row is accounted at. Existing rows were admitted and settled while
+-- the guard billed peak unconditionally, so 'peak' is their true, unchanged value.
+ALTER TABLE public.farm_budget_requests
+  ADD COLUMN IF NOT EXISTS price_tier text NOT NULL DEFAULT 'peak'
+  CHECK (price_tier IN ('peak','offpeak'));
 
 CREATE OR REPLACE VIEW public.farm_budget_totals AS
 WITH charges AS (

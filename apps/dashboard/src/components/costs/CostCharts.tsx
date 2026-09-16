@@ -80,7 +80,7 @@ export function CostCharts({
   return (
     <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
       <Card className="lg:col-span-2">
-        <CardHeader title="Útrata po dnech" description="UTC dny, změřeno LiteLLM." />
+        <CardHeader title="Útrata po dnech" description="UTC dny, přepočteno na skutečnou cenu DeepSeeku." />
         <CardBody>
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">

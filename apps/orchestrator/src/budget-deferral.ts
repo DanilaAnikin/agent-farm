@@ -15,7 +15,13 @@
  * V produkci (15. 9. 2026) se to smíchalo: dva úkoly celý den každou hodinu pálily
  * 0,05–0,07 US$ na pokus a checkpoint SHA se ani jednou nezměnil.
  */
-import { checkBudget, nextResetUtc } from "@farm/core";
+import {
+  checkBudget,
+  nextResetUtc,
+  DEEPSEEK_MODEL_BY_ALIAS,
+  deepseekReservationTier,
+  deepseekReservationUsd,
+} from "@farm/core";
 import type { CapSet, SpendSnapshot } from "@farm/core";
 
 export type BudgetDeferralKind = "attempt_allowance" | "farm_window" | "farm_blocked";
@@ -288,47 +294,75 @@ export function decideAllowanceDeferral(
   return { action: "defer", stalled };
 }
 
-// --- Vstupní brána: špičková rezervace hlídače -----------------------------------
+// --- Vstupní brána: rezervace hlídače --------------------------------------------
 
 /*
   Hlídač při přijetí KAŽDÉHO požadavku rezervuje horní odhad ceny:
     usd = (input_bound × cena_vstupu + max_tokens × cena_výstupu) / 1e6
     input_bound = UTF-8 bajty payloadu + 512 + 64 × počet zpráv (+128 × nástroj)
-  a odmítne ho, když dnešní součet + rezervace > farm_daily_cap_usd. Alias `worker*`
-  mapuje na deepseek-v4-pro (1,32 / 3,96 US$ za milion), výstup je shora omezen
-  MAX_OUTPUT_TOKENS = 4096.
+  a odmítne ho, když dnešní součet + rezervace > farm_daily_cap_usd.
 
-  Zrcadlo konstant, ne import (Python ↔ TS). Když se v guardu změní PRICES,
-  MODEL_ALIASES nebo MAX_OUTPUT_TOKENS, uprav i tady.
+  Cenu určují DVĚ věci a brána musí obě zrcadlit, jinak pouští pokusy, které hlídač
+  v půlce zastaví (nebo naopak drží farmu pod stropem, který hlídač nevynucuje):
+   - MODEL aliasu: worker jede na Flash, worker-hard i worker-fallback na Pro;
+   - PÁSMO: mimo špičku je cena poloviční, se stejnou konzervativní obálkou jako
+     v hlídači (off-peak jen když ani nejdelší možný běh požadavku nemine špičku).
 
-  Kontext: produkce 9.–15. 9. 2026, 206 požadavků aliasu worker — rezervace
+  Ceník i obálka jsou ve sdíleném @farm/core (deepseek-pricing.ts), který zrcadlí
+  infra/litellm/farm_budget_guard.py — měnit se musí obojí zároveň.
+
+  Kontext: produkce 9.–15. 9. 2026, 206 požadavků aliasu worker na Pru — rezervace
   p50 0,114, p90 0,174, p99 0,199, max 0,2022 US$ (skutečná cena v průměru 0,003).
-  Max odpovídá ~141 kB kontextu; výchozí 140 000 bajtů dává 0,2017 US$.
+  Max odpovídá ~141 kB kontextu; výchozích 140 000 bajtů dává 0,2017 US$ na Pru ve
+  špičce a 0,0235 US$ na Flashi mimo špičku.
 */
-export const GUARD_MAX_OUTPUT_TOKENS = 4096;
-export const GUARD_WORKER_INPUT_USD_PER_M = 1.32;
-export const GUARD_WORKER_OUTPUT_USD_PER_M = 3.96;
-export const GUARD_REQUEST_ENVELOPE_BYTES = 512;
 export const GUARD_WORKER_CONTEXT_BYTES = 140_000;
 
-/** Špičková rezervace hlídače pro jeden požadavek workera s daným kontextem. */
-export function guardPeakReservationUsd(contextBytes: number = GUARD_WORKER_CONTEXT_BYTES): number {
-  const bytes = Number.isFinite(contextBytes) && contextBytes >= 0 ? contextBytes : GUARD_WORKER_CONTEXT_BYTES;
-  return (
-    ((bytes + GUARD_REQUEST_ENVELOPE_BYTES) * GUARD_WORKER_INPUT_USD_PER_M +
-      GUARD_MAX_OUTPUT_TOKENS * GUARD_WORKER_OUTPUT_USD_PER_M) /
-    1_000_000
-  );
+/**
+ * Výchozí alias brány = nejdražší tier žebříku workera.
+ *
+ * Volající, který model nezná (budget-hold), tak počítá s nejdražší možností. Brána
+ * pak nikdy není VOLNĚJŠÍ než dispatch se skutečným modelem — jinak by budget-hold
+ * projekt obnovil a dispatch ho hned zase zavřel (flapping).
+ */
+const STRONGEST_WORKER_ALIAS = "worker-hard";
+
+export interface GuardReserveInput {
+  /** Alias okruhu (worker, worker-hard, …). Neznámý → nejdražší model žebříku. */
+  alias?: string;
+  contextBytes?: number;
+  /** Kdy by se požadavek přijímal (kvůli pásmu). Výchozí: teď. */
+  now?: Date;
+}
+
+/** Rezervace hlídače pro jeden požadavek daného aliasu s daným kontextem. */
+export function guardReservationUsd(input: GuardReserveInput = {}): number {
+  const model =
+    DEEPSEEK_MODEL_BY_ALIAS[input.alias ?? STRONGEST_WORKER_ALIAS] ??
+    DEEPSEEK_MODEL_BY_ALIAS[STRONGEST_WORKER_ALIAS]!;
+  const bytes = input.contextBytes;
+  const contextBytes = typeof bytes === "number" && Number.isFinite(bytes) && bytes >= 0 ? bytes : GUARD_WORKER_CONTEXT_BYTES;
+  return deepseekReservationUsd({
+    contextBytes,
+    model,
+    tier: deepseekReservationTier(input.now ?? new Date()),
+  });
 }
 
 /**
  * Rezervace pro vstupní bránu z env `GUARD_ADMISSION_CONTEXT_BYTES` (nesmyslná
  * hodnota → výchozí). Ani 0 stropy neoslabí: brána vždy bere aspoň per-pokus příděl.
  */
-export function guardAdmissionReserveUsd(env: Record<string, string | undefined> = process.env): number {
+export function guardAdmissionReserveUsd(
+  env: Record<string, string | undefined> = process.env,
+  input: Omit<GuardReserveInput, "contextBytes"> = {},
+): number {
   const raw = env.GUARD_ADMISSION_CONTEXT_BYTES;
   const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
-  return guardPeakReservationUsd(Number.isFinite(parsed) && parsed >= 0 ? parsed : GUARD_WORKER_CONTEXT_BYTES);
+  return guardReservationUsd({
+    ...input,
+    contextBytes: Number.isFinite(parsed) && parsed >= 0 ? parsed : GUARD_WORKER_CONTEXT_BYTES,
+  });
 }
 
 /**

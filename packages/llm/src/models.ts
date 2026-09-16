@@ -21,6 +21,8 @@ export type Difficulty = "easy" | "medium" | "hard";
  *
  * Žebřík eskalace (od nejlevnějšího, tři reálné tiery):
  *   worker (levný) → worker-hard (silnější) → worker-fallback (jiný vendor, last resort).
+ * Konkrétní modely jsou v infra/litellm/config.yaml: worker jede na DeepSeek Flash,
+ * oba eskalační tiery na Pro — opakovaný pokus tak nikdy neběží na slabším modelu.
  * - attempt <= 1  → worker
  * - attempt === 2 → worker-hard
  * - attempt >= 3  → worker-fallback (jiný model = jiná chyba, ne zaseknutí na jednom)

@@ -527,11 +527,11 @@ export function isAgentListed(a: AgentLike, now: Date = new Date()): boolean {
  */
 export const MODEL_ALIAS_TO_MODEL: Record<string, string> = {
   manager: "deepseek/deepseek-v4-pro",
-  worker: "deepseek/deepseek-v4-pro",
+  worker: "deepseek/deepseek-flash",
   "worker-hard": "deepseek/deepseek-v4-pro",
   "worker-fallback": "deepseek/deepseek-v4-pro",
   judge: "deepseek/deepseek-v4-pro",
-  cheap: "deepseek/deepseek-v4-pro",
+  cheap: "deepseek/deepseek-flash",
   "media-vlm": "deepseek/deepseek-v4-pro",
 };
 

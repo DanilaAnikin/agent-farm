@@ -52,7 +52,15 @@ export async function guardStatus(): Promise<GuardStatus> {
   }
 }
 
-/** Includes money reserved by in-flight proxy requests. Missing guard data fails closed. */
+/**
+ * Includes money reserved by in-flight proxy requests. Missing guard data fails closed.
+ *
+ * Both sides are denominated in the real DeepSeek price (half outside peak hours):
+ * the guard prices each request by its own clock, and spend-sync reprices every
+ * LiteLLM spend log from its tokens and time window. The maximum is therefore a
+ * comparison of like with like — the guard is simply ahead, because it also counts
+ * reservations of requests that have not settled yet.
+ */
 async function guardedSpend(window: "day" | "month", ledger: number): Promise<number> {
   if (process.env.FARM_BUDGET_GUARD_REQUIRED !== "true") return ledger;
   const rows = await getSql()<{ day_usd: number; month_usd: number; ready: boolean }[]>`

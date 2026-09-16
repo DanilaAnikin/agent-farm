@@ -186,7 +186,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
       cap: caps.monthlyUsd,
       guard: "brána LiteLLM, orchestrátor",
       editWhere: "Náklady → Stropy farmy",
-      note: hlidacDostupny ? "započteno hlídačem (špičkové ceny + rezervace)" : isAdmin ? "hlídač neodpovídá, čísla z pohybů" : "vidí jen administrátor",
+      note: hlidacDostupny ? "započteno hlídačem (skutečná cena + rezervace)" : isAdmin ? "hlídač neodpovídá, čísla z pohybů" : "vidí jen administrátor",
     },
     {
       key: "farm_day",
@@ -512,7 +512,7 @@ function TentoMesic({
         {radek(
           "Započteno do limitu",
           snap.month_counted === null ? "—" : `${formatUsd(snap.month_counted)} z ${formatUsd(monthlyCap, "cap")}`,
-          "Konzervativně: špičkové ceny, zahrnuje rezervace. Při dosažení stropu brána LiteLLM další volání modelu odmítne.",
+          "Konzervativně: skutečná cena DeepSeeku (mimo špičku poloviční), ve sporných případech špičková; zahrnuje rezervace. Při dosažení stropu brána LiteLLM další volání modelu odmítne.",
           true,
         )}
         {radek(
@@ -524,7 +524,7 @@ function TentoMesic({
         {radek(
           "Změřeno LiteLLM",
           snap.month_settled === null ? "—" : formatUsd(snap.month_settled),
-          "Skutečně zaúčtované pohyby (s cenami z cache). Jen pro kontrolu, práci neblokuje.",
+          "Skutečně zaúčtované pohyby (přepočtené na cenu DeepSeeku podle času a cache). Jen pro kontrolu, práci neblokuje.",
         )}
         {radek(
           "Zůstatek u DeepSeeku",
