@@ -86,7 +86,11 @@ const START_TIMEOUT_MS = Number(process.env.DISCOVERY_START_TIMEOUT_MS ?? 6 * 60
 /** Kolik opravných kol dostane model, když recept v sandboxu selže. */
 const MAX_REPAIR_ROUNDS = 2;
 /** Strop odpovědi modelu — recept je krátký JSON, ne esej. */
-const RECIPE_MAX_TOKENS = 1200;
+// 16. 9. 2026: u contentgenu se odpověď třikrát po sobě uřízla PŘESNĚ na 1200
+// tokenech (oba pokusy), takže JSON nešel rozparsovat a průzkum spadl. Recept
+// s compose službami a proměnnými je prostě delší; vstup je navíc z cache,
+// takže zdražení je zanedbatelné proti opakovanému selhání.
+const RECIPE_MAX_TOKENS = 2400;
 const FAILURE_LOG_CHARS = 2500;
 /** Kandidátní porty, když recept žádný neurčí (stejné jako Tester). */
 const FALLBACK_PORTS = [3000, 5173, 4173, 8080, 5000, 3001, 8000, 4321];

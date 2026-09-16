@@ -70,6 +70,13 @@ export interface ChatResult {
   content: string;
   usage: Usage;
   model: string;
+  /**
+   * Proč model skončil: "stop" = doříkal, "length" = narazil na max_tokens.
+   * Bez toho nejde useknutou odpověď odlišit od zmetku — průzkum repozitáře
+   * kvůli tomu 16. 9. 2026 třikrát spadl na „neplatný JSON", ačkoli šlo
+   * pokaždé o odpověď uříznutou na stropu.
+   */
+  finishReason?: string;
 }
 
 function baseUrl(): string {
@@ -150,7 +157,7 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
   }
 
   const json = (await res.json()) as {
-    choices: { message: { content: string } }[];
+    choices: { message: { content: string }; finish_reason?: string }[];
     usage?: {
       prompt_tokens?: number;
       completion_tokens?: number;
@@ -167,6 +174,7 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
       cachedTokens: json.usage?.prompt_tokens_details?.cached_tokens ?? 0,
     },
     model: json.model ?? opts.model,
+    ...(json.choices[0]?.finish_reason ? { finishReason: json.choices[0].finish_reason } : {}),
   };
 }
 
@@ -182,26 +190,37 @@ export async function structured<T>(
   opts: ChatOptions & { validate: (data: unknown) => true | string },
 ): Promise<StructuredResult<T>> {
   const messages = [...opts.messages];
+  // Poslední důvod si neseme až do výjimky: bez něj je v událostech jen obecné
+  // „validation failed" a příčina (uříznutá odpověď vs. zakázaný příkaz) se
+  // musí dolovat z logů poskytovatele.
+  let lastReason = "no attempt was made";
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await chat({ ...opts, messages, jsonMode: true });
+    const truncated = res.finishReason === "length";
     const parsed = tryParseJson(res.content);
     if (parsed !== undefined) {
       const ok = opts.validate(parsed);
       if (ok === true) return { ...res, data: parsed as T };
+      lastReason = ok;
       messages.push({ role: "assistant", content: res.content });
       messages.push({
         role: "user",
         content: `Your JSON was invalid: ${ok}. Return corrected JSON only, no prose.`,
       });
     } else {
+      lastReason = truncated
+        ? `response was cut off at max_tokens (${res.usage.completionTokens} tokens), so the JSON is incomplete`
+        : "response was not valid JSON";
       messages.push({ role: "assistant", content: res.content });
       messages.push({
         role: "user",
-        content: "That was not valid JSON. Return a single valid JSON object only.",
+        content: truncated
+          ? "Your previous answer was cut off. Return a single, complete and SHORTER valid JSON object only."
+          : "That was not valid JSON. Return a single valid JSON object only.",
       });
     }
   }
-  throw new LlmError("Structured output validation failed after retry.");
+  throw new LlmError(`Structured output validation failed after retry: ${lastReason}`);
 }
 
 function tryParseJson(text: string): unknown {
