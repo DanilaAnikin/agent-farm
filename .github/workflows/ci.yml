@@ -44,8 +44,12 @@ jobs:
         # Preferuj frozen lockfile; pokud lockfile chybí, spadni na běžnou instalaci.
         run: pnpm install --frozen-lockfile || pnpm install
 
-      - name: Test (@farm/core)
-        run: pnpm -r --filter @farm/core test
+      # POZOR: dokud tenhle krok pouštěl jen @farm/core, byly testy orchestrátoru,
+      # dashboardu, llm i billingu v CI mrtvé — a merge brána farmy („všechny checky
+      # zelené") slučovala PR, které je mohly rozbít. Pouští se všechno kromě
+      # @farm/integration: ta potřebuje živou DATABASE_URL, kterou CI nemá.
+      - name: Test (všechny balíčky kromě integračních)
+        run: pnpm -r --filter '!@farm/integration' test
 
       - name: Typecheck
         run: pnpm typecheck
