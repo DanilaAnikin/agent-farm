@@ -86,6 +86,40 @@ async function cadenceElapsed(projectId: string, cadenceH: number): Promise<bool
   return Date.now() - new Date(last).getTime() >= cadenceH * 3_600_000;
 }
 
+/**
+ * Kolik návrhů s dokladem čeká na příjem. To je zásoba práce, kterou intake
+ * ještě nespotřeboval — dokud je plná, nemá strategist co přidat.
+ */
+async function pendingGroundedCount(projectId: string): Promise<number> {
+  const rows = await getSql()<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM suggestions
+    WHERE project_id = ${projectId} AND status = 'new'
+      AND strpos(coalesce(rationale, ''), ${EVIDENCE_MARKER}) > 0
+  `;
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Má se generování přeskočit, protože fronta nespotřebovaných návrhů je plná?
+ *
+ * Bez téhle brány strategist každou kadenci vyrobil tytéž návrhy znovu a dedup
+ * je zahodil (16. 9. 10:12: 0 nových, 5 duplicit) — placené volání bez výsledku.
+ * Nastává to vždy, když projekt má rozdělanou práci: intake návrhy nezadá
+ * (`hasOpenWork`), takže fronta neklesá, ale kadence tiká dál.
+ *
+ * `force=true` (idle-refill nečinného projektu) tudy neprochází: ten si prázdnou
+ * frontu ověřuje sám a jeho smyslem je farmu bez práce rozjet.
+ */
+export function shouldSkipForPendingQueue(input: {
+  force: boolean;
+  pendingGrounded: number;
+  max: number;
+}): boolean {
+  if (input.force) return false;
+  if (input.max <= 0) return false;
+  return input.pendingGrounded >= input.max;
+}
+
 async function openTaskCount(projectId: string): Promise<number> {
   const rows = await getSql()<{ n: number }[]>`
     SELECT count(*)::int AS n FROM tasks
@@ -147,6 +181,7 @@ export async function generateSuggestionsForProject(project: Project, force = fa
   if (credit && !credit.ok) return;
 
   const max = a.maxSuggestionsPerRound && a.maxSuggestionsPerRound > 0 ? a.maxSuggestionsPerRound : DEFAULT_MAX_SUGGESTIONS;
+  if (shouldSkipForPendingQueue({ force, pendingGrounded: await pendingGroundedCount(project.id), max })) return;
 
   const identity = await ensureProjectIdentity(project);
   let out: StrategyOutput;
