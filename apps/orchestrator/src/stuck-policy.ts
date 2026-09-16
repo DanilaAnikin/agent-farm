@@ -14,11 +14,13 @@
  * in-memory intervalem 30 minut. Tvrdý limit: jedna re-specifikace na přání; další
  * selhání už vždy vede k uzavření, ne k další re-specifikaci (jinak smyčka pálí tokeny).
  */
-import { getSql } from "@farm/db";
+import { getDb, getSql, projects } from "@farm/db";
 import type { WishStatus } from "@farm/db";
+import { eq } from "drizzle-orm";
 import { wishMachine } from "@farm/core";
 import { logEvent } from "./events.js";
 import { reflectOnFailure } from "./memory.js";
+import { maybeReplanStuckWish } from "./judge.js";
 
 export const STUCK_POLICY_INTERVAL_MS = 30 * 60_000;
 /** Jak dlouho musí přání viset, než se zkusí re-specifikace. */
@@ -32,6 +34,29 @@ export const RESPEC_MEMORY_MS = 7 * 24 * 3_600_000;
 let lastRunAt = 0;
 
 export type StuckAction = "wait" | "respec" | "archive";
+
+/**
+ * Přání, které má úkoly, ale ani jeden spustitelný. Vzniká, když se VŠECHNY jeho
+ * úkoly zaparkují mimo parkovací cestu — typicky hromadnou archivací staré fronty
+ * (`backlog_task_archived`, 15. 9. 2026). `maybeReplanStuckWish` volají jen
+ * parkovací cesty a `maybeCompleteWish` (ta potřebuje dokončený úkol), takže
+ * takové přání nikdo nikdy nevezme: zůstane `active` navždy, drží `hasOpenWork`
+ * (a tím i příjem návrhů projektu) a dashboard ho počítá jako práci.
+ *
+ * `planApprovedSpecs` v manager.ts řeší jen přání ÚPLNĚ bez úkolů, proto se tenhle
+ * sweep omezuje na `celkem > 0` — jinak by se obě cesty praly o totéž přání.
+ */
+export function needsReplanSweep(input: {
+  runnable: number;
+  blocked: number;
+  total: number;
+  projectActive: boolean;
+}): boolean {
+  if (!input.projectActive) return false;
+  if (input.total === 0) return false; // patří planApprovedSpecs
+  if (input.runnable > 0) return false;
+  return input.blocked > 0;
+}
 
 export function decideStuckAction(input: {
   status: WishStatus;
@@ -131,10 +156,56 @@ async function archive(row: StuckRow): Promise<void> {
   });
 }
 
+interface BlockedWishRow {
+  wish_id: string;
+  project_id: string;
+  runnable: number;
+  blocked: number;
+  total: number;
+}
+
+/**
+ * Sweep přání, kterým došla spustitelná práce. Sám nic nepřepíná — rozhodnutí i
+ * všechny změny stavu dělá `maybeReplanStuckWish` (limit MAX_WISH_REPLANS kol,
+ * pak přání odloží, a přeskočí, když v přání něco běží). Projekty mimo `active`
+ * se vynechávají: pozastavený ani rozpočtem zastavený projekt se nemá budit.
+ */
+async function replanBlockedWishes(): Promise<void> {
+  const rows = await getSql()<BlockedWishRow[]>`
+    SELECT w.id AS wish_id, w.project_id,
+           count(t.id) FILTER (WHERE t.status IN ('queued','running','judging','merging'))::int AS runnable,
+           count(t.id) FILTER (WHERE t.status IN ('failed','parked'))::int AS blocked,
+           count(t.id)::int AS total
+    FROM wishes w
+    JOIN projects p ON p.id = w.project_id
+    LEFT JOIN tasks t ON t.wish_id = w.id
+    WHERE w.status = 'active' AND p.status = 'active'
+    GROUP BY w.id, w.project_id
+    ORDER BY w.created_at
+    LIMIT 20
+  `;
+
+  for (const row of rows) {
+    if (!needsReplanSweep({ ...row, projectActive: true })) continue;
+    try {
+      const projectRows = await getDb().select().from(projects).where(eq(projects.id, row.project_id)).limit(1);
+      const project = projectRows[0];
+      if (!project) continue;
+      await maybeReplanStuckWish(row.wish_id, project);
+    } catch (err) {
+      console.error(`[stuck-policy] přeplánování přání ${row.wish_id} selhalo:`, err);
+    }
+  }
+}
+
 /** Jedno kolo politiky (nejvýš jednou za 30 minut, zbytek volání je no-op). */
 export async function runStuckPolicyOnce(now: Date = new Date()): Promise<void> {
   if (now.getTime() - lastRunAt < STUCK_POLICY_INTERVAL_MS) return;
   lastRunAt = now.getTime();
+
+  await replanBlockedWishes().catch((err) =>
+    console.error("[stuck-policy] sweep zablokovaných přání selhal:", err),
+  );
 
   const rows = await getSql()<StuckRow[]>`
     SELECT w.id, w.project_id, w.title, w.status, p.user_id, p.status AS project_status,
