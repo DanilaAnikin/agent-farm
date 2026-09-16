@@ -390,6 +390,62 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.pool.fetchval(
             'SELECT reserved_usd FROM farm_budget_requests WHERE request_id=$1', req), estimate.usd)
 
+    async def test_second_settlement_after_crossing_into_peak_keeps_admission_open(self):
+        # LiteLLM fires BOTH success callbacks for one response (post-call hook and
+        # success log event), so settle() runs twice. The reservation tier must stay
+        # in the row: settling it away made the second callback compare a peak bound
+        # against an off-peak reservation and close admission for the whole farm.
+        g.is_peak = lambda moment: False
+        # A short request with a full answer: the tokens nearly exhaust the bound, so
+        # the same tokens priced at peak exceed the off-peak reservation.
+        small = g.Estimate('cheap', 'deepseek-flash', 1_000, 4096,
+                           g.charge('deepseek-flash', 1_000, 4096))
+        req = uuid4(); await self.store.reserve(req, small)
+        g.is_peak = lambda moment: True  # the request ran on into peak hours
+        for _ in range(2):
+            await self.store.settle(req, 'deepseek-flash', 900, 4096)
+        row = await self.pool.fetchrow("""SELECT actual_usd,price_tier,settled_tier,status
+            FROM farm_budget_requests WHERE request_id=$1""", req)
+        self.assertEqual((row['status'], row['price_tier'], row['settled_tier']),
+                         ('settled', 'offpeak', 'peak'))
+        self.assertEqual(row['actual_usd'], g.charge('deepseek-flash', 900, 4096, 0, g.PEAK))
+        self.assertTrue(await self.pool.fetchval('SELECT ready FROM farm_budget_guard_meta'))
+
+    async def test_abandoned_reservation_is_raised_to_peak_and_marked_ambiguous(self):
+        g.is_peak = lambda moment: False
+        estimate = flash_estimate()
+        req = uuid4(); await self.store.reserve(req, estimate)
+        # Its settlement never arrives and the request can no longer be running.
+        await self.pool.execute("""UPDATE public.farm_budget_requests
+            SET admitted_at = now() - ($2::int * interval '1 second') WHERE request_id=$1""",
+                                req, g.STALE_RESERVATION_SECONDS + 60)
+        g.is_peak = lambda moment: True  # its envelope could have reached peak
+        await self.store.reserve(uuid4(), self.estimate)
+        row = await self.pool.fetchrow("""SELECT reserved_usd,price_tier,status
+            FROM farm_budget_requests WHERE request_id=$1""", req)
+        self.assertEqual((row['status'], row['price_tier']), ('ambiguous', 'peak'))
+        self.assertEqual(row['reserved_usd'], estimate.usd)
+        # Idempotent: later admissions must not double the same row again.
+        await self.store.reserve(uuid4(), self.estimate)
+        self.assertEqual(await self.pool.fetchval(
+            'SELECT reserved_usd FROM farm_budget_requests WHERE request_id=$1', req), estimate.usd)
+
+    async def test_live_reservation_is_never_swept_and_still_settles(self):
+        g.is_peak = lambda moment: False
+        req = uuid4(); await self.store.reserve(req, flash_estimate())
+        await self.store.reserve(uuid4(), self.estimate)
+        self.assertEqual(await self.pool.fetchval(
+            'SELECT status FROM farm_budget_requests WHERE request_id=$1', req), 'reserved')
+        # A settlement arriving after a sweep still releases the unused reservation.
+        await self.pool.execute("""UPDATE public.farm_budget_requests
+            SET admitted_at = now() - ($2::int * interval '1 second') WHERE request_id=$1""",
+                                req, g.STALE_RESERVATION_SECONDS + 60)
+        await self.store.reserve(uuid4(), self.estimate)
+        await self.store.settle(req, 'deepseek-flash', 1000, 200)
+        row = await self.pool.fetchrow("""SELECT actual_usd,status FROM farm_budget_requests
+            WHERE request_id=$1""", req)
+        self.assertEqual((row['status'], row['actual_usd']), ('settled', Decimal('0.00027')))
+
     async def test_service_role_has_required_scoped_grants(self):
         import asyncpg
         role_pool = await asyncpg.create_pool(os.environ['FARM_BUDGET_TEST_DSN'],

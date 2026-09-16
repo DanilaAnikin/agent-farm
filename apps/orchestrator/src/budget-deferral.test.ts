@@ -11,6 +11,7 @@ import {
   farmGuardScope,
   guardAdmissionReserveUsd,
   guardReservationUsd,
+  guardTierEnvelopeSec,
   oversizedParkFollowUp,
   refineBudgetClass,
   remainingStalledAttempts,
@@ -157,6 +158,24 @@ test("guard reservation follows the alias model and the tariff of the admission 
   assert.equal(guardAdmissionReserveUsd({}, pinned), proPeak);
   assert.equal(guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "nonsense" }, pinned), proPeak);
   assert.ok(guardAdmissionReserveUsd({ GUARD_ADMISSION_CONTEXT_BYTES: "0" }, pinned) < 0.02);
+});
+
+test("brána určuje pásmo přes celý život pokusu, ne přes jeden požadavek", () => {
+  // Poslední požadavek pokusu může vyrazit až na konci wall-clocku a běžet pak ještě
+  // celou obálku hlídače, proto se sčítají: 30 min + 1200 s.
+  assert.equal(guardTierEnvelopeSec({}), 30 * 60 + 1200);
+  assert.equal(guardTierEnvelopeSec({ ATTEMPT_WALL_CLOCK_MIN: "60" }), 60 * 60 + 1200);
+  assert.equal(guardTierEnvelopeSec({ ATTEMPT_WALL_CLOCK_MIN: "nonsense" }), 30 * 60 + 1200);
+  assert.equal(guardTierEnvelopeSec({ ATTEMPT_WALL_CLOCK_MIN: "0" }), 30 * 60 + 1200);
+  // Pokus zařazený ve 00:20 UTC pošle poslední požadavky do špičky (01–04), takže
+  // brána musí počítat špičkovou cenu — hlídač by je taky rezervoval ve špičce.
+  const predSpickou = new Date("2026-09-16T00:20:00Z");
+  assert.equal(
+    guardReservationUsd({ alias: "worker", now: predSpickou }),
+    guardReservationUsd({ alias: "worker", now: PEAK_NOW }),
+  );
+  // Daleko od okna zůstává mimošpičková cena (víkend i večer).
+  assert.ok(guardReservationUsd({ alias: "worker", now: OFFPEAK_NOW }) < guardReservationUsd({ alias: "worker", now: PEAK_NOW }));
 });
 
 test("admission gate blocks farm-wide when the guard would refuse, never loosens, and spares project caps", () => {

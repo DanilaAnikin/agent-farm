@@ -10,7 +10,7 @@ import {
 } from "@/lib/constants";
 import { formatDateShort, formatDuration, formatRelative, formatUsd } from "@/lib/format";
 import { countLabel } from "@/lib/plural";
-import { modelLabel } from "@/lib/admin-guards";
+import { storedModelLabel } from "@/lib/admin-guards";
 import type { AttemptRow, ReviewRow, TaskRow } from "@/lib/types";
 
 export interface TaskTreeData {
@@ -47,7 +47,7 @@ function Pokusy({ attempts, reviewsByAttempt }: Pick<TaskTreeData, "attempts" | 
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <StatusBadge meta={ATTEMPT_STATUS_META[a.status]} />
-                {a.model ? <span className="text-(--color-faint)">{modelLabel(a.model)}</span> : null}
+                {a.model ? <span className="text-(--color-faint)">{storedModelLabel(a.model)}</span> : null}
               </div>
               <span className="text-(--color-faint)" suppressHydrationWarning>
                 {formatRelative(a.started_at)}

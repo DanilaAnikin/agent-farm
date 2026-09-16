@@ -73,6 +73,12 @@ CLOCK_DRIFT_SEC = 120
 # timeout is 120-180 s. A reservation may use the off-peak price only when even
 # this envelope stays outside peak.
 MAX_REQUEST_SECONDS = 1200
+# When a reservation can no longer belong to a live request. LiteLLM's own timeouts
+# measure inactivity between reads, and its max streaming duration is only re-checked
+# when a chunk arrives, so a stream receiving nothing but provider keepalives ends
+# only with the attempt's wall clock (ATTEMPT_WALL_CLOCK_MIN, 30 minutes). Beyond
+# that plus clock drift, a row still in 'reserved' lost its settlement for good.
+STALE_RESERVATION_SECONDS = 1800 + CLOCK_DRIFT_SEC
 
 
 def is_peak(moment: datetime) -> bool:
@@ -310,12 +316,15 @@ class PostgresStore:
                     reject("farm is paused")
                 day_cap = cap(settings.get("farm_daily_cap_usd"), "0.60")
                 month_cap = cap(settings.get("farm_monthly_cap_usd"), "20")
+                # One clock for the tier, the sweep and the stored admission time: now()
+                # is the transaction timestamp, identical to the admitted_at written below.
+                admitted_at = await conn.fetchval("SELECT now()")
+                # Abandoned reservations are raised BEFORE the totals are read, so the
+                # caps always see the amount the provider may really have charged.
+                await self.sweep_abandoned(conn, admitted_at)
                 totals = await conn.fetchrow("SELECT day_usd,month_usd FROM public.farm_budget_totals")
                 if totals is None:
                     reject("accounting is unavailable")
-                # One clock for the tier and for the stored admission time: now() is
-                # the transaction timestamp, identical to the admitted_at written below.
-                admitted_at = await conn.fetchval("SELECT now()")
                 tier = reservation_tier(admitted_at)
                 reserved = estimated.usd_for(tier)
                 if amount(totals["month_usd"]) + reserved > month_cap:
@@ -326,6 +335,39 @@ class PostgresStore:
                     (request_id,admitted_at,model_alias,model_id,reserved_usd,price_tier)
                     VALUES ($1,$2,$3,$4,$5,$6)""", request_id, admitted_at,
                                    estimated.model_alias, estimated.model_id, reserved, tier)
+
+    async def sweep_abandoned(self, conn, now):
+        """Charge reservations whose settlement can no longer arrive.
+
+        A lost settlement (proxy restart, an abandoned stream, a request the provider
+        dropped after its queue limit) leaves a row in 'reserved' forever. Since the
+        tariff split such a row may also hold only HALF of what the provider could
+        have charged, which is the one way this accounting could bill too little.
+        Once the request cannot be running any more, the held amount is therefore
+        raised to the peak price it was never allowed to assume — bounded, idempotent
+        (only an off-peak row in 'reserved' is ever doubled) and never refunded.
+        Runs inside the admission transaction, under the same advisory lock: that is
+        the only moment the amount can still matter, because an idle farm admits
+        nothing whose cap check the stale row could distort.
+        """
+        rows = await conn.fetch("""SELECT request_id,admitted_at,price_tier
+            FROM public.farm_budget_requests WHERE status='reserved' AND admitted_at < $1
+            ORDER BY admitted_at FOR UPDATE""",
+                                now - timedelta(seconds=STALE_RESERVATION_SECONDS))
+        for row in rows:
+            # The tier is bounded by the longest life the request could have had, not
+            # by how long the row has been lying here unnoticed.
+            if row["price_tier"] == OFFPEAK and reservation_tier(
+                row["admitted_at"], STALE_RESERVATION_SECONDS
+            ) == PEAK:
+                await conn.execute("""UPDATE public.farm_budget_requests
+                    SET reserved_usd=reserved_usd*2,price_tier='peak'
+                    WHERE request_id=$1 AND status='reserved' AND price_tier='offpeak'""",
+                                   row["request_id"])
+            await conn.execute("""UPDATE public.farm_budget_requests SET status='ambiguous'
+                WHERE request_id=$1 AND status='reserved'""", row["request_id"])
+        if rows:
+            notice("abandoned reservations charged as ambiguous")
 
     async def settle(self, request_id: UUID, actual_model: str | None,
                      tokens_in: int | None, tokens_out: int | None, cached_tokens: int = 0):
@@ -378,7 +420,12 @@ class PostgresStore:
                 # The reservation bounds TOKENS, at the tier it was taken. Compare like
                 # with like: only a broken token bound may close admission. A request
                 # that merely crossed into peak is charged the higher price and stays
-                # inside the caps through its settled amount.
+                # inside the caps through its settled amount. `price_tier` therefore
+                # stays the RESERVATION tier for the row's whole life: LiteLLM fires
+                # both the post-call success hook and the success log event for one
+                # response, so a settlement tier written here would make the second
+                # callback measure a peak bound against an off-peak reservation and
+                # close admission for the whole farm.
                 bound = charge(actual_model, tokens_in, tokens_out, cached_tokens, row["price_tier"] or PEAK)
                 if bound > amount(row["reserved_usd"]):
                     await conn.execute("UPDATE public.farm_budget_guard_meta SET ready=false WHERE singleton")
@@ -387,8 +434,11 @@ class PostgresStore:
                     notice("request reached peak hours; settled above its off-peak reservation")
                 if row["actual_usd"] is not None:
                     usd = max(usd, amount(row["actual_usd"]))
+                # Only the measured amount and the tier it was measured at are written.
+                # `price_tier` keeps naming the tariff the RESERVATION was taken in,
+                # which is what `bound` above is compared against.
                 await conn.execute("""UPDATE public.farm_budget_requests
-                    SET actual_usd=$2,status='settled',settled_at=now(),price_tier=$3
+                    SET actual_usd=$2,status='settled',settled_at=now(),settled_tier=$3
                     WHERE request_id=$1""", request_id, usd, tier)
 
 

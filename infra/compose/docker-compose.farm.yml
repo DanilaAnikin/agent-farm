@@ -27,10 +27,15 @@ services:
     - ../litellm/config.yaml:/app/config.yaml:ro
     environment:
       DATABASE_URL: ${LITELLM_DATABASE_URL:?LITELLM_DATABASE_URL chybí v .env}
-      # Jediný ABSOLUTNÍ strop streamu v LiteLLM 1.95. `timeout`/`stream_timeout`
-      # měří jen nečinnost mezi čteními, takže je keepalive poskytovatele nuluje —
-      # přesně to drželo Flash požadavek 900 s (14. 9. 2026). Kontroluje se až při
-      # dalším chunku, proto je to druhá vrstva, ne náhrada timeoutů v config.yaml.
+      # Strop trvání streamu v LiteLLM 1.95. POZOR na jeho hranice (ověřeno ve
+      # streaming_handler.py nasazeného obrazu): kontroluje se jen NA ZAČÁTKU
+      # __anext__, a uvnitř se čeká v `async for chunk in ...`, kde se prázdné
+      # chunky přeskakují. Stream, který posílá pouze keepalive, se tedy do
+      # kontroly nikdy nevrátí — stejně jako ho nezastaví `timeout`/`stream_timeout`,
+      # které měří jen nečinnost mezi čteními a keepalive je nuluje. Bezpečně tedy
+      # ohraničí jen stream, který nějaké chunky posílá; visící požadavek ukončí až
+      # wall-clock pokusu (ATTEMPT_WALL_CLOCK_MIN). Jeho rezervaci proto po
+      # STALE_RESERVATION_SECONDS uklidí hlídač sám (farm_budget_guard.py).
       LITELLM_MAX_STREAMING_DURATION_SECONDS: '600'
     ports:
     - 127.0.0.1:4000:4000

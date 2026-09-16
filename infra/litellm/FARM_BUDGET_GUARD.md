@@ -12,7 +12,14 @@ The guard removes Prisma-only DSN query parameters that LiteLLM adds at runtime
 asyncpg TLS parameters and `application_name` survive; otherwise asyncpg forwards
 unknown parameters as PostgreSQL settings and connection establishment fails.
 
-Apply `farm_budget_guard.sql` as a database administrator. It creates:
+Apply `farm_budget_guard.sql` as a database administrator BEFORE deploying an image
+that contains this version of the guard, and verify the columns it adds afterwards.
+The order is not cosmetic: a reservation writes `price_tier`, so a new image started
+against a table without that column fails every INSERT, and the guard then refuses
+100 % of paid traffic (fail-closed, but a complete stop). The migration itself is
+backward compatible — `ADD COLUMN IF NOT EXISTS` with `DEFAULT 'peak'`, which is
+exactly what the previous guard charged — so it can run safely while the old image
+is still serving. It creates:
 
 | Object | Purpose |
 | --- | --- |
@@ -46,11 +53,22 @@ The 2026-09-14 deployment had moved every route to Pro after a four-token Flash
 diagnostic kept receiving provider keepalives for over ten minutes. That stall was
 the provider's own queue (it answered HTTP 400 "unable to start processing your
 request within the 900-second timeout limit"), not a routing fault; a 2026-09-15
-re-test answered 15 of 15 Flash requests in under 1.5 seconds. The routes therefore
-carry explicit idle timeouts (Flash `timeout: 120`, `stream_timeout: 60`; Pro 180/120)
-and the deployment sets `LITELLM_MAX_STREAMING_DURATION_SECONDS=600`, because
-LiteLLM's own timeouts only measure inactivity between reads and provider keepalives
-reset them. No retries or fallbacks are added: each paid attempt must reserve budget.
+re-test answered 15 of 15 Flash requests in under 1.5 seconds. All routes therefore
+carry the same explicit idle timeouts (`timeout: 180`, `stream_timeout: 120`). They are
+deliberately not tighter: an idle timeout that cuts a legitimate wait settles the
+request as `ambiguous`, and an ambiguous request keeps its WHOLE reservation, because
+nothing is ever refunded — roughly 34 such cut requests would exhaust a day's cap
+without spending a cent.
+The deployment also sets `LITELLM_MAX_STREAMING_DURATION_SECONDS=600`, but NEITHER
+layer bounds a stream that receives only provider keepalives. The idle timeouts measure
+inactivity between reads, which a keepalive resets; and LiteLLM 1.95 evaluates the
+maximum streaming duration only at the start of `__anext__`, whose inner
+`async for chunk in ...` loop skips empty chunks with `continue` and therefore never
+returns to that check (verified in the deployed image). Such a request ends only with
+the attempt's wall clock, so its abandoned reservation is cleaned up by the guard
+itself (see the sweep below), and the keepalive behaviour must be re-checked on a live
+Flash request before Flash carries everyday traffic again.
+No retries or fallbacks are added: each paid attempt must reserve budget.
 The daily/monthly limits remain USD 0.60/20 and one worker remains in force. The old
 ambiguous Flash request stays charged at its original reserved amount across restart;
 do not refund it or reseed the baseline.
@@ -107,11 +125,34 @@ reservation doubled to the peak price it was never allowed to assume; off-peak i
 exactly half of peak, the upgrade is guarded by `price_tier='offpeak'`, so repeated
 failure callbacks cannot raise it twice. Nothing is ever refunded.
 
+`price_tier` names the tariff the RESERVATION is denominated in and is never rewritten
+by a settlement; the tariff the settled amount was measured at goes to `settled_tier`.
+They differ exactly when a request crossed into peak. This is load-bearing, not
+bookkeeping: LiteLLM fires both the post-call success hook and the success log event
+for one response, so `settle()` runs twice, and a settlement tier written into
+`price_tier` made the second call measure a peak bound against an off-peak reservation
+and clear `ready` — stopping the whole farm for the very case the split introduced.
+
+A reservation whose settlement never arrives (proxy restart, an abandoned stream, a
+request dropped by the provider) would otherwise stay in 'reserved' forever, and since
+the split it would hold only HALF of what the provider may have charged — the one path
+that could bill too little. Admission therefore sweeps first: rows older than
+`STALE_RESERVATION_SECONDS` (the attempt wall clock of 30 minutes plus clock drift,
+the real bound on a keepalive-stalled request) become `ambiguous`, and an off-peak one
+whose envelope could have touched peak is doubled the same idempotent way. The sweep
+runs inside the admission transaction under the same advisory lock, which is the only
+moment the amount can still matter; it never refunds anything.
+
 LiteLLM itself knows only one price per model, so `model_info` in `config.yaml`
 carries the off-peak price this farm actually pays. That feeds LiteLLM's own spend:
 `LiteLLM_SpendLogs`, its `max_budget` 0.60 USD/1d net and per-attempt key allowances.
 Leaving those at peak would have stopped the farm at half the real budget, because
-that net is denominated in the same numbers. Authoritative accounting stays with the
+that net is denominated in the same numbers. The flip side is worth stating plainly:
+everything LiteLLM meters is denominated in off-peak dollars, so during peak hours its
+0.60 USD/1d net and the per-attempt key allowance (`PER_ATTEMPT_BUDGET_USD`) permit up
+to twice their nominal real cost. Both are secondary backstops only; the farm's hard
+0.60/20 USD caps are enforced by the guard at the correct tariff, so peak hours cannot
+push real spend past them. Authoritative accounting stays with the
 guard, which checks every request atomically at its correct tariff; `cost_ledger` does
 not depend on `model_info` either, as the orchestrator's spend-sync reprices each
 spend log from its tokens, model and time window with the same rules.

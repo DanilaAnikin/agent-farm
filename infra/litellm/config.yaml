@@ -8,13 +8,22 @@
 # guard, which prices every request by its own clock and charges peak whenever the
 # request could have touched a peak window; cost_ledger is repriced from tokens by
 # the orchestrator's spend-sync, so it never depends on these values either.
+# Consequence to keep in mind: everything LiteLLM meters is denominated in off-peak
+# dollars, so during peak hours its 0.60 USD/1d net and the PER_ATTEMPT_BUDGET_USD
+# key allowance permit up to twice their nominal real cost. Both are only secondary
+# backstops; the farm's hard 0.60/20 USD caps are enforced by the guard at the
+# correct tariff, so peak hours cannot push real spend past them.
 # Everyday developer work (worker, cheap) runs on Flash; planning (manager), review
 # (judge) and post-failure escalation (worker-hard, worker-fallback) stay on Pro.
 # media-vlm stays on Pro: the guard rejects image input outright and neither model
 # accepts it, so switching it would buy nothing.
 # Flash keepalive stalls on 2026-09-14 were a provider-side queue (HTTP 400 after
-# 900 s), not a routing fault; timeout/stream_timeout below bound a repeat, and
-# LITELLM_MAX_STREAMING_DURATION_SECONDS in compose bounds a stalled stream.
+# 900 s), not a routing fault. Mind what the timeouts below can and cannot do: they
+# measure INACTIVITY between reads, which a provider keepalive resets, and LiteLLM's
+# LITELLM_MAX_STREAMING_DURATION_SECONDS is re-checked only when a chunk arrives.
+# A keepalive-only stream is therefore bounded by the attempt's wall clock alone; the
+# guard charges its abandoned reservation itself (STALE_RESERVATION_SECONDS). Timeouts
+# are deliberately not tighter than Pro's: a cut request keeps its WHOLE reservation.
 # No internal retries/fallbacks: every separately billed attempt must reserve budget.
 # Non-thinking tool calls avoid dropping reasoning_content in the OpenCode adapter,
 # and keep Flash from billing reasoning tokens it enables by default.
@@ -40,8 +49,8 @@ model_list:
     api_key: os.environ/DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com
     max_tokens: 4096
-    timeout: 120
-    stream_timeout: 60
+    timeout: 180
+    stream_timeout: 120
     extra_body:
       thinking:
         type: disabled
@@ -100,8 +109,8 @@ model_list:
     api_key: os.environ/DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com
     max_tokens: 4096
-    timeout: 120
-    stream_timeout: 60
+    timeout: 180
+    stream_timeout: 120
     extra_body:
       thinking:
         type: disabled

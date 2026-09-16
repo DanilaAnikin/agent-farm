@@ -540,6 +540,11 @@ export function resolveModel(model: string | null | undefined): string | null {
   return MODEL_ALIAS_TO_MODEL[model] ?? model;
 }
 
+/** Je `model` alias okruhu (a ne rovnou ID modelu poskytovatele)? */
+export function isModelAlias(model: string | null | undefined): boolean {
+  return typeof model === "string" && model in MODEL_ALIAS_TO_MODEL;
+}
+
 const ZNACKY: Record<string, string> = {
   deepseek: "DeepSeek",
   openai: "OpenAI",
@@ -561,12 +566,31 @@ function hezkeSlovo(slovo: string): string {
   return slovo.charAt(0).toUpperCase() + slovo.slice(1);
 }
 
-/** „deepseek/deepseek-v4-pro" (i alias „worker") → „DeepSeek V4 Pro". */
+/**
+ * „deepseek/deepseek-v4-pro" (i alias „worker") → „DeepSeek V4 Pro".
+ *
+ * Alias překládá podle AKTUÁLNÍHO routování, takže patří jen tam, kde jde o
+ * současný stav (živí agenti). Na uložené řádky použij `storedModelLabel`.
+ */
 export function modelLabel(model: string | null | undefined): string {
   const skutecny = resolveModel(model);
   if (!skutecny) return "—";
   const bezPoskytovatele = skutecny.includes("/") ? skutecny.slice(skutecny.lastIndexOf("/") + 1) : skutecny;
   return bezPoskytovatele.split(/[-_]/).filter(Boolean).map(hezkeSlovo).join(" ");
+}
+
+/**
+ * Popisek modelu u ULOŽENÉHO řádku (pokus, pohyb v ledgeru, doběhlý běh agenta).
+ *
+ * Alias se tu záměrně NEPŘEKLÁDÁ. `attempts.model` i `cost_ledger.model` drží alias
+ * okruhu z doby vzniku řádku a routování se v čase mění (alias `worker` jel do
+ * 16. 9. 2026 na Pru, od té doby na Flashi). Překlad přes dnešní mapu by tvrdil, že
+ * staré pokusy běžely na modelu, který tehdy nepoužívaly — dashboard má o minulosti
+ * mlčet, ne si ji domýšlet. Když řádek nese rovnou ID modelu, ukáže se model.
+ */
+export function storedModelLabel(model: string | null | undefined): string {
+  if (!model) return "—";
+  return isModelAlias(model) ? model : modelLabel(model);
 }
 
 /** „deepseek" → „DeepSeek"; prázdný poskytovatel → „—". */
@@ -597,8 +621,9 @@ export const SYSTEM_PROJECT_LABEL = "Systém (plánování a hodnocení)";
 
 /**
  * Grafy /costs. Bere jen `cost_usd > 0` (nulové řádky s aliasy dělaly prázdné
- * sloupce), aliasy překládá na skutečné modely a řádky bez projektu sčítá do
- * položky „Systém", aby součet grafu „Podle projektu" seděl s celkem.
+ * sloupce) a řádky bez projektu sčítá do položky „Systém", aby součet grafu „Podle
+ * projektu" seděl s celkem. Model se bere tak, jak je v řádku uložený
+ * (`storedModelLabel`): jde o historii, a ta se překladem dnešních aliasů nepřepisuje.
  */
 export function aggregateCosts(
   rows: CostSummaryLike[],
@@ -626,7 +651,7 @@ export function aggregateCosts(
     total += c;
     const p = r.project_id ? projectName(r.project_id) : SYSTEM_PROJECT_LABEL;
     projekty.set(p, (projekty.get(p) ?? 0) + c);
-    const m = modelLabel(r.model);
+    const m = storedModelLabel(r.model);
     modely.set(m, (modely.get(m) ?? 0) + c);
     const pr = poskytovatelLabel(r.provider);
     poskytovatele.set(pr, (poskytovatele.get(pr) ?? 0) + c);

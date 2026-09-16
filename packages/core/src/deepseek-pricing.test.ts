@@ -101,9 +101,13 @@ test("přepočet spend-logu: mimo špičku polovina, neznámý model drží čí
   assert.ok(Math.abs(peak - 0.00054) < 1e-12);
   // Požadavek přes hranici okna se přepočte jako špička.
   assert.ok(Math.abs(repricedSpendUsd({ ...log, start: utc("2026-09-16T00:58:00"), end: utc("2026-09-16T01:01:00") }) - 0.00054) < 1e-12);
-  // Neznámý model a řádek bez tokenů nikdy nepodhodnotí útratu z LiteLLM.
+  // Neznámý model a řádek bez tokenů nikdy nepodhodnotí útratu z LiteLLM. Mimo špičku
+  // číslo z LiteLLM sedí (model_info nese mimošpičkové ceny)...
   assert.equal(repricedSpendUsd({ ...log, model: "glm-4.6", start: utc("2026-09-16T23:00:00"), end: utc("2026-09-16T23:00:05") }), 0.00027);
   assert.equal(repricedSpendUsd({ ...log, tokensIn: 0, tokensOut: 0, litellmSpendUsd: 0.004, start: utc("2026-09-16T23:00:00"), end: utc("2026-09-16T23:00:05") }), 0.004);
+  // ...ale ve špičce je poloviční, takže se záloha musí zdvojnásobit.
+  assert.equal(repricedSpendUsd({ ...log, model: "glm-4.6", start: utc("2026-09-16T01:10:00"), end: utc("2026-09-16T01:10:05") }), 0.00054);
+  assert.equal(repricedSpendUsd({ ...log, tokensIn: 0, tokensOut: 0, litellmSpendUsd: 0.004, start: utc("2026-09-16T01:10:00"), end: utc("2026-09-16T01:10:05") }), 0.008);
 });
 
 test("rezervace kontextu workera: Flash mimo špičku je zlomek ceny Pro ve špičce", () => {

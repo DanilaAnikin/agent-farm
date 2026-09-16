@@ -169,7 +169,13 @@ export function deepseekChargeUsd(input: {
  * v hlídači, nad intervalem [začátek, konec] řádku.
  *
  * Když model neznáme nebo by přepočet vyšel nulový u řádku, který něco stál
- * (chybějící tokeny v logu), platí číslo z LiteLLM — nikdy se nepodhodnocuje.
+ * (chybějící tokeny v logu), platí číslo z LiteLLM — ale ve ŠPIČCE zdvojnásobené.
+ * `model_info` v config.yaml totiž nese mimošpičkové ceny, takže číslo z LiteLLM je
+ * samo o sobě v poloviční sazbě; bez zdvojnásobení by tahle „záloha" u požadavku ze
+ * špičky útratu podhodnotila na polovinu — a cost_ledger drží stropy projektu,
+ * uživatele i přání. Přes tenhle proxy jdou jen routy DeepSeeku, takže neznámý model
+ * v novém spend-logu znamená změnu routování, jejíž cenu neznáme: konzervativní
+ * horní odhad je tam správně (stejně jako u nejistého požadavku v hlídači).
  */
 export function repricedSpendUsd(input: {
   model: string | null | undefined;
@@ -180,16 +186,18 @@ export function repricedSpendUsd(input: {
   end: Date;
   litellmSpendUsd: number;
 }): number {
+  const tier = deepseekPriceTier(input.start, input.end);
+  const zLitellm = tier === "peak" ? input.litellmSpendUsd * 2 : input.litellmSpendUsd;
   const model = normalizeDeepseekModel(input.model);
-  if (model === null) return input.litellmSpendUsd;
+  if (model === null) return zLitellm;
   const usd = deepseekChargeUsd({
     model,
     tokensIn: input.tokensIn,
     tokensOut: input.tokensOut,
     cachedTokens: input.cachedTokens ?? 0,
-    tier: deepseekPriceTier(input.start, input.end),
+    tier,
   });
-  return usd > 0 ? usd : input.litellmSpendUsd;
+  return usd > 0 ? usd : zLitellm;
 }
 
 /**

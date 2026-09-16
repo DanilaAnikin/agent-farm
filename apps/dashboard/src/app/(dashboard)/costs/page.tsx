@@ -10,7 +10,7 @@ import {
   busiestProjectCap,
   effectiveUserCaps,
   layerRatio,
-  modelLabel,
+  storedModelLabel,
   nearestCapKey,
   poskytovatelLabel,
   type CapLayer,
@@ -410,7 +410,7 @@ export default async function CostsPage({ searchParams }: { searchParams: Promis
                       <TD className="text-xs">{r.project_id ? jmenoProjektu(r.project_id) : "Systém"}</TD>
                       <TD className="text-xs">{DRUHY[r.scope] ?? r.scope}</TD>
                       <TD className="text-xs" title={r.model ?? undefined}>
-                        {modelLabel(r.model)}
+                        {storedModelLabel(r.model)}
                       </TD>
                       <TD className="text-xs">{poskytovatelLabel(r.provider)}</TD>
                       <TD className="text-right text-xs tabular-nums">{formatNumber(r.tokens_in)}</TD>
@@ -524,7 +524,7 @@ function TentoMesic({
         {radek(
           "Změřeno LiteLLM",
           snap.month_settled === null ? "—" : formatUsd(snap.month_settled),
-          "Skutečně zaúčtované pohyby (přepočtené na cenu DeepSeeku podle času a cache). Jen pro kontrolu, práci neblokuje.",
+          "Skutečně zaúčtované pohyby (od 16. 9. 2026 přepočtené na cenu DeepSeeku podle času a cache; starší v původních špičkových cenách). Jen pro kontrolu, práci neblokuje.",
         )}
         {radek(
           "Zůstatek u DeepSeeku",

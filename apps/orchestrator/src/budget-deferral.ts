@@ -18,6 +18,7 @@
 import {
   checkBudget,
   nextResetUtc,
+  DEEPSEEK_MAX_REQUEST_SEC,
   DEEPSEEK_MODEL_BY_ALIAS,
   deepseekReservationTier,
   deepseekReservationUsd,
@@ -331,8 +332,27 @@ export interface GuardReserveInput {
   /** Alias okruhu (worker, worker-hard, …). Neznámý → nejdražší model žebříku. */
   alias?: string;
   contextBytes?: number;
-  /** Kdy by se požadavek přijímal (kvůli pásmu). Výchozí: teď. */
+  /** Kdy se pokus zařazuje (kvůli pásmu). Výchozí: teď. */
   now?: Date;
+}
+
+/**
+ * Obálka, přes kterou brána určuje PÁSMO — celý život pokusu, ne jeden požadavek.
+ *
+ * Brána rozhoduje v okamžiku dispatche, ale požadavky pokusu odcházejí do proxy
+ * ještě desítky minut potom: POSLEDNÍ z nich může vyrazit až na konci pokusu
+ * (ATTEMPT_WALL_CLOCK_MIN) a běžet pak ještě celou obálku jednoho požadavku
+ * (DEEPSEEK_MAX_REQUEST_SEC) — proto se obě doby sčítají. Kdyby brána počítala jen
+ * s jedním požadavkem, ocenila by pokus zařazený v 00:20 UTC mimo špičku, zatímco
+ * hlídač by požadavku odeslanému v 00:50 rezervoval už špičku, tedy dvojnásobek, a
+ * pokus by vzápětí odmítl: spálený kontext bez výsledku. S touhle obálkou je brána
+ * nejvýš stejně přísná jako hlídač, nikdy volnější. Nesmyslná hodnota v prostředí
+ * → výchozích 30 minut.
+ */
+export function guardTierEnvelopeSec(env: Record<string, string | undefined> = process.env): number {
+  const minutes = Number(env.ATTEMPT_WALL_CLOCK_MIN);
+  const wallClockSec = (Number.isFinite(minutes) && minutes > 0 ? Math.trunc(minutes) : 30) * 60;
+  return wallClockSec + DEEPSEEK_MAX_REQUEST_SEC;
 }
 
 /** Rezervace hlídače pro jeden požadavek daného aliasu s daným kontextem. */
@@ -345,7 +365,7 @@ export function guardReservationUsd(input: GuardReserveInput = {}): number {
   return deepseekReservationUsd({
     contextBytes,
     model,
-    tier: deepseekReservationTier(input.now ?? new Date()),
+    tier: deepseekReservationTier(input.now ?? new Date(), guardTierEnvelopeSec()),
   });
 }
 
