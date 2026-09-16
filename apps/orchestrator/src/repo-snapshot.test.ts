@@ -110,6 +110,34 @@ test("docker-compose služby se načtou i z podadresáře", async () => {
   }
 });
 
+test("strop cest neusekne kořenové manifesty a useknutí se zaznamená", async () => {
+  const files: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "web", scripts: { dev: "next dev" } }),
+    "package-lock.json": "{}",
+  };
+  // Jeden adresář s víc soubory, než je strop. Při průchodu do hloubky se do něj
+  // sestoupilo hned, jak na něj `readdir` narazil (pořadí dané FS, ne abecedou),
+  // strop se vyčerpal a kořenový package.json se do výčtu vůbec nedostal:
+  // otisk vyšel null, `decideDiscovery` vrátil „no_facts" a projekt se nikdy
+  // nezkoumal — bez jediného záznamu.
+  for (let i = 0; i < 1500; i++) files[`public/asset-${i}.txt`] = "x";
+  const root = await fixtureRepo(files);
+  try {
+    const snapshot = await collectRepoSnapshot(root);
+    assert.ok(snapshot.paths.includes("package.json"), "kořenový manifest musí být ve výčtu");
+    assert.ok(snapshot.files["package.json"], "a musí se i přečíst");
+    assert.equal(snapshot.truncated, true, "useknutý výčet se zaznamená");
+
+    const facts = buildRepoFacts(snapshot);
+    assert.equal(facts.packageManager, "npm");
+    assert.equal(facts.rootScripts.dev, "next dev");
+    assert.equal(facts.pathsTruncated, true);
+    assert.ok(manifestFingerprint(snapshot));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("repo bez manifestů nemá otisk — není co zkoumat", async () => {
   const root = await fixtureRepo({ "main.c": "int main(){return 0;}\n" });
   try {

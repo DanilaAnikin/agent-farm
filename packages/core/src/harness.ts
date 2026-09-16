@@ -109,6 +109,49 @@ export function runScriptCommand(pm: PackageManager, script: string): string {
   return pm === "npm" ? `npm run ${script}` : `${pm} run ${script}`;
 }
 
+/** Instalace balíčků Node správcem — sem patří `--ignore-scripts`. */
+const NODE_INSTALL = /(^|\s)(npm|pnpm|yarn|bun)\s+(install|i|ci|add)(\s|$)/;
+
+/**
+ * Dorovná instalaci na bezpečný tvar: KAŽDÝ úsek, který instaluje Node balíčky,
+ * dostane `--ignore-scripts`.
+ *
+ * Proč vynuceně: instalace z receptu má v `deriveHarnessPlan` přednost před tou
+ * odvozenou z lockfilu a recept dnes plní automat (průzkum repozitáře), ne
+ * člověk. Config ráčna (`protectedFilesTouched`) přitom brání jen ZMĚNĚ
+ * existujícího package.json — PŘIDAT nový balíček s `postinstall` smí worker
+ * kdykoliv. Bez tohohle kroku by takový skript běžel rovnou v kontejneru
+ * soudce, který ten samý pokus hodnotí. Volnější instalaci (s lifecycle
+ * skripty) má záměrně jen QA — viz `qaInstallCommand`.
+ */
+export function hardenInstallCommand(command: string): string {
+  return command
+    .split(/(&&|\|\||;)/)
+    .map((part) => {
+      if (/^(&&|\|\||;)$/.test(part)) return part;
+      if (!NODE_INSTALL.test(part) || /--ignore-scripts(\s|$)/.test(part)) return part;
+      const trailing = part.match(/\s*$/)?.[0] ?? "";
+      return `${part.trimEnd()} --ignore-scripts${trailing}`;
+    })
+    .join("");
+}
+
+/**
+ * Tentýž příkaz pro QA: aplikace se musí reálně rozběhnout, takže potřebuje i
+ * devDependencies a lifecycle skripty (prisma generate, playwright install,
+ * husky). Odstraní se proto `--ignore-scripts` i zámek na lockfile a `npm ci`
+ * se změkčí na `npm install`; správce balíčků a filtry workspace zůstávají.
+ */
+export function qaInstallCommand(command: string): string {
+  return command
+    .replace(/(^|\s)npm\s+ci(\s|$)/, "$1npm install$2")
+    .replace(/\s--ignore-scripts(?=\s|$)/g, "")
+    .replace(/\s--frozen-lockfile(?=\s|$)/g, "")
+    .replace(/\s--immutable(?=\s|$)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /**
  * Vytáhne příkazy `run:` z GitHub workflow bez YAML parseru (žádná nová závislost).
  * Umí jednořádkové `run: cmd` i blokové `run: |` / `run: >`. Výrazy `${{ … }}`
@@ -236,7 +279,10 @@ export function deriveHarnessPlan(input: HarnessPlanInput): HarnessPlan {
     }
   }
 
-  const install = recipeCommand(input.envRecipe, "install") ?? (pm ? installCommand(pm) : null);
+  // Instalace z receptu se bere, ale VŽDY v bezpečném tvaru — recept dnes píše
+  // automat a `--ignore-scripts` není na jeho uvážení (viz hardenInstallCommand).
+  const fromRecipe = recipeCommand(input.envRecipe, "install");
+  const install = fromRecipe ? hardenInstallCommand(fromRecipe) : pm ? installCommand(pm) : null;
   return { packageManager: pm, install, checks, source };
 }
 

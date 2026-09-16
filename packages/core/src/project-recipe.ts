@@ -20,7 +20,14 @@
  * deriveHarnessPlan beze změny, zbytek (start, port, services, env, meta) je navíc.
  */
 import { createHash } from "node:crypto";
-import { detectPackageManager, installCommand, runScriptCommand, classifyCheckCommand, extractWorkflowRunCommands } from "./harness.js";
+import {
+  detectPackageManager,
+  hardenInstallCommand,
+  installCommand,
+  runScriptCommand,
+  classifyCheckCommand,
+  extractWorkflowRunCommands,
+} from "./harness.js";
 import type { HarnessCheck, PackageManager } from "./harness.js";
 
 // --- Které soubory vůbec rozhodují o tom, jak se projekt spouští --------------
@@ -97,6 +104,8 @@ export interface RepoFacts {
   dockerExpose: number[];
   /** Které manifesty v repu jsou (relativní cesty). */
   manifests: string[];
+  /** Výčet ostatních cest byl useknutý stropem (manifesty jsou i tak úplné). */
+  pathsTruncated: boolean;
   hasSupabase: boolean;
 }
 
@@ -107,6 +116,11 @@ export interface RepoSnapshot {
   files: Record<string, string>;
   /** Velikosti souborů, které se nečtou (lockfily) — kvůli otisku. */
   sizes?: Record<string, number>;
+  /**
+   * Výčet cest narazil na strop: manifesty a README jsou úplné, ostatní cesty
+   * ne. Bez tohohle příznaku by se na neúplný výčet spoléhalo, jako by byl celý.
+   */
+  truncated?: boolean;
 }
 
 function parseJson(text: string | undefined): Record<string, unknown> | null {
@@ -419,6 +433,7 @@ export function buildRepoFacts(snapshot: RepoSnapshot): RepoFacts {
     makeTargets: makefile ? makefileTargets(makefile) : [],
     dockerExpose,
     manifests: paths.filter(isRecipeManifestPath).sort(),
+    pathsTruncated: snapshot.truncated === true,
     hasSupabase,
   };
 }
@@ -462,6 +477,9 @@ export function formatRepoFacts(facts: RepoFacts, maxChars = 5000): string {
   if (facts.dockerExpose.length > 0) lines.push(`Dockerfile EXPOSE: ${facts.dockerExpose.join(", ")}`);
   if (facts.envVarNames.length > 0) lines.push(`env variable NAMES from .env.example (values unknown, never real secrets): ${facts.envVarNames.join(", ")}`);
   if (facts.manifests.length > 0) lines.push(`manifests present: ${facts.manifests.slice(0, 40).join(", ")}`);
+  if (facts.pathsTruncated) {
+    lines.push("note: the file listing hit its cap — manifests and READMEs are complete, other paths are not");
+  }
   if (facts.readmeRun) lines.push(`README run/install section:\n${facts.readmeRun}`);
   return lines.join("\n").slice(0, maxChars);
 }
@@ -494,14 +512,23 @@ export function manifestFingerprint(snapshot: RepoSnapshot): string | null {
 // --- Bezpečnost příkazů z modelu ---------------------------------------------
 
 /**
- * Hlavy příkazů, které smí recept spustit v sandboxu. Allowlist, ne denylist:
- * cokoliv, co farma nezná, se nespustí. `sh`/`bash`/`eval`/`source` tu schválně
- * NEJSOU — přes ně by šel allowlist obejít (`bash -c "curl … | sh"`).
+ * Hlavy příkazů, které smí recept spustit v sandboxu.
+ *
+ * POZOR NA OČEKÁVÁNÍ: tohle NENÍ bezpečnostní hranice. Hlava příkazu o jeho
+ * účinku skoro nic neříká — `node` umí spustit libovolný kód, správce balíčků
+ * umí stáhnout a spustit cizí balíček, a vstupem do promptu je NEDŮVĚRYHODNÝ
+ * obsah cizího repozitáře (README, skripty, CI kroky). Skutečnou hranicí je
+ * kontejner (gVisor, limity, odpojený worktree) a síť, ve které běží. Allowlist
+ * je jen filtr na zjevné nesmysly a překlepy modelu; formy „spusť libovolný
+ * kód" a „stáhni a spusť balíček" proto odmítá `COMMAND_DENY` zvlášť.
+ *
+ * `sh`/`bash`/`eval`/`source` tu schválně nejsou — přes ně by šel filtr obejít
+ * jedním `bash -c "…"`.
  */
 export const ALLOWED_COMMAND_HEADS: string[] = [
-  "node", "npm", "npx", "pnpm", "pnpx", "yarn", "bun", "bunx", "corepack",
+  "node", "npm", "pnpm", "yarn", "bun", "corepack",
   "tsx", "tsc", "vitest", "jest", "playwright", "biome", "eslint", "prettier", "turbo", "nx",
-  "python", "python3", "pip", "pip3", "pipenv", "poetry", "uv", "uvx", "pytest", "ruff", "mypy", "tox", "django-admin",
+  "python", "python3", "pip", "pip3", "pipenv", "poetry", "uv", "pytest", "ruff", "mypy", "tox", "django-admin",
   "go", "gofmt", "golangci-lint",
   "cargo", "rustc", "rustfmt",
   "make", "just", "mvn", "gradle", "./gradlew", "./mvnw",
@@ -522,6 +549,12 @@ const COMMAND_DENY: [RegExp, string][] = [
   [/\bchmod\s+(-R\s+)?777\b|\bchown\s+-R\s+root/i, "změna oprávnění"],
   [/\b(curl|wget)\b/i, "stahování z internetu mimo správce balíčků"],
   [/\|\s*(sh|bash|zsh|python\d?)\b/i, "roura do interpretu"],
+  // Hlava příkazu je povolená, účinek ne: obojím jde spustit cokoliv.
+  [/(^|\s)(node|deno|bun)\s+(-e|--eval|-p(\s|$)|--print)/i, "spuštění kódu z parametru"],
+  [/(^|\s)python3?\s+-c(\s|$)/i, "spuštění kódu z parametru"],
+  [/\b(npx|pnpx|bunx|uvx)\b/i, "stažení a spuštění cizího balíčku"],
+  [/\b(npm|pnpm|yarn|bun)\s+dlx\b/i, "stažení a spuštění cizího balíčku"],
+  [/\bpip3?\s+install\b[^;&|]*(https?:\/\/|git\+)/i, "instalace balíčku z URL"],
   [/\b(ssh|scp|rsync|telnet|nc|ncat|socat)\b/i, "přístup na jiný stroj"],
   [/\b(docker|docker-compose|podman|kubectl|helm|systemctl)\b/i, "ovládání kontejnerů/služeb (v sandboxu není)"],
   [/\bgit\s+(push|remote|config)\b|\bgh\s+/i, "zásah do gitu nebo GitHubu"],
@@ -530,6 +563,8 @@ const COMMAND_DENY: [RegExp, string][] = [
   [/\b(litellm|docker\.sock|169\.254\.169\.254|host\.docker\.internal|metadata\.google)\b/i, "přístup k vnitřním službám farmy"],
   [/\b(printenv|env)\s*(\||>)/i, "vypsání proměnných prostředí ven"],
   [/>\s*\/(?!tmp\/|workspace\/|dev\/null)/, "zápis mimo pracovní adresář"],
+  // `> /workspace/../../etc/x` vypadá jako zápis do workspace, ale není.
+  [/>\s*[^\s;&|]*\.\.(\/|$)/, "zápis mimo pracovní adresář"],
 ];
 
 export interface CommandCheck {
@@ -540,10 +575,16 @@ export interface CommandCheck {
 const MAX_COMMAND_LENGTH = 300;
 const MAX_COMMAND_SEGMENTS = 8;
 
-/** Rozdělí příkaz na segmenty podle `&&`, `||`, `;` a `|`. */
+/**
+ * Rozdělí příkaz na segmenty podle `&&`, `||`, `;`, `|` a `&`.
+ *
+ * `&` musí být v seznamu: bez něj se `pnpm install & node -e "…"` ověřil jen
+ * podle hlavy „pnpm" a všechno za `&` neprošlo kontrolou vůbec. Alternace
+ * zkouší `&&` dřív než `&`, takže řetězení `a && b` zůstává jedním oddělovačem.
+ */
 function commandSegments(command: string): string[] {
   return command
-    .split(/&&|\|\||;|\|/)
+    .split(/&&|\|\||;|\||&/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
@@ -592,6 +633,38 @@ const MAX_ENV_VALUE = 200;
 /** Co vypadá jako skutečné tajemství — do sandboxu to nikdy nepatří. */
 const SECRET_LOOKING = /(sk-[A-Za-z0-9]{12,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY)/;
 
+/**
+ * Proměnné, které mění ZAVÁDĚNÍ procesu, ne chování aplikace.
+ *
+ * Tvar jména, délka ani „vypadá jako tajemství" tohle nepoznají: `PATH` nebo
+ * `NODE_OPTIONS` ukazující do /workspace znamená, že „ověřený" příkaz ve
+ * skutečnosti spouští kód z hodnoceného repozitáře — a u QA navíc tiše mění,
+ * co se vlastně měří. Recept se přitom ukládá do projects.env_recipe a použije
+ * se u všech budoucích přání, takže omyl tady není jednorázový.
+ */
+const ENV_NAME_DENY: RegExp[] = [
+  /^PATH$/,
+  /^LD_(PRELOAD|LIBRARY_PATH|AUDIT)$/,
+  /^DYLD_/,
+  /^NODE_(OPTIONS|PATH)$/,
+  /^PYTHON(PATH|STARTUP|HOME)$/,
+  /^PERL5LIB$/,
+  /^RUBYOPT$/,
+  /^JAVA_TOOL_OPTIONS$/,
+  /^(BASH_ENV|ENV|SHELL|IFS)$/,
+  /^GIT_/,
+  /^NPM_CONFIG_/,
+  /^YARN_/,
+  /^COREPACK_/,
+  /^DOCKER_/,
+  /^(HTTP|HTTPS|ALL|NO)_PROXY$/,
+];
+
+/** Mění tahle proměnná zavádění procesu (a tedy i to, co se vlastně ověřuje)? */
+export function isBootstrapEnvName(name: string): boolean {
+  return ENV_NAME_DENY.some((re) => re.test(name));
+}
+
 export interface EnvCheck {
   ok: boolean;
   reason?: string;
@@ -604,6 +677,7 @@ export function validateRecipeEnv(env: unknown): EnvCheck {
   if (entries.length > MAX_ENV_ENTRIES) return { ok: false, reason: `nejvýš ${MAX_ENV_ENTRIES} proměnných` };
   for (const [name, value] of entries) {
     if (!ENV_NAME.test(name)) return { ok: false, reason: `název proměnné „${name}" není platný` };
+    if (isBootstrapEnvName(name)) return { ok: false, reason: `proměnná „${name}" mění zavádění procesu` };
     if (typeof value !== "string") return { ok: false, reason: `hodnota ${name} musí být řetězec` };
     if (value.length > MAX_ENV_VALUE) return { ok: false, reason: `hodnota ${name} je příliš dlouhá` };
     if (/[\n\r\0]/.test(value)) return { ok: false, reason: `hodnota ${name} musí být jednořádková` };
@@ -618,7 +692,7 @@ export function sanitizeRecipeEnv(env: unknown): Record<string, string> {
   if (!env || typeof env !== "object" || Array.isArray(env)) return out;
   for (const [name, value] of Object.entries(env as Record<string, unknown>)) {
     if (Object.keys(out).length >= MAX_ENV_ENTRIES) break;
-    if (!ENV_NAME.test(name) || typeof value !== "string") continue;
+    if (!ENV_NAME.test(name) || isBootstrapEnvName(name) || typeof value !== "string") continue;
     if (value.length > MAX_ENV_VALUE || /[\n\r\0]/.test(value) || SECRET_LOOKING.test(value)) continue;
     out[name] = value;
   }
@@ -693,7 +767,15 @@ export function validateRecipeProposal(data: unknown): true | string {
 
 // --- Výsledný env_recipe ------------------------------------------------------
 
-export type VerificationState = "ok" | "failed" | "skipped";
+/**
+ * Výsledek jednoho kroku ověření:
+ *  - `ok` — proběhlo a prošlo;
+ *  - `failed` — proběhlo a spadlo (to je výrok o projektu);
+ *  - `skipped` — projekt ten krok nemá, nebo ho v sandboxu nejde ověřit;
+ *  - `unknown` — NEPROBĚHLO (uťatý běh, chybějící značka). Není to selhání:
+ *    z „nedoběhlo" se nesmí stát „všechno je rozbité".
+ */
+export type VerificationState = "ok" | "failed" | "skipped" | "unknown";
 
 export interface RecipeVerification {
   install?: VerificationState;
@@ -712,6 +794,12 @@ export interface RecipeMeta {
   attempts: number;
   verified: RecipeVerification;
   notes?: string;
+  /**
+   * Původní hodnota env_recipe, které farma nerozuměla a přepsala ji (typicky
+   * ruční poznámka od člověka z dřívějšího dialogu). Uchovává se, aby se text
+   * neztratil beze stopy — karta v UI ho vypíše jako poznámku od člověka.
+   */
+  replaced?: string;
 }
 
 export interface EnvRecipe {
@@ -739,7 +827,13 @@ function cleanCommand(value: unknown): string | undefined {
  */
 export function buildEnvRecipe(proposal: RecipeProposal, meta: RecipeMeta): EnvRecipe {
   const recipe: EnvRecipe = {};
-  const install = cleanCommand(proposal.install);
+  // Instalace se ukládá VŽDY v bezpečném tvaru (`--ignore-scripts`): podle
+  // tohohle klíče instaluje soudce v kontejneru, ve kterém hodnotí cizí větev,
+  // a `--ignore-scripts` není na uvážení modelu. Volnější variantu pro QA si
+  // odvodí tester sám (qaInstallCommand).
+  const install = cleanCommand(
+    typeof proposal.install === "string" ? hardenInstallCommand(proposal.install) : proposal.install,
+  );
   if (install) recipe.install = install;
 
   const commands: Record<string, string> = {};
@@ -793,6 +887,7 @@ export function readRecipeMeta(envRecipe: unknown): RecipeMeta | null {
     attempts: Number.isFinite(Number(m.attempts)) ? Number(m.attempts) : 0,
     verified,
     ...(typeof m.notes === "string" ? { notes: m.notes } : {}),
+    ...(typeof m.replaced === "string" ? { replaced: m.replaced } : {}),
   };
 }
 
@@ -883,6 +978,51 @@ export function decideDiscovery(input: {
   return { run: true, reason: "unverified" };
 }
 
+/**
+ * Co jde rozhodnout BEZ sáhnutí na repozitář — jen z toho, co je v DB.
+ *
+ * Průzkum jinak začínal `git fetch` a průchodem stromu pod per-repo zámkem, o
+ * který soupeří dispatch (createWorktree), merge i QA — a to i u projektu,
+ * který je v backoffu, na denním stropu nebo má ruční recept. Tahle brána
+ * takový projekt zastaví dřív, než se repozitáře vůbec dotkneme. Otisk
+ * manifestů (tedy „fresh" vs „manifests_changed") se bez čtení repa poznat
+ * nedá — to zůstává na `decideDiscovery`.
+ *
+ * Vrací hotové rozhodnutí, když je jasné, že se zkoumat nemá; jinak `null`.
+ */
+export function preDiscoverySkip(input: {
+  envRecipe: unknown;
+  attemptsToday: number;
+  lastAttemptAt?: Date | null;
+  now?: Date;
+  maxAttemptsPerDay?: number;
+}): DiscoveryDecision | null {
+  const now = input.now ?? new Date();
+  const meta = readRecipeMeta(input.envRecipe);
+  const usable = hasUsableRecipe(input.envRecipe);
+  // Ruční recept (i ten bez metadat z dřívějška) je výslovné nastavení projektu.
+  if (usable && (!meta || meta.source === "manual")) return { run: false, reason: "manual" };
+
+  const maxAttempts = input.maxAttemptsPerDay ?? MAX_DISCOVERY_ATTEMPTS_PER_DAY;
+  if (input.attemptsToday >= maxAttempts) return { run: false, reason: "daily_limit" };
+  if (input.lastAttemptAt) {
+    const retryAfter = new Date(input.lastAttemptAt.getTime() + discoveryBackoffMs(input.attemptsToday));
+    if (now < retryAfter) return { run: false, reason: "backoff", retryAfter };
+  }
+  return null;
+}
+
+/**
+ * Zkoumá farma tenhle projekt vůbec? Obsahový projekt nemá co spouštět a
+ * `repo_mode='none'` nemá repozitář.
+ *
+ * Jedno kritérium pro orchestrátor i pro kartu v UI: jinak karta slibuje
+ * průzkum, který u takového projektu nikdy nepřijde.
+ */
+export function isDiscoverableProject(project: { kind?: string | null; repoMode?: string | null }): boolean {
+  return project.kind !== "content" && project.repoMode !== "none";
+}
+
 /** Je běh receptu tak špatný, že má smysl poslat modelu log a nechat ho opravit? */
 export function needsRepair(verification: RecipeVerification, hasStart: boolean): boolean {
   if (verification.install === "failed") return true;
@@ -916,9 +1056,22 @@ export function pruneUnverifiedRecipe(recipe: EnvRecipe, verification: RecipeVer
   return out;
 }
 
-/** Recept je použitelný, když prošla instalace a (když existuje) i start. */
+/** Kroky, jejichž „ok" se počítá jako důkaz, že recept funguje. */
+const VERIFIED_STEP_KEYS = ["install", "start", "build", "typecheck", "lint", "tests"] as const;
+
+/**
+ * Recept je ověřený, když nic podstatného neselhalo a aspoň jeden krok opravdu
+ * proběhl a prošel.
+ *
+ * Proč ne „prošla instalace nebo start": projekt, který instalaci nepotřebuje
+ * (`install: "skipped"`) a jehož jediná spuštěná kontrola prošla, je ověřený
+ * stejně dobře. Dřív se hlásil jako neověřený, zapsal se `project_discovery_failed`
+ * („Spuštění projektu se nepodařilo ověřit") a farma ho 3× denně zbytečně
+ * přeměřovala. Padající KONTROLA se tu naopak toleruje schválně — to je
+ * pravdivý stav main větve, ne chyba receptu (stejně jako v pruneUnverifiedRecipe).
+ */
 export function verificationPassed(verification: RecipeVerification, hasStart: boolean): boolean {
   if (verification.install === "failed") return false;
   if (hasStart && verification.start !== "ok") return false;
-  return verification.install === "ok" || verification.start === "ok";
+  return VERIFIED_STEP_KEYS.some((key) => verification[key] === "ok");
 }

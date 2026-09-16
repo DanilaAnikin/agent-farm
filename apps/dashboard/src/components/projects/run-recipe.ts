@@ -15,6 +15,7 @@ export type StepState = "ok" | "failed" | "skipped" | "unknown";
 export interface RunRecipeStep {
   key: string;
   label: string;
+  /** Prázdné u kroku, který se neověřil a farma ho z receptu vyhodila. */
   command: string;
   state: StepState;
 }
@@ -35,6 +36,8 @@ export interface RunRecipeView {
   commit: string | null;
   attempts: number | null;
   notes: string | null;
+  /** Dřívější ruční poznámka, kterou průzkum přepsal (text od člověka). */
+  replaced: string | null;
 }
 
 export interface DiscoveryEvent {
@@ -50,6 +53,18 @@ const STEP_LABELS: [key: string, label: string, verifiedKey: string][] = [
   ["test", "Testy", "tests"],
   ["start", "Spuštění aplikace", "start"],
 ];
+
+/** Kroky, jejichž „ok" se počítá jako důkaz, že recept funguje (stejně jako v @farm/core). */
+const VERIFIED_KEYS = ["install", "build", "typecheck", "lint", "tests", "start"];
+
+/**
+ * Jak dlouho po události „zkoumá se" se ještě věří, že průzkum běží.
+ *
+ * Horní odhad jednoho kola sondy je ~3 × (12 min kontroly + 6 min start). Bez
+ * tohohle okna stačilo, aby běh skončil bez koncové události, a karta tvrdila
+ * „farma repozitář právě zkoumá" klidně 15 dní.
+ */
+const DISCOVERING_MAX_MS = 60 * 60_000;
 
 const HEADLINE: Record<RunRecipeState, { text: string; tone: RunRecipeTone }> = {
   discovering: { text: "Farma repozitář právě zkoumá.", tone: "info" },
@@ -87,25 +102,39 @@ export function runRecipeView(envRecipe: unknown, lastEvent?: DiscoveryEvent | n
         : key === "start"
           ? text(recipe.start)
           : text(commands?.[key]) ?? text(recipe[key]);
-    if (!command) continue;
-    steps.push({ key, label, command, state: stepState(verified, verifiedKey) });
+    if (command) {
+      steps.push({ key, label, command, state: stepState(verified, verifiedKey) });
+      continue;
+    }
+    // Krok, který selhal a farma ho z receptu vyhodila (pruneUnverifiedRecipe).
+    // Bez něj by varovný stav neměl v kartě žádný viditelný důvod.
+    if (verified?.[verifiedKey] === "failed") {
+      steps.push({ key, label, command: "", state: "failed" });
+    }
   }
 
   const discoveredAt = text(meta?.discoveredAt);
+  const eventAt = lastEvent ? new Date(lastEvent.ts).getTime() : Number.NaN;
   const running =
     lastEvent?.type === "project_discovery_started" &&
+    !Number.isNaN(eventAt) &&
     // Událost je novější než poslední dokončený recept → průzkum právě běží.
-    (!discoveredAt || new Date(lastEvent.ts).getTime() >= new Date(discoveredAt).getTime());
+    (!discoveredAt || eventAt >= new Date(discoveredAt).getTime()) &&
+    // …a ne starší, než může jedno kolo trvat (jinak je to zaseknutá událost).
+    Date.now() - eventAt < DISCOVERING_MAX_MS;
 
   let state: RunRecipeState;
-  if (running) state = "discovering";
-  else if (steps.length === 0) state = "missing";
-  else if (!meta || meta.source === "manual") state = "manual";
-  else {
-    const installOk = verified?.install === "ok";
-    const startOk = verified?.start === "ok";
-    const startFailed = verified?.start === "failed";
-    state = (installOk || startOk) && !startFailed && verified?.install !== "failed" ? "verified" : "failed";
+  if (running) {
+    state = "discovering";
+  } else if (meta && meta.source !== "manual") {
+    // Metadata se čtou DŘÍV než prázdnost kroků: po úplně neúspěšném průzkumu
+    // je recept prázdný (všechno se zahodilo), ale „zatím nic" by lhalo —
+    // farma to zkoušela a nepovedlo se.
+    state = viewVerificationPassed(verified, Boolean(text(recipe.start))) ? "verified" : "failed";
+  } else if (steps.length > 0) {
+    state = "manual";
+  } else {
+    state = "missing";
   }
 
   const services: string[] = [];
@@ -134,18 +163,37 @@ export function runRecipeView(envRecipe: unknown, lastEvent?: DiscoveryEvent | n
     commit: text(meta?.commit),
     attempts: Number.isFinite(attempts) && attempts > 0 ? attempts : null,
     notes: text(meta?.notes),
+    replaced: text(meta?.replaced),
   };
 }
 
-/** Krátký popisek stavu kroku (pro tooltip/štítek). */
-export function stepStateLabel(state: StepState): string {
+/**
+ * Stejné pravidlo jako `verificationPassed` v @farm/core: recept je ověřený,
+ * když nic podstatného neselhalo a aspoň jeden krok opravdu prošel. Projekt,
+ * který instalaci nepotřebuje a jehož jediná kontrola prošla, tedy není
+ * „neověřený" — dřív se tak hlásil a farma ho zbytečně přeměřovala.
+ */
+function viewVerificationPassed(verified: Record<string, unknown> | null, hasStart: boolean): boolean {
+  if (verified?.install === "failed" || verified?.start === "failed") return false;
+  if (hasStart && verified?.start !== "ok") return false;
+  return VERIFIED_KEYS.some((key) => verified?.[key] === "ok");
+}
+
+/**
+ * Krátký popisek stavu kroku (pro tooltip/štítek).
+ *
+ * `hasCommand` rozlišuje dvě velmi různé věci: krok, který projekt nemá, a krok,
+ * který v receptu JE, ale ověřit ho nešlo (např. start v lokálním režimu nebo
+ * bez potřebných služeb) — u toho by „projekt to nemá" bylo prostě nepravda.
+ */
+export function stepStateLabel(state: StepState, hasCommand = true): string {
   switch (state) {
     case "ok":
       return "ověřeno";
     case "failed":
       return "selhalo";
     case "skipped":
-      return "projekt to nemá";
+      return hasCommand ? "nešlo ověřit" : "projekt to nemá";
     case "unknown":
       return "neověřeno";
   }

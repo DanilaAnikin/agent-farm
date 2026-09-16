@@ -87,6 +87,7 @@ export const EVENT_META: Record<string, EventMeta> = {
   project_discovery_started: B("Farma zkoumá repozitář"),
   project_discovery_done: D("Farma ví, jak projekt spustit", "ok"),
   project_discovery_failed: B("Spuštění projektu se nepodařilo ověřit", "warn"),
+  project_discovery_deferred: B("Průzkum repozitáře se odložil", "warn"),
   qa_retry_scheduled: B("Testování se zopakuje později", "warn"),
   qa_started: B("Testování začalo"),
   qa_enqueued: N("Testování zařazeno"),

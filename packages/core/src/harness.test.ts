@@ -6,8 +6,10 @@ import {
   deriveHarnessPlan,
   detectPackageManager,
   extractWorkflowRunCommands,
+  hardenInstallCommand,
   harnessScript,
   installCommand,
+  qaInstallCommand,
   isHarnessRunBroken,
   newlyBrokenChecks,
   parseHarnessOutput,
@@ -129,6 +131,32 @@ test("detectPackageManager: lockfile má přednost, pak pole packageManager", ()
 test("installCommand: reprodukovatelná instalace podle lockfilu", () => {
   assert.equal(installCommand("npm"), "npm ci --ignore-scripts");
   assert.equal(installCommand("pnpm"), "pnpm install --frozen-lockfile --ignore-scripts");
+});
+
+test("hardenInstallCommand: instalace z receptu se dorovná na --ignore-scripts", () => {
+  assert.equal(hardenInstallCommand("pnpm install"), "pnpm install --ignore-scripts");
+  assert.equal(hardenInstallCommand("npm ci --ignore-scripts"), "npm ci --ignore-scripts");
+  assert.equal(
+    hardenInstallCommand("cd apps/web && npm install && npm run build"),
+    "cd apps/web && npm install --ignore-scripts && npm run build",
+  );
+  assert.equal(hardenInstallCommand("make setup"), "make setup", "neinstalační příkaz se nemění");
+});
+
+test("qaInstallCommand: QA potřebuje devDependencies i lifecycle skripty", () => {
+  assert.equal(qaInstallCommand("pnpm install --frozen-lockfile --ignore-scripts"), "pnpm install");
+  assert.equal(qaInstallCommand("npm ci --ignore-scripts"), "npm install");
+  assert.equal(qaInstallCommand("pnpm --filter @app/web install --ignore-scripts"), "pnpm --filter @app/web install");
+});
+
+test("deriveHarnessPlan: instalace z receptu jde do kontejneru jen v bezpečném tvaru", () => {
+  const plan = deriveHarnessPlan({
+    rootFiles: ["package.json", "package-lock.json"],
+    scripts: {},
+    workflowRuns: [],
+    envRecipe: { install: "npm install" },
+  });
+  assert.equal(plan.install, "npm install --ignore-scripts");
 });
 
 test("extractWorkflowRunCommands: jednořádkové i blokové run, bez ${{ }}", () => {

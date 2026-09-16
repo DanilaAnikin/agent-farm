@@ -22,6 +22,15 @@ const exec = promisify(execCb);
 const WORKER_LABEL = "farm.project";
 const GIT_VIEW_LABEL = "farm.git-view";
 const WORKER_NETWORK = process.env.WORKER_NETWORK ?? "workernet";
+/**
+ * Síť kontejnerů třídy judge (kontroly soudce, QA, průzkum repozitáře).
+ *
+ * Tady je SKUTEČNÁ hranice toho, co smí příkaz z receptu nebo z cizího repa
+ * udělat — ne allowlist hlav příkazů v @farm/core. Na `workernet` jsou i vnitřní
+ * služby farmy, takže kdo chce sondu opravdu izolovat, nastaví `JUDGE_NETWORK`
+ * na síť bez nich (jen s přístupem na registry balíčků).
+ */
+const JUDGE_NETWORK = process.env.JUDGE_NETWORK ?? WORKER_NETWORK;
 const OPENCODE_PORT = Number(process.env.WORKER_OPENCODE_PORT ?? 4096);
 const JUDGE_IMAGE = process.env.JUDGE_IMAGE ?? "agent-farm-judge:latest";
 
@@ -74,8 +83,14 @@ async function runHost(cmd: string, cwd: string, timeoutMs: number, env?: Record
     });
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
-    const e = err as { code?: number; stdout?: string; stderr?: string };
-    return { exitCode: typeof e.code === "number" ? e.code : 1, stdout: e.stdout ?? "", stderr: e.stderr ?? String(err) };
+    const e = err as { code?: number; killed?: boolean; signal?: string; stdout?: string; stderr?: string };
+    return {
+      exitCode: typeof e.code === "number" ? e.code : 1,
+      stdout: e.stdout ?? "",
+      stderr: e.stderr ?? String(err),
+      // Zabité časovačem `exec` → běh se nedokončil (stejně jako u kontejneru).
+      ...(e.killed === true || e.signal ? { timedOut: true } : {}),
+    };
   }
 }
 
@@ -176,12 +191,20 @@ export interface JudgeRunInput {
   timeoutMs?: number;
   /** Proměnné prostředí (bezpečné placeholdery z receptu projektu, nikdy tajemství). */
   env?: Record<string, string>;
+  /** Síť kontejneru; výchozí JUDGE_NETWORK. */
+  network?: string;
 }
 
 export interface JudgeRunResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * Běh NEDOBĚHL — kontejner zabil časovač. Výstup je useknutý, takže chybějící
+   * `*_EXIT` značky znamenají „neproběhlo", ne „selhalo"; volající to musí
+   * rozlišit, jinak z uťatého běhu udělá verdikt „všechno je rozbité".
+   */
+  timedOut?: boolean;
 }
 
 /**
@@ -218,7 +241,7 @@ export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunR
     HostConfig: {
       Runtime: cfg.workerDockerRuntime,
       Binds: [`${input.workspaceHostPath}:/workspace`],
-      NetworkMode: WORKER_NETWORK,
+      NetworkMode: input.network ?? JUDGE_NETWORK,
       AutoRemove: false,
       ...JUDGE_LIMITS,
     },
@@ -226,10 +249,13 @@ export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunR
   });
 
   await container.start();
-  // Volitelný časovač: po vypršení se kontejner zabije, výsledek se i tak přečte
-  // z logu (volající pozná useknutý běh podle chybějících `*_EXIT` značek).
+  // Volitelný časovač: po vypršení se kontejner zabije a výsledek se i tak
+  // přečte z logu. Že běh NEDOBĚHL, se ale volajícímu říká výslovně
+  // (`timedOut`) — v logu vypadá „nestihlo se to" a „všechno spadlo" stejně.
+  let timedOut = false;
   const timer = input.timeoutMs
     ? setTimeout(() => {
+        timedOut = true;
         container.kill().catch(() => undefined);
       }, input.timeoutMs)
     : null;
@@ -253,7 +279,7 @@ export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunR
     /* best-effort úklid */
   });
 
-  return { exitCode: waitRes.StatusCode ?? -1, stdout, stderr };
+  return { exitCode: waitRes.StatusCode ?? -1, stdout, stderr, timedOut };
 }
 
 /**
@@ -361,6 +387,8 @@ export interface RunAppAndTestInput {
   installCommand?: string;
   /** Proměnné prostředí (bezpečné placeholdery z receptu projektu). */
   env?: Record<string, string>;
+  /** Síť kontejneru; výchozí JUDGE_NETWORK. */
+  network?: string;
 }
 
 export interface RunAppAndTestResult {
@@ -455,7 +483,7 @@ export async function runAppAndTest(input: RunAppAndTestInput): Promise<RunAppAn
       HostConfig: {
         Runtime: cfg.workerDockerRuntime,
         Binds: [`${input.workspaceHostPath}:/workspace`, `${input.outputHostPath}:/out`, ...(gitView?.binds ?? [])],
-        NetworkMode: WORKER_NETWORK,
+        NetworkMode: input.network ?? JUDGE_NETWORK,
         AutoRemove: false,
         ...JUDGE_LIMITS,
       },

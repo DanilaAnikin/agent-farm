@@ -43,12 +43,17 @@ export function RunRecipeCard({
               <li key={step.key} className="flex items-start justify-between gap-3">
                 <span className="min-w-0">
                   <span className="block text-xs text-(--color-muted)">{step.label}</span>
-                  <code className="block truncate font-mono text-xs text-(--color-fg)" title={step.command}>
-                    {step.command}
-                  </code>
+                  {step.command ? (
+                    <code className="block truncate font-mono text-xs text-(--color-fg)" title={step.command}>
+                      {step.command}
+                    </code>
+                  ) : (
+                    // Krok, který se neověřil a farma ho z receptu vyhodila.
+                    <span className="block text-xs text-(--color-faint)">příkaz se neověřil, farma ho zahodila</span>
+                  )}
                 </span>
                 <Badge tone={STEP_TONE[step.state]} className="shrink-0">
-                  {stepStateLabel(step.state)}
+                  {stepStateLabel(step.state, step.command.length > 0)}
                 </Badge>
               </li>
             ))}
@@ -77,6 +82,10 @@ export function RunRecipeCard({
         ) : null}
 
         {view.notes ? <p className="text-xs text-(--color-faint)">{view.notes}</p> : null}
+
+        {view.replaced ? (
+          <p className="text-xs text-(--color-faint)">Dřívější ruční poznámka: {view.replaced}</p>
+        ) : null}
 
         {view.discoveredAt ? (
           <p className="text-[11px] text-(--color-faint)">

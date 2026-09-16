@@ -26,6 +26,7 @@ import { runDeliveryOnce } from "./delivery.js";
 import { Agent, setGlobalDispatcher } from "undici";
 import { shouldFarmRun } from "./settings.js";
 import { judgeSlots, workerSlots } from "./runtime-config.js";
+import { gateOnJudgeSlot } from "./judge-capacity.js";
 
 // Node global fetch (undici) má defaultní headersTimeout i bodyTimeout 300 s.
 // Volání modelu delší než pět minut proto umřelo na "TypeError: fetch failed" —
@@ -94,10 +95,13 @@ const LOOPS: LoopSpec[] = [
     fn: pausable(runDispatchOnce),
   })),
   // Víc judge slotů — judge (build/test v kontejneru) je taky paralelizovatelný.
+  // `gateOnJudgeSlot` drží stejný strop i vůči průzkumu repozitáře, který si bere
+  // tutéž třídu kontejneru (viz judge-capacity.ts); bez volného slotu kolo jen
+  // přeskočí, z fronty se nic nevybere.
   ...Array.from({ length: judgeSlots() }, (_, i) => ({
     name: `judge-${i + 1}`,
     everyMs: 3_000,
-    fn: pausable(runJudgeOnce),
+    fn: pausable(gateOnJudgeSlot(runJudgeOnce)),
   })),
   { name: "tester", everyMs: 4_000, fn: pausable(runQaLoop) },
   { name: "reconciliation", everyMs: 5 * 60_000, fn: runReconciliationOnce },

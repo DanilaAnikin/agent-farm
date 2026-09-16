@@ -52,6 +52,7 @@ import {
   loadConfig,
   wishMachine,
   detectPackageManager,
+  qaInstallCommand,
   runScriptCommand,
   sanitizeRecipeEnv,
   validateRecipeCommand,
@@ -757,8 +758,18 @@ async function detectRunConfig(
   const pm =
     detectPackageManager(rootFiles, typeof pkg?.packageManager === "string" ? pkg.packageManager : null) ?? "pnpm";
   // QA potřebuje i devDependencies a lifecycle skripty, proto prostá instalace
-  // (ne `--frozen-lockfile --ignore-scripts` jako u kontrol soudce).
-  base.installCommand = recipeCommand(recipe.install) ?? (pm === "npm" ? "npm install" : `${pm} install`);
+  // (ne `--frozen-lockfile --ignore-scripts` jako u kontrol soudce). Z receptu se
+  // proto bere jen správce balíčků a filtry workspace — příznaky si tester určí
+  // sám: recept podle kontraktu obsahuje právě tu přísnou variantu a s vypnutými
+  // lifecycle skripty se projekt závislý na postinstallu (prisma generate,
+  // playwright install, husky) nerozběhne, což je přesně to selhání
+  // („QA dependency installation failed"), které měl recept odstranit.
+  const recipeInstall = recipeCommand(recipe.install);
+  base.installCommand = recipeInstall
+    ? qaInstallCommand(recipeInstall)
+    : pm === "npm"
+      ? "npm install"
+      : `${pm} install`;
 
   const recipeStart = recipeCommand(recipe.start);
   if (recipeStart) {

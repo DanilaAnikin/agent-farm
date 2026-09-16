@@ -22,6 +22,7 @@ import { DeployStatus, type DeployRequestInfo } from "@/components/projects/Push
 import { ProjectMessageBox } from "@/components/projects/ProjectMessageBox";
 import { ProjectBrain } from "@/components/projects/ProjectBrain";
 import { RunRecipeCard } from "@/components/projects/RunRecipeCard";
+import { isDiscoverableProject } from "@farm/core";
 import { AutonomyControls } from "@/components/projects/AutonomyControls";
 import { effectiveWishStatus } from "@/components/projects/wish-status";
 import { SuggestionsPanel } from "@/components/home/SuggestionsPanel";
@@ -143,7 +144,12 @@ export default async function ProjectMissionControl({
       .from("events")
       .select("type, ts")
       .eq("project_id", id)
-      .in("type", ["project_discovery_started", "project_discovery_done", "project_discovery_failed"])
+      .in("type", [
+        "project_discovery_started",
+        "project_discovery_done",
+        "project_discovery_failed",
+        "project_discovery_deferred",
+      ])
       .order("ts", { ascending: false })
       .limit(1)
       .maybeSingle<{ type: string; ts: string }>(),
@@ -416,10 +422,15 @@ export default async function ProjectMissionControl({
             </CardBody>
           </Card>
 
-          <RunRecipeCard
-            envRecipe={project.env_recipe}
-            lastEvent={discoveryRes.error ? null : (discoveryRes.data ?? null)}
-          />
+          {/* Obsahový projekt a projekt bez repozitáře se nezkoumají (stejné
+              kritérium jako v orchestrátoru) — karta by jim slibovala průzkum,
+              který nikdy nepřijde, a člověk s tím nemá co dělat. */}
+          {isDiscoverableProject({ kind: project.kind, repoMode: project.repo_mode }) ? (
+            <RunRecipeCard
+              envRecipe={project.env_recipe}
+              lastEvent={discoveryRes.error ? null : (discoveryRes.data ?? null)}
+            />
+          ) : null}
 
           <Card>
             <CardHeader title="Agenti" description="Kdo právě pracuje na projektu." />

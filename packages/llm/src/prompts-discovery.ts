@@ -48,11 +48,17 @@ function rules(sandbox: RecipeSandbox): string {
     `SANDBOX (your commands run here, nowhere else):\n` +
     `- ${sandbox.image}\n` +
     `- NOT available: ${sandbox.missing.join(", ")}.\n` +
-    `- Only these programs may start a command: node, npm, npx, pnpm, yarn, bun, corepack, tsx, tsc, vitest, jest, playwright, ` +
+    `- Only these programs may start a command: node, npm, pnpm, yarn, bun, corepack, tsx, tsc, vitest, jest, playwright, ` +
     `biome, eslint, prettier, turbo, python, pip, uv, poetry, pytest, ruff, mypy, go, cargo, make, mvn, gradle, bundle, rake, ` +
     `composer, php, dotnet, deno, echo, mkdir, cd, export. One line per command; you may chain with && or ;.\n` +
-    `- FORBIDDEN and rejected automatically: sh/bash wrappers, curl, wget, pipes into an interpreter, sudo, rm, docker, ` +
-    `kubectl, git push, gh, publish, deploy, ssh, command substitution ($(…) or backticks), writing outside the workspace.\n\n` +
+    `- REJECTED automatically: sh/bash wrappers, curl, wget, pipes into an interpreter, sudo, rm, docker, kubectl, git push, ` +
+    `gh, publish, deploy, ssh, command substitution ($(…) or backticks), writing outside the workspace, and anything that ` +
+    `runs arbitrary code or fetches a package at run time: node/deno/bun -e|--eval|-p, python -c, npx, bunx, uvx, ` +
+    `pnpm|yarn|npm dlx, pip install from a URL.\n` +
+    `- The install command is stored with --ignore-scripts enforced, so do not rely on lifecycle scripts (postinstall) for the ` +
+    `checks. If the project cannot build without them, say so in "notes".\n` +
+    `- This filter catches obvious mistakes; it is NOT what keeps the system safe (the container and its network are). ` +
+    `Propose what the repository really needs, and nothing else.\n\n` +
     `RULES:\n` +
     `- Derive commands from the FACTS below, not from habit. The package manager comes from the lockfile: pnpm-lock.yaml → pnpm, ` +
     `package-lock.json → npm ci, yarn.lock → yarn, bun.lock → bun. Never answer "pnpm" for an npm repository.\n` +
