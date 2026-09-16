@@ -22,8 +22,9 @@ import {
   startOfUtcMonthIso,
 } from "./time";
 
-// Výchozí okno: levné hodiny 16:30–00:30 UTC, špička 00:30–16:30 UTC.
-const SPICKA = new Date("2026-09-15T10:00:00Z");
+// Výchozí okna (ceník DeepSeeku): levné 00:00–01:00, 04:00–06:00 a 10:00–00:00 UTC,
+// špička 01:00–04:00 a 06:00–10:00 UTC.
+const SPICKA = new Date("2026-09-15T08:00:00Z");
 const LEVNE = new Date("2026-09-15T18:00:00Z");
 
 // --- pauza -------------------------------------------------------------------
@@ -151,9 +152,9 @@ test("farmState: ve špičce stojí SPRÁVNĚ a řekne, kdy se pustí", () => {
   assert.equal(s.paused, true);
   assert.equal(s.tone, "info");
   assert.ok(s.nextResumeAt);
-  assert.equal(new Date(s.nextResumeAt!).toISOString(), "2026-09-15T16:30:00.000Z");
-  // Čas se člověku ukazuje v Praze (18:30), i když se okno počítá v UTC.
-  assert.match(s.detail, /18:30/);
+  assert.equal(new Date(s.nextResumeAt!).toISOString(), "2026-09-15T10:00:00.000Z");
+  // Čas se člověku ukazuje v Praze (12:00), i když se okno počítá v UTC.
+  assert.match(s.detail, /12:00/);
   assert.match(s.detail, /Europe\/Prague/);
 });
 
@@ -238,16 +239,24 @@ test("parseOffpeakWindows: vadné nastavení spadne na výchozí okno", () => {
   ]);
 });
 
-test("isOffpeakUtc: okno přes půlnoc platí na obou stranách", () => {
-  assert.equal(isOffpeakUtc(new Date("2026-09-15T16:29:00Z")), false);
-  assert.equal(isOffpeakUtc(new Date("2026-09-15T16:30:00Z")), true);
+test("isOffpeakUtc: hranice oken i okno přes půlnoc", () => {
+  // 10:00–00:00 je zapsané přes půlnoc, 00:00–01:00 na něj navazuje.
+  assert.equal(isOffpeakUtc(new Date("2026-09-15T09:59:00Z")), false);
+  assert.equal(isOffpeakUtc(new Date("2026-09-15T10:00:00Z")), true);
   assert.equal(isOffpeakUtc(new Date("2026-09-15T23:59:00Z")), true);
-  assert.equal(isOffpeakUtc(new Date("2026-09-15T00:29:00Z")), true);
-  assert.equal(isOffpeakUtc(new Date("2026-09-15T00:30:00Z")), false);
+  assert.equal(isOffpeakUtc(new Date("2026-09-15T00:59:00Z")), true);
+  assert.equal(isOffpeakUtc(new Date("2026-09-15T01:00:00Z")), false);
+  assert.equal(isOffpeakUtc(new Date("2026-09-15T03:59:00Z")), false);
+  assert.equal(isOffpeakUtc(new Date("2026-09-15T04:00:00Z")), true);
+  assert.equal(isOffpeakUtc(new Date("2026-09-15T05:59:00Z")), true);
+  assert.equal(isOffpeakUtc(new Date("2026-09-15T06:00:00Z")), false);
 });
 
 test("peakWindowsUtc: doplněk levných oken", () => {
-  assert.deepEqual(peakWindowsUtc(), [{ start: "00:30", end: "16:30" }]);
+  assert.deepEqual(peakWindowsUtc(), [
+    { start: "01:00", end: "04:00" },
+    { start: "06:00", end: "10:00" },
+  ]);
   assert.deepEqual(peakWindowsUtc([{ start: "01:00", end: "02:00" }]), [
     { start: "00:00", end: "01:00" },
     { start: "02:00", end: "24:00" },
@@ -259,11 +268,11 @@ test("nextOffpeakStart: v levném okně je odpověď 'hned'", () => {
 });
 
 test("nextOffpeakStart: ve špičce vrátí nejbližší začátek okna", () => {
-  assert.equal(nextOffpeakStart(SPICKA)?.toISOString(), "2026-09-15T16:30:00.000Z");
-  // Krátce po skončení okna se čeká na zítřek.
+  assert.equal(nextOffpeakStart(SPICKA)?.toISOString(), "2026-09-15T10:00:00.000Z");
+  // Krátce po skončení okna se čeká na to další téhož dne.
   assert.equal(
-    nextOffpeakStart(new Date("2026-09-15T00:31:00Z"))?.toISOString(),
-    "2026-09-15T16:30:00.000Z",
+    nextOffpeakStart(new Date("2026-09-15T01:01:00Z"))?.toISOString(),
+    "2026-09-15T04:00:00.000Z",
   );
 });
 

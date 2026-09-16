@@ -4,13 +4,13 @@ import { farmState } from "../../lib/farm-state";
 import { currentOffpeakStart, farmHeadline, farmShortReason } from "./farm-headline";
 
 test("krátký důvod na kartu projektu", () => {
-  const poledne = new Date("2026-09-15T12:00:00Z");
+  const poledne = new Date("2026-09-15T08:00:00Z");
   assert.equal(farmShortReason(farmState({}, poledne)), null);
   assert.equal(farmShortReason(farmState({ guard_ready: false }, poledne)), "zamčený rozpočtový hlídač");
   assert.equal(farmShortReason(farmState({ owner_pause: true }, poledne)), "pozastavil ji majitel");
   assert.equal(
     farmShortReason(farmState({ global_pause: true, pause_source: "offpeak" }, poledne)),
-    "drahé hodiny, sama se rozjede v 18:30",
+    "drahé hodiny, sama se rozjede v 12:00",
   );
   assert.equal(
     farmShortReason(farmState({ global_pause: true, pause_source: "credit" }, poledne)),
@@ -18,9 +18,9 @@ test("krátký důvod na kartu projektu", () => {
   );
 });
 
-// 12:00 UTC = špička (levné okno 16:30–00:30 UTC)
-const POLEDNE = new Date("2026-09-15T12:00:00Z");
-// 20:00 UTC = uvnitř levného okna
+// 08:00 UTC = špička (ceník DeepSeeku: 01–04 a 06–10 UTC)
+const POLEDNE = new Date("2026-09-15T08:00:00Z");
+// 20:00 UTC = uvnitř levného okna 10:00–00:00
 const VECER = new Date("2026-09-15T20:00:00Z");
 
 test("owner pause: věta o majiteli a frontě aktivních projektů", () => {
@@ -53,9 +53,9 @@ test("drahé hodiny: sama se rozjede v HH:MM (Praha)", () => {
     queuedActive: 0,
     now: POLEDNE,
   });
-  // 16:30 UTC = 18:30 SELČ
-  assert.equal(h.title, "Drahé hodiny DeepSeeku — farma se sama rozjede v 18:30");
-  assert.match(h.detail, /Za 4 h 30 min/);
+  // 10:00 UTC = 12:00 SELČ
+  assert.equal(h.title, "Drahé hodiny DeepSeeku — farma se sama rozjede v 12:00");
+  assert.match(h.detail, /Za 2 h/);
 });
 
 test("pauza v levném okně: plánovač ji měl pustit a nepustil", () => {
@@ -65,7 +65,7 @@ test("pauza v levném okně: plánovač ji měl pustit a nepustil", () => {
     queuedActive: 0,
     now: VECER,
   });
-  assert.equal(h.title, "Plánovač měl farmu pustit v 18:30 a nepustil");
+  assert.equal(h.title, "Plánovač měl farmu pustit v 12:00 a nepustil");
   assert.equal(h.tone, "danger");
 });
 
@@ -90,10 +90,11 @@ test("běží bez práce / s prací / s agenty", () => {
 });
 
 test("začátek aktuálního levného okna i přes půlnoc", () => {
-  assert.equal(currentOffpeakStart(VECER)?.toISOString(), "2026-09-15T16:30:00.000Z");
+  assert.equal(currentOffpeakStart(VECER)?.toISOString(), "2026-09-15T10:00:00.000Z");
+  // 00:10 UTC je už v navazujícím okně 00:00–01:00 téhož dne.
   assert.equal(
     currentOffpeakStart(new Date("2026-09-16T00:10:00Z"))?.toISOString(),
-    "2026-09-15T16:30:00.000Z",
+    "2026-09-16T00:00:00.000Z",
   );
   assert.equal(currentOffpeakStart(POLEDNE), null);
 });

@@ -143,7 +143,7 @@ test("budget_wait se neukáže, když aktivní projekty mají práci, nic neček
 test("budget_wait nepřebije pauzu ani zamčený hlídač", () => {
   assert.equal(farmState({ ...PRODUKCE, owner_pause: true }, VECER).code, "owner");
   assert.equal(farmState({ ...PRODUKCE, guard_ready: false }, VECER).code, "budget");
-  assert.equal(farmState({ ...PRODUKCE, global_pause: true, pause_source: "offpeak" }, new Date("2026-09-15T10:00:00Z")).code, "offpeak_expected");
+  assert.equal(farmState({ ...PRODUKCE, global_pause: true, pause_source: "offpeak" }, new Date("2026-09-15T08:00:00Z")).code, "offpeak_expected");
 });
 
 // --- jedno měsíční číslo ---------------------------------------------------------
