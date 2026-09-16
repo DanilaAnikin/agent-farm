@@ -91,23 +91,6 @@ export async function createProject(formData: FormData): Promise<ActionResult> {
     };
   }
 
-  let envRecipe: Record<string, unknown> = {};
-  const rawRecipe = String(formData.get("env_recipe") ?? "").trim();
-  if (rawRecipe) {
-    try {
-      const parsed: unknown = JSON.parse(rawRecipe);
-      // Musí to být prostý objekt — null/pole/číslo/string by rozbily NOT NULL
-      // jsonb sloupec i kontrakt orchestrátoru. Jinak ulož jako poznámku.
-      envRecipe =
-        parsed && typeof parsed === "object" && !Array.isArray(parsed)
-          ? (parsed as Record<string, unknown>)
-          : { note: rawRecipe };
-    } catch {
-      // Když to není validní JSON, ulož jako poznámku (orchestrátor si poradí).
-      envRecipe = { note: rawRecipe };
-    }
-  }
-
   const { data, error } = await supabase
     .from("projects")
     .insert({
@@ -116,7 +99,11 @@ export async function createProject(formData: FormData): Promise<ActionResult> {
       kind,
       repo_mode: repoMode,
       repo_url: repoUrl,
-      env_recipe: envRecipe,
+      // Recept „jak appku spustit" se od uživatele NEBERE. Pole v dialogu nikdo
+      // nikdy nevyplnil (všechny produkční projekty měly `{}`) a farma si to
+      // stejně musí umět zjistit sama: orchestrátor repozitář prozkoumá, recept
+      // ověří skutečným během v sandboxu a zapíše ho sem (project-discovery.ts).
+      env_recipe: {},
       // Farma je autonomní: specifikace se schvalují samy. Lidská brána tu nebude.
       trust_mode: true,
       monthly_budget_usd: monthly,

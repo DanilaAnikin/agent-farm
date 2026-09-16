@@ -48,7 +48,15 @@ import {
 } from "@farm/db";
 import type { QaScenario, AcceptanceCriterion } from "@farm/db";
 import { and, eq, desc, inArray } from "drizzle-orm";
-import { loadConfig, wishMachine } from "@farm/core";
+import {
+  loadConfig,
+  wishMachine,
+  detectPackageManager,
+  qaInstallCommand,
+  runScriptCommand,
+  sanitizeRecipeEnv,
+  validateRecipeCommand,
+} from "@farm/core";
 import {
   MODELS,
   structured,
@@ -238,8 +246,8 @@ async function executeQaWorkspace(ctx: QaContext, workspacePath: string, wishTas
   const fileTree = await buildFileTree(workspacePath);
   const grounding = await groundQaCommands({ workspacePath, criteria: acceptanceCriteria, tasks: wishTasks, hasSpec: !!spec });
 
-  // 2) Detekuj, jak appku spustit.
-  const runCfg = await detectRunConfig(workspacePath);
+  // 2) Detekuj, jak appku spustit (nejdřív podle ověřeného receptu projektu).
+  const runCfg = await detectRunConfig(workspacePath, project.envRecipe);
 
   // 3) Vygeneruj testovací scénáře (Tester plan).
   let planScenarios: TesterPlanOutput["scenarios"];
@@ -297,8 +305,10 @@ async function executeQaWorkspace(ctx: QaContext, workspacePath: string, wishTas
     scenarios: dockerScenarios,
     startCommand: hasWeb ? runCfg.startCommand : undefined,
     buildCommand: hasWeb ? runCfg.buildCommand : undefined,
-    portCandidates: PORT_CANDIDATES,
+    portCandidates: runCfg.portCandidates,
     timeoutMs: QA_WALL_CLOCK_MS,
+    installCommand: runCfg.installCommand,
+    env: runCfg.env,
   });
 
   const infrastructureFailure = qaInfrastructureFailure(run);
@@ -706,35 +716,89 @@ async function latestSpec(wishId: string): Promise<typeof specs.$inferSelect | u
 interface RunConfig {
   startCommand?: string;
   buildCommand?: string;
+  /** Jak nainstalovat závislosti uvnitř QA kontejneru. */
+  installCommand?: string;
+  /** Bezpečné placeholdery prostředí z receptu (nikdy produkční tajemství). */
+  env?: Record<string, string>;
+  /** Porty, na kterých runner hledá běžící server (port z receptu první). */
+  portCandidates: number[];
+}
+
+/** Příkaz z receptu použij jen tehdy, když projde bezpečnostní bránou. */
+function recipeCommand(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const command = value.trim();
+  return validateRecipeCommand(command).ok ? command : undefined;
 }
 
 /**
- * Detekuje z package.json, jak aplikaci spustit. Preferuje `dev` server
- * (rychlý start bez buildu); jinak build + start.
+ * Jak aplikaci spustit.
+ *
+ * PRVNÍ se ptáme na recept projektu (projects.env_recipe) — ten farma sama
+ * zjistila průzkumem repozitáře a OVĚŘILA reálným během v sandboxu. Teprve bez
+ * receptu se odvozuje z package.json, ale správce balíčků se bere z lockfilu:
+ * natvrdo `pnpm install` a `pnpm run dev` padalo u npm rep hned na instalaci
+ * („QA dependency installation failed" → qa_error → zaparkované přání).
  */
-async function detectRunConfig(workspacePath: string): Promise<RunConfig> {
+async function detectRunConfig(
+  workspacePath: string,
+  envRecipe?: Record<string, unknown> | null,
+): Promise<RunConfig> {
+  const recipe = (envRecipe ?? {}) as Record<string, unknown>;
+  const env = sanitizeRecipeEnv(recipe.env);
+  const port = Number(recipe.port);
+  const usePort = Number.isInteger(port) && port >= 80 && port <= 65535;
+  const base: RunConfig = {
+    portCandidates: usePort ? [port, ...PORT_CANDIDATES.filter((p) => p !== port)] : [...PORT_CANDIDATES],
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+  };
+
   const pkg = await readPackageJson(workspacePath);
-  if (!pkg) return {};
+  const rootFiles = await fs.readdir(workspacePath).catch(() => [] as string[]);
+  const pm =
+    detectPackageManager(rootFiles, typeof pkg?.packageManager === "string" ? pkg.packageManager : null) ?? "pnpm";
+  // QA potřebuje i devDependencies a lifecycle skripty, proto prostá instalace
+  // (ne `--frozen-lockfile --ignore-scripts` jako u kontrol soudce). Z receptu se
+  // proto bere jen správce balíčků a filtry workspace — příznaky si tester určí
+  // sám: recept podle kontraktu obsahuje právě tu přísnou variantu a s vypnutými
+  // lifecycle skripty se projekt závislý na postinstallu (prisma generate,
+  // playwright install, husky) nerozběhne, což je přesně to selhání
+  // („QA dependency installation failed"), které měl recept odstranit.
+  const recipeInstall = recipeCommand(recipe.install);
+  base.installCommand = recipeInstall
+    ? qaInstallCommand(recipeInstall)
+    : pm === "npm"
+      ? "npm install"
+      : `${pm} install`;
+
+  const recipeStart = recipeCommand(recipe.start);
+  if (recipeStart) {
+    const recipeBuild = recipeCommand(recipe.start_build);
+    return { ...base, startCommand: recipeStart, ...(recipeBuild ? { buildCommand: recipeBuild } : {}) };
+  }
+
+  if (!pkg) return base;
   const scripts: Record<string, string> = pkg.scripts ?? {};
   const has = (name: string): boolean => {
     const s = scripts[name];
     return typeof s === "string" && s.length > 0;
   };
+  const run = (name: string): string => runScriptCommand(pm, name);
 
-  if (has("dev")) return { startCommand: "pnpm run dev" };
-  if (has("start") && has("build")) return { startCommand: "pnpm run start", buildCommand: "pnpm run build" };
-  if (has("start")) return { startCommand: "pnpm run start" };
-  if (has("preview") && has("build")) return { startCommand: "pnpm run preview", buildCommand: "pnpm run build" };
-  if (has("serve")) return { startCommand: "pnpm run serve" };
-  return {};
+  if (has("dev")) return { ...base, startCommand: run("dev") };
+  if (has("start") && has("build")) return { ...base, startCommand: run("start"), buildCommand: run("build") };
+  if (has("start")) return { ...base, startCommand: run("start") };
+  if (has("preview") && has("build")) return { ...base, startCommand: run("preview"), buildCommand: run("build") };
+  if (has("serve")) return { ...base, startCommand: run("serve") };
+  return base;
 }
 
 async function readPackageJson(
   workspacePath: string,
-): Promise<{ scripts?: Record<string, string> } | null> {
+): Promise<{ scripts?: Record<string, string>; packageManager?: unknown } | null> {
   try {
     const raw = await fs.readFile(join(workspacePath, "package.json"), "utf8");
-    return JSON.parse(raw) as { scripts?: Record<string, string> };
+    return JSON.parse(raw) as { scripts?: Record<string, string>; packageManager?: unknown };
   } catch {
     return null;
   }

@@ -82,6 +82,12 @@ export const EVENT_META: Record<string, EventMeta> = {
   judge_harness_broken: D("Kontroly projektu jsou rozbité", "danger"),
   judge_harness_run_broken: B("Kontroly projektu se nepodařilo spustit", "danger"),
   judge_harness_ok: N("Kontroly projektu fungují", "ok"),
+
+  // --- průzkum repozitáře (jak projekt spustit) -----------------------------
+  project_discovery_started: B("Farma zkoumá repozitář"),
+  project_discovery_done: D("Farma ví, jak projekt spustit", "ok"),
+  project_discovery_failed: B("Spuštění projektu se nepodařilo ověřit", "warn"),
+  project_discovery_deferred: B("Průzkum repozitáře se odložil", "warn"),
   qa_retry_scheduled: B("Testování se zopakuje později", "warn"),
   qa_started: B("Testování začalo"),
   qa_enqueued: N("Testování zařazeno"),

@@ -22,6 +22,15 @@ const exec = promisify(execCb);
 const WORKER_LABEL = "farm.project";
 const GIT_VIEW_LABEL = "farm.git-view";
 const WORKER_NETWORK = process.env.WORKER_NETWORK ?? "workernet";
+/**
+ * Síť kontejnerů třídy judge (kontroly soudce, QA, průzkum repozitáře).
+ *
+ * Tady je SKUTEČNÁ hranice toho, co smí příkaz z receptu nebo z cizího repa
+ * udělat — ne allowlist hlav příkazů v @farm/core. Na `workernet` jsou i vnitřní
+ * služby farmy, takže kdo chce sondu opravdu izolovat, nastaví `JUDGE_NETWORK`
+ * na síť bez nich (jen s přístupem na registry balíčků).
+ */
+const JUDGE_NETWORK = process.env.JUDGE_NETWORK ?? WORKER_NETWORK;
 const OPENCODE_PORT = Number(process.env.WORKER_OPENCODE_PORT ?? 4096);
 const JUDGE_IMAGE = process.env.JUDGE_IMAGE ?? "agent-farm-judge:latest";
 
@@ -63,13 +72,25 @@ const JUDGE_LIMITS = {
 const FAKE_OPENCODE_URL = process.env.FAKE_OPENCODE_URL ?? "http://127.0.0.1:4020";
 
 /** Spustí shell příkaz na hostu (jen LOKÁLNÍ režim). */
-async function runHost(cmd: string, cwd: string, timeoutMs: number): Promise<JudgeRunResult> {
+async function runHost(cmd: string, cwd: string, timeoutMs: number, env?: Record<string, string>): Promise<JudgeRunResult> {
   try {
-    const { stdout, stderr } = await exec(cmd, { cwd, timeout: timeoutMs, shell: "/bin/bash", maxBuffer: 10 * 1024 * 1024 });
+    const { stdout, stderr } = await exec(cmd, {
+      cwd,
+      timeout: timeoutMs,
+      shell: "/bin/bash",
+      maxBuffer: 10 * 1024 * 1024,
+      ...(env && Object.keys(env).length > 0 ? { env: { ...process.env, ...env } } : {}),
+    });
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
-    const e = err as { code?: number; stdout?: string; stderr?: string };
-    return { exitCode: typeof e.code === "number" ? e.code : 1, stdout: e.stdout ?? "", stderr: e.stderr ?? String(err) };
+    const e = err as { code?: number; killed?: boolean; signal?: string; stdout?: string; stderr?: string };
+    return {
+      exitCode: typeof e.code === "number" ? e.code : 1,
+      stdout: e.stdout ?? "",
+      stderr: e.stderr ?? String(err),
+      // Zabité časovačem `exec` → běh se nedokončil (stejně jako u kontejneru).
+      ...(e.killed === true || e.signal ? { timedOut: true } : {}),
+    };
   }
 }
 
@@ -163,12 +184,36 @@ export interface JudgeRunInput {
   workspaceHostPath: string;
   /** Příkaz (shell) — typicky install && build && test && lint. */
   cmd: string;
+  /**
+   * Wall-clock strop běhu (ms). Bez něj drží zaseknutý install nebo test slot
+   * donekonečna — v produkci `container.wait()` žádný časovač nemá.
+   */
+  timeoutMs?: number;
+  /** Proměnné prostředí (bezpečné placeholdery z receptu projektu, nikdy tajemství). */
+  env?: Record<string, string>;
+  /** Síť kontejneru; výchozí JUDGE_NETWORK. */
+  network?: string;
 }
 
 export interface JudgeRunResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * Běh NEDOBĚHL — kontejner zabil časovač. Výstup je useknutý, takže chybějící
+   * `*_EXIT` značky znamenají „neproběhlo", ne „selhalo"; volající to musí
+   * rozlišit, jinak z uťatého běhu udělá verdikt „všechno je rozbité".
+   */
+  timedOut?: boolean;
+}
+
+/**
+ * Proměnné prostředí pro kontejner. Jména i hodnoty jsou už ověřené v @farm/core
+ * (sanitizeRecipeEnv); tady se pro jistotu useknou konce řádků, aby se nedal
+ * podstrčit další záznam.
+ */
+function envList(env: Record<string, string>): string[] {
+  return Object.entries(env).map(([k, v]) => `${k}=${String(v).replace(/[\n\r]/g, " ")}`);
 }
 
 /** Override the image's shell entrypoint; the script must remain one argument. */
@@ -183,7 +228,7 @@ export function judgeContainerCommand(cmd: string): { Entrypoint: string[]; Cmd:
 export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunResult> {
   if (LOCAL) {
     // Judge běží přímo na hostu ve worktree (bez Dockeru/gVisoru).
-    return runHost(input.cmd, input.workspaceHostPath, 5 * 60_000);
+    return runHost(input.cmd, input.workspaceHostPath, input.timeoutMs ?? 5 * 60_000, input.env);
   }
   const cfg = loadConfig();
   const docker = getDocker();
@@ -192,10 +237,11 @@ export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunR
     Image: JUDGE_IMAGE,
     ...judgeContainerCommand(input.cmd),
     Tty: false,
+    ...(input.env && Object.keys(input.env).length > 0 ? { Env: envList(input.env) } : {}),
     HostConfig: {
       Runtime: cfg.workerDockerRuntime,
       Binds: [`${input.workspaceHostPath}:/workspace`],
-      NetworkMode: WORKER_NETWORK,
+      NetworkMode: input.network ?? JUDGE_NETWORK,
       AutoRemove: false,
       ...JUDGE_LIMITS,
     },
@@ -203,7 +249,22 @@ export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunR
   });
 
   await container.start();
-  const waitRes = (await container.wait()) as { StatusCode?: number };
+  // Volitelný časovač: po vypršení se kontejner zabije a výsledek se i tak
+  // přečte z logu. Že běh NEDOBĚHL, se ale volajícímu říká výslovně
+  // (`timedOut`) — v logu vypadá „nestihlo se to" a „všechno spadlo" stejně.
+  let timedOut = false;
+  const timer = input.timeoutMs
+    ? setTimeout(() => {
+        timedOut = true;
+        container.kill().catch(() => undefined);
+      }, input.timeoutMs)
+    : null;
+  let waitRes: { StatusCode?: number };
+  try {
+    waitRes = (await container.wait()) as { StatusCode?: number };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   // Logy stáhneme jako jeden Buffer (Tty:false → multiplexovaný formát) a demuxujeme.
   const logBuf = (await container.logs({
@@ -218,7 +279,7 @@ export async function runJudgeContainer(input: JudgeRunInput): Promise<JudgeRunR
     /* best-effort úklid */
   });
 
-  return { exitCode: waitRes.StatusCode ?? -1, stdout, stderr };
+  return { exitCode: waitRes.StatusCode ?? -1, stdout, stderr, timedOut };
 }
 
 /**
@@ -319,6 +380,15 @@ export interface RunAppAndTestInput {
   portCandidates: number[];
   /** Celkový wall-clock strop na běh kontejneru (ms). */
   timeoutMs: number;
+  /**
+   * Jak nainstalovat závislosti. Dřív tu bylo natvrdo `pnpm install`, takže QA
+   * u npm/yarn repa padalo hned na instalaci („QA dependency installation failed").
+   */
+  installCommand?: string;
+  /** Proměnné prostředí (bezpečné placeholdery z receptu projektu). */
+  env?: Record<string, string>;
+  /** Síť kontejneru; výchozí JUDGE_NETWORK. */
+  network?: string;
 }
 
 export interface RunAppAndTestResult {
@@ -346,9 +416,14 @@ export interface RunAppAndTestResult {
 export async function runAppAndTest(input: RunAppAndTestInput): Promise<RunAppAndTestResult> {
   if (LOCAL) {
     // Tester běží na hostu: install + build + cli/api scénáře (web se přeskočí).
-    const install = await runHost("pnpm install --ignore-scripts", input.workspaceHostPath, 120_000);
+    const install = await runHost(
+      input.installCommand ?? "pnpm install --ignore-scripts",
+      input.workspaceHostPath,
+      120_000,
+      input.env,
+    );
     const build = input.buildCommand
-      ? await runHost(input.buildCommand, input.workspaceHostPath, 120_000)
+      ? await runHost(input.buildCommand, input.workspaceHostPath, 120_000, input.env)
       : { exitCode: 0, stdout: "", stderr: "" };
     const results: AppTestScenarioResult[] = [];
     for (const sc of input.scenarios) {
@@ -390,7 +465,7 @@ export async function runAppAndTest(input: RunAppAndTestInput): Promise<RunAppAn
   };
   await fs.writeFile(join(input.outputHostPath, "qa-config.json"), JSON.stringify(qaConfig), "utf8");
   await fs.writeFile(join(input.outputHostPath, "qa-runner.mjs"), QA_RUNNER_MJS, "utf8");
-  await fs.writeFile(join(input.outputHostPath, "run-qa.sh"), RUN_QA_SH, "utf8");
+  await fs.writeFile(join(input.outputHostPath, "run-qa.sh"), runQaScript(input.installCommand), "utf8");
 
   const gitView = input.projectId
     ? await prepareWorkerGitView(cfg.workspacesRoot, input.projectId, input.workspaceHostPath) : undefined;
@@ -402,11 +477,13 @@ export async function runAppAndTest(input: RunAppAndTestInput): Promise<RunAppAn
       Entrypoint: ["/bin/bash", "-lc"],
       Cmd: ["bash /out/run-qa.sh"],
       Tty: false,
-      Env: ["CI=1", "NEXT_TELEMETRY_DISABLED=1", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/workspace"],
+      // Proměnné z receptu jdou PRVNÍ, ať je farmou řízené prostředí (CI, telemetrie,
+      // cesta k prohlížečům) nepřepsatelné receptem z modelu.
+      Env: [...envList(input.env ?? {}), "CI=1", "NEXT_TELEMETRY_DISABLED=1", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/workspace"],
       HostConfig: {
         Runtime: cfg.workerDockerRuntime,
         Binds: [`${input.workspaceHostPath}:/workspace`, `${input.outputHostPath}:/out`, ...(gitView?.binds ?? [])],
-        NetworkMode: WORKER_NETWORK,
+        NetworkMode: input.network ?? JUDGE_NETWORK,
         AutoRemove: false,
         ...JUDGE_LIMITS,
       },
@@ -477,19 +554,27 @@ export async function runAppAndTest(input: RunAppAndTestInput): Promise<RunAppAn
   }
 }
 
-/** Shell wrapper: nastaví prostředí, nainstaluje deps a spustí ESM runner. */
-const RUN_QA_SH = [
-  "set +e",
-  'export NODE_PATH="$(npm root -g)"',
-  "export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
-  "cd /workspace",
-  "( corepack enable >/dev/null 2>&1 ) || true",
-  "( pnpm install ) >/out/install.log 2>&1",
-  "echo $? > /out/install.exit",
-  "node /out/qa-runner.mjs >/out/runner.log 2>&1",
-  "echo $? > /out/runner.exit",
-  "",
-].join("\n");
+/**
+ * Shell wrapper: nastaví prostředí, nainstaluje deps a spustí ESM runner.
+ * Instalační příkaz je parametr — natvrdo `pnpm install` rozbíjel QA u npm a
+ * yarn rep. Příkaz prochází allowlistem receptu (@farm/core), tady se navíc
+ * useknou konce řádků, aby do skriptu nešlo propašovat další řádek.
+ */
+function runQaScript(installCommand?: string): string {
+  const install = (installCommand ?? "pnpm install").replace(/[\n\r]/g, " ").trim() || "pnpm install";
+  return [
+    "set +e",
+    'export NODE_PATH="$(npm root -g)"',
+    "export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
+    "cd /workspace",
+    "( corepack enable >/dev/null 2>&1 ) || true",
+    `( ${install} ) >/out/install.log 2>&1`,
+    "echo $? > /out/install.exit",
+    "node /out/qa-runner.mjs >/out/runner.log 2>&1",
+    "echo $? > /out/runner.exit",
+    "",
+  ].join("\n");
+}
 
 /**
  * ESM test-runner spouštěný UVNITŘ judge-runner kontejneru.

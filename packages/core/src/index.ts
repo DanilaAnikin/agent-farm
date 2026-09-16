@@ -5,6 +5,7 @@ export * from "./dedup.js";
 export * from "./state-machines.js";
 export * from "./guardrails.js";
 export * from "./harness.js";
+export * from "./project-recipe.js";
 export * from "./merge-gate.js";
 export * from "./budget.js";
 export * from "./deepseek-pricing.js";
