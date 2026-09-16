@@ -192,7 +192,10 @@ test("deriveHarnessPlan: chybějící kontrola = null (nespouští se)", () => {
 test("harnessScript + parseHarnessOutput: značky exit, skipped i log", () => {
   const plan = deriveHarnessPlan({ rootFiles: ["pnpm-lock.yaml"], scripts: { build: "tsc", test: "vitest" }, workflowRuns: [] });
   const script = harnessScript(plan);
-  assert.match(script, /INSTALL_EXIT=\$\?/);
+  assert.match(script, /echo INSTALL_EXIT=\$INSTALL_RC/);
+  // Při selhání instalace se vypíše i konec jejího logu — jinak je „INSTALL_EXIT=1"
+  // bez jediného slova proč (soudce ani průzkum repozitáře z toho nic nezjistí).
+  assert.match(script, /INSTALL_LOG: /);
   assert.match(script, /LINT_EXIT=0; echo LINT_SKIPPED=1/);
   const run = parseHarnessOutput(
     ["INSTALL_EXIT=0", "BUILD_EXIT=0", "TEST_EXIT=1", "TEST_LOG: expected 2 got 3", "LINT_EXIT=0", "LINT_SKIPPED=1", "TYPECHECK_EXIT=0", "TYPECHECK_SKIPPED=1"].join("\n"),
@@ -201,6 +204,13 @@ test("harnessScript + parseHarnessOutput: značky exit, skipped i log", () => {
   assert.equal(run.exits.tests, 1);
   assert.deepEqual(run.skipped, ["lint", "typecheck"]);
   assert.equal(run.logs.tests, "expected 2 got 3");
+  assert.equal(run.installLog, undefined);
+
+  const broken = parseHarnessOutput(
+    ["INSTALL_EXIT=1", "INSTALL_LOG: ERR_PNPM_OUTDATED_LOCKFILE", "INSTALL_LOG: lockfile is not up to date"].join("\n"),
+  );
+  assert.equal(broken.install, 1);
+  assert.equal(broken.installLog, "ERR_PNPM_OUTDATED_LOCKFILE\nlockfile is not up to date");
 });
 
 test("isHarnessRunBroken: chybějící výstup nebo vše červené = porucha harnessu", () => {

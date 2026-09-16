@@ -21,6 +21,7 @@ import { PauseResumeButton } from "@/components/projects/PauseResumeButton";
 import { DeployStatus, type DeployRequestInfo } from "@/components/projects/PushToProductionButton";
 import { ProjectMessageBox } from "@/components/projects/ProjectMessageBox";
 import { ProjectBrain } from "@/components/projects/ProjectBrain";
+import { RunRecipeCard } from "@/components/projects/RunRecipeCard";
 import { AutonomyControls } from "@/components/projects/AutonomyControls";
 import { effectiveWishStatus } from "@/components/projects/wish-status";
 import { SuggestionsPanel } from "@/components/home/SuggestionsPanel";
@@ -82,6 +83,7 @@ export default async function ProjectMissionControl({
     eventsRes,
     costRes,
     qaRes,
+    discoveryRes,
   ] = await Promise.all([
     getFarmRunState(),
     getBudgetSnapshot(),
@@ -135,6 +137,16 @@ export default async function ProjectMissionControl({
       .eq("project_id", id)
       .order("created_at", { ascending: false })
       .limit(200),
+    // Poslední krok průzkumu repozitáře — podle něj karta pozná, že farma
+    // repozitář právě zkoumá (recept se teprve rodí).
+    supabase
+      .from("events")
+      .select("type, ts")
+      .eq("project_id", id)
+      .in("type", ["project_discovery_started", "project_discovery_done", "project_discovery_failed"])
+      .order("ts", { ascending: false })
+      .limit(1)
+      .maybeSingle<{ type: string; ts: string }>(),
   ]);
 
   const state = farmState(
@@ -403,6 +415,11 @@ export default async function ProjectMissionControl({
               <AutonomyControls projectId={id} initial={project.autonomy ?? {}} trustMode={project.trust_mode} />
             </CardBody>
           </Card>
+
+          <RunRecipeCard
+            envRecipe={project.env_recipe}
+            lastEvent={discoveryRes.error ? null : (discoveryRes.data ?? null)}
+          />
 
           <Card>
             <CardHeader title="Agenti" description="Kdo právě pracuje na projektu." />

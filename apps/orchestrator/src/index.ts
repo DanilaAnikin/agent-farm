@@ -19,6 +19,7 @@ import { runLitellmSyncOnce } from "./litellm-sync.js";
 import { runSpendSyncOnce } from "./spend-sync.js";
 import { runSuggestionsOnce, runSelfRunOnce } from "./suggestions.js";
 import { runSupervisorOnce } from "./supervisor.js";
+import { runProjectDiscoveryOnce } from "./project-discovery.js";
 import { runAutoDeliverOnce } from "./auto-deliver.js";
 import { runDeliveryOnce } from "./delivery.js";
 
@@ -109,6 +110,9 @@ const LOOPS: LoopSpec[] = [
   { name: "suggestions", everyMs: 5 * 60_000, fn: pausable(runSuggestionsOnce) },
   { name: "self-run", everyMs: 60_000, fn: pausable(runSelfRunOnce) },
   { name: "supervisor", everyMs: 30 * 60_000, fn: pausable(runSupervisorOnce) },
+  // Průzkum repozitáře: farma si sama zjistí (a v sandboxu ověří), jak projekt
+  // spustit. Vlastní smyčka schválně — dispatch nesmí čekat, až sonda doběhne.
+  { name: "project-discovery", everyMs: 10 * 60_000, fn: pausable(runProjectDiscoveryOnce) },
   { name: "auto-deliver", everyMs: 45_000, fn: pausable(runAutoDeliverOnce) },
   // Merge smyčka ZÁMĚRNĚ bez `pausable`: sloučení PR nestojí žádné tokeny a
   // autonomní farma nemá čekat na konec off-peaku ani na reset rozpočtu. Vypínač

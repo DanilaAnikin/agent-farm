@@ -251,7 +251,13 @@ const MARKER: Record<HarnessCheck, string> = {
 export function harnessScript(plan: HarnessPlan): string {
   const parts = ["set +e", "( corepack enable >/dev/null 2>&1 ) || true"];
   if (plan.install) {
-    parts.push(`( ${plan.install} ) >/tmp/install.log 2>&1; echo INSTALL_EXIT=$?`);
+    // Konec logu se vypisuje jen při SELHÁNÍ instalace: dřív se `INSTALL_EXIT=1`
+    // objevil bez jediného slova proč, takže „kontroly nešly spustit" nešlo
+    // vyšetřit ani soudci, ani průzkumu repozitáře (ten z toho staví opravné kolo).
+    parts.push(
+      `( ${plan.install} ) >/tmp/install.log 2>&1; INSTALL_RC=$?; echo INSTALL_EXIT=$INSTALL_RC; ` +
+        `[ "$INSTALL_RC" -eq 0 ] || tail -c 1500 /tmp/install.log | sed 's/^/INSTALL_LOG: /'`,
+    );
   } else {
     parts.push("echo INSTALL_EXIT=0; echo INSTALL_SKIPPED=1");
   }
@@ -274,6 +280,8 @@ export interface HarnessRun {
   skipped: HarnessCheck[];
   /** Konec logu padajících kontrol (pro poznámku workerovi). */
   logs: Partial<Record<HarnessCheck, string>>;
+  /** Konec logu instalace — jen když instalace selhala. */
+  installLog?: string;
 }
 
 function markerExit(stdout: string, marker: string): number {
@@ -295,7 +303,17 @@ export function parseHarnessOutput(stdout: string): HarnessRun {
       .map((l) => l.slice(m.length + 6));
     if (lines.length > 0) logs[check] = lines.join("\n");
   }
-  return { install: markerExit(stdout, "INSTALL_EXIT"), exits, skipped, logs };
+  const installLines = stdout
+    .split("\n")
+    .filter((l) => l.startsWith("INSTALL_LOG: "))
+    .map((l) => l.slice("INSTALL_LOG: ".length));
+  return {
+    install: markerExit(stdout, "INSTALL_EXIT"),
+    exits,
+    skipped,
+    logs,
+    ...(installLines.length > 0 ? { installLog: installLines.join("\n") } : {}),
+  };
 }
 
 export function checkOk(run: HarnessRun, check: HarnessCheck): boolean {

@@ -6,3 +6,4 @@ export * from "./schemas.js";
 export * from "./prompts.js";
 export * from "./prompts-brief.js";
 export * from "./prompts-qa.js";
+export * from "./prompts-discovery.js";

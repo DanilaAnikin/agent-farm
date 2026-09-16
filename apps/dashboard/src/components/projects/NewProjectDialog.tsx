@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createProject } from "@/app/actions/projects";
 import { Button } from "@/components/ui/Button";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTrigger } from "@/components/ui/Dialog";
-import { Field, Input, Select, Textarea } from "@/components/ui/Field";
+import { Field, Input, Select } from "@/components/ui/Field";
 import { formatUsd } from "@/lib/format";
 import type { RepoMode } from "@/lib/types";
 
@@ -49,7 +49,7 @@ export function NewProjectDialog({
       <DialogTrigger>{trigger ?? <Button>Nový projekt</Button>}</DialogTrigger>
       <DialogContent
         title="Nový projekt"
-        description="Jeden projekt na jednu věc — vlastní agenti, rozpočty a repozitář. Farma na něm pracuje sama, bez schvalování."
+        description="Jeden projekt na jednu věc — vlastní agenti, rozpočty a repozitář. Farma na něm pracuje sama, bez schvalování: repozitář si prozkoumá a sama zjistí, jak se projekt instaluje, kontroluje a spouští."
       >
         <form action={onSubmit} className="space-y-4">
           <Field label="Název" htmlFor="name">
@@ -79,22 +79,9 @@ export function NewProjectDialog({
           </div>
 
           {repoMode === "existing" ? (
-            <>
-              <Field label="URL repozitáře" htmlFor="repo_url">
-                <Input id="repo_url" name="repo_url" placeholder="https://github.com/…" />
-              </Field>
-              <Field
-                label="Jak appku spustit"
-                htmlFor="env_recipe"
-                hint="bez produkčních přístupových údajů (JSON nebo popis)"
-              >
-                <Textarea
-                  id="env_recipe"
-                  name="env_recipe"
-                  placeholder='{ "setup": "supabase start", "env_example": ".env.example" }'
-                />
-              </Field>
-            </>
+            <Field label="URL repozitáře" htmlFor="repo_url" hint="jak ho spustit, zjistí farma sama">
+              <Input id="repo_url" name="repo_url" placeholder="https://github.com/…" />
+            </Field>
           ) : null}
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
