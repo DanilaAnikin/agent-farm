@@ -44,12 +44,23 @@ export interface UtcWindow {
 }
 
 /**
- * Výchozí levné okno DeepSeeku v UTC (16:30–00:30). Farma mimo něj sama stojí,
- * protože ve špičce stojí tytéž tokeny několikanásobek. Autoritativní hodnota
- * je `farm_settings.offpeak_windows_utc`; tohle je fallback, když klíč chybí.
- * Stejná výchozí hodnota je i v migraci 0013 (funkce farm_attention).
+ * Výchozí levná okna DeepSeeku v UTC. Farma mimo ně sama stojí, protože ve
+ * špičce stojí tytéž tokeny dvojnásobek. Ceník: špička 01:00–04:00 a
+ * 06:00–10:00 UTC, takže levné je 00:00–01:00, 04:00–06:00 a 10:00–00:00.
+ * Poslední okno je zapsané přes půlnoc schválně: „24:00" by `hhmmToMinutes`
+ * odmítl (hodina > 23) a okno by se zahodilo.
+ *
+ * Ceník má špičku jen v pracovní dny, tenhle tvar ale den v týdnu neumí —
+ * o víkendu proto ukazuje špičku, která ve skutečnosti není. Autoritativní
+ * hodnota je `farm_settings.offpeak_windows_utc` (migrace 0018 ji seedne);
+ * tohle je jen fallback, když klíč chybí. Stejnou záložní hodnotu má i
+ * `farm_attention` v migracích 0013 a 0017.
  */
-export const DEFAULT_OFFPEAK_WINDOWS_UTC: UtcWindow[] = [{ start: "16:30", end: "00:30" }];
+export const DEFAULT_OFFPEAK_WINDOWS_UTC: UtcWindow[] = [
+  { start: "00:00", end: "01:00" },
+  { start: "04:00", end: "06:00" },
+  { start: "10:00", end: "00:00" },
+];
 
 const HHMM = /^(\d{1,2}):(\d{2})$/;
 
@@ -95,7 +106,7 @@ export function isOffpeakUtc(
     if (od <= do_) {
       if (ted >= od && ted < do_) return true;
     } else if (ted >= od || ted < do_) {
-      // okno přes půlnoc (16:30 → 00:30)
+      // okno přes půlnoc (10:00 → 00:00)
       return true;
     }
   }
@@ -104,7 +115,7 @@ export function isOffpeakUtc(
 
 /**
  * Doplněk levných oken = ŠPIČKA (drahé hodiny). Vrací se v UTC a v pořadí dne.
- * Používá se jen pro popisky („farma stojí do 16:30 UTC"), ne pro rozhodování.
+ * Používá se jen pro popisky („farma stojí do 10:00 UTC"), ne pro rozhodování.
  */
 export function peakWindowsUtc(
   windows: UtcWindow[] = DEFAULT_OFFPEAK_WINDOWS_UTC,
