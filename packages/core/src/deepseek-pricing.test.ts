@@ -64,11 +64,13 @@ test("ceník: mimo špičku je přesně polovina a aliasy sedí na ceník hlída
     assert.equal(off.outputUsdPerM * 2, peak.outputUsdPerM);
     assert.ok(Math.abs(off.cachedInputUsdPerM * 2 - peak.cachedInputUsdPerM) < 1e-12);
   }
-  assert.equal(DEEPSEEK_MODEL_BY_ALIAS.worker, "deepseek-flash");
-  assert.equal(DEEPSEEK_MODEL_BY_ALIAS.cheap, "deepseek-flash");
-  for (const alias of ["manager", "judge", "worker-hard", "worker-fallback", "media-vlm"]) {
-    assert.equal(DEEPSEEK_MODEL_BY_ALIAS[alias], "deepseek-v4-pro", alias);
+  // Na Flashi jede všechno kromě poslední záchrany (třetí pokus). Kdyby se sem
+  // někdy vrátil Pro u běžné role, musí to test připomenout: každý požadavek na Pru
+  // stojí ~5,4× víc a farma má denní strop 0,60 US$.
+  for (const alias of ["manager", "worker", "worker-hard", "judge", "cheap", "media-vlm"]) {
+    assert.equal(DEEPSEEK_MODEL_BY_ALIAS[alias], "deepseek-flash", alias);
   }
+  assert.equal(DEEPSEEK_MODEL_BY_ALIAS["worker-fallback"], "deepseek-v4-pro");
 });
 
 test("cena požadavku: cache sleva jen na věrohodný počet zásahů", () => {

@@ -272,7 +272,9 @@ test("agentHealthSummary: tepající idle manager je živý, netepající busy j
 
 test("modelLabel: aliasy na skutečný model a zkrácený popisek", () => {
   assert.equal(modelLabel("worker"), "DeepSeek Flash");
-  assert.equal(modelLabel("worker-hard"), "DeepSeek V4 Pro");
+  assert.equal(modelLabel("worker-hard"), "DeepSeek Flash");
+  // Jediná role na dražším modelu: poslední záchrana u třetího pokusu.
+  assert.equal(modelLabel("worker-fallback"), "DeepSeek V4 Pro");
   assert.equal(modelLabel("deepseek/deepseek-v4-flash"), "DeepSeek V4 Flash");
   assert.equal(modelLabel(null), "—");
   // Uložené (historické) řádky se aliasem nepřekládají: alias worker jel do 16. 9. 2026

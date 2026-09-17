@@ -50,11 +50,13 @@ PRICES = {
         "deepseek-v4-pro": (Decimal("0.66"), Decimal("1.98"), Decimal("0.022")),
     },
 }
+# Everything runs on Flash except the last-resort tier; see DEEPSEEK_MODEL_BY_ALIAS
+# in packages/core/src/deepseek-pricing.ts for the measurements behind that split.
 MODEL_ALIASES = {
-    "manager": "deepseek-v4-pro", "worker": "deepseek-flash",
-    "worker-hard": "deepseek-v4-pro", "worker-fallback": "deepseek-v4-pro",
-    "judge": "deepseek-v4-pro", "cheap": "deepseek-flash",
-    "media-vlm": "deepseek-v4-pro",
+    "manager": "deepseek-flash", "worker": "deepseek-flash",
+    "worker-hard": "deepseek-flash", "worker-fallback": "deepseek-v4-pro",
+    "judge": "deepseek-flash", "cheap": "deepseek-flash",
+    "media-vlm": "deepseek-flash",
 }
 # Provider model id behind each reviewed price key. The routing map in config.yaml
 # must use exactly these; `usage()` normalizes the name a response reports back.

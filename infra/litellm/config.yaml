@@ -30,7 +30,7 @@
 model_list:
 - model_name: manager
   litellm_params:
-    model: deepseek/deepseek-v4-pro
+    model: deepseek/deepseek-flash
     api_key: os.environ/DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com
     max_tokens: 4096
@@ -40,9 +40,9 @@ model_list:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 6.6e-07
-    output_cost_per_token: 1.98e-06
-    cache_read_input_token_cost: 2.2e-08
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 6.0e-07
+    cache_read_input_token_cost: 3.0e-09
 - model_name: worker
   litellm_params:
     model: deepseek/deepseek-flash
@@ -60,7 +60,7 @@ model_list:
     cache_read_input_token_cost: 3.0e-09
 - model_name: worker-hard
   litellm_params:
-    model: deepseek/deepseek-v4-pro
+    model: deepseek/deepseek-flash
     api_key: os.environ/DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com
     max_tokens: 4096
@@ -70,9 +70,9 @@ model_list:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 6.6e-07
-    output_cost_per_token: 1.98e-06
-    cache_read_input_token_cost: 2.2e-08
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 6.0e-07
+    cache_read_input_token_cost: 3.0e-09
 - model_name: worker-fallback
   litellm_params:
     model: deepseek/deepseek-v4-pro
@@ -90,7 +90,7 @@ model_list:
     cache_read_input_token_cost: 2.2e-08
 - model_name: judge
   litellm_params:
-    model: deepseek/deepseek-v4-pro
+    model: deepseek/deepseek-flash
     api_key: os.environ/DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com
     max_tokens: 4096
@@ -100,9 +100,9 @@ model_list:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 6.6e-07
-    output_cost_per_token: 1.98e-06
-    cache_read_input_token_cost: 2.2e-08
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 6.0e-07
+    cache_read_input_token_cost: 3.0e-09
 - model_name: cheap
   litellm_params:
     model: deepseek/deepseek-flash
@@ -120,7 +120,7 @@ model_list:
     cache_read_input_token_cost: 3.0e-09
 - model_name: media-vlm
   litellm_params:
-    model: deepseek/deepseek-v4-pro
+    model: deepseek/deepseek-flash
     api_key: os.environ/DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com
     max_tokens: 4096
@@ -130,9 +130,9 @@ model_list:
       thinking:
         type: disabled
   model_info:
-    input_cost_per_token: 6.6e-07
-    output_cost_per_token: 1.98e-06
-    cache_read_input_token_cost: 2.2e-08
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 6.0e-07
+    cache_read_input_token_cost: 3.0e-09
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 0

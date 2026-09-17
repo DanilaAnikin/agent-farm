@@ -75,8 +75,9 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(set(g.MODEL_ALIASES.values()), set(g.PROVIDER_MODELS))
         # Everyday developer work runs on Flash; planning, review and post-failure
         # escalation stay on Pro, so a retry never repeats on the weaker model.
-        self.assertEqual({alias for alias, model in g.MODEL_ALIASES.items() if model == 'deepseek-flash'},
-                         {'worker', 'cheap'})
+        # Everything rides the cheap model; only the last-resort tier may cost more.
+        self.assertEqual({alias for alias, model in g.MODEL_ALIASES.items() if model == 'deepseek-v4-pro'},
+                         {'worker-fallback'})
         for route in routes:
             params = route['litellm_params']
             incoming, outgoing, cached = g.PRICES[g.OFFPEAK][g.MODEL_ALIASES[route['model_name']]]
@@ -109,7 +110,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(req["max_tokens"], 4096)
 
     def test_output_is_bounded_and_pro_uses_peak_price(self):
-        req = body(model="worker-hard", max_completion_tokens=100_000)
+        req = body(model="worker-fallback", max_completion_tokens=100_000)
         e = g.estimate(req, "completion")
         self.assertEqual(e.model_id, "deepseek-v4-pro")
         self.assertEqual(e.output_bound, 4096)

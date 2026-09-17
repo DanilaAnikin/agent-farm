@@ -326,7 +326,7 @@ export const GUARD_WORKER_CONTEXT_BYTES = 140_000;
  * pak nikdy není VOLNĚJŠÍ než dispatch se skutečným modelem — jinak by budget-hold
  * projekt obnovil a dispatch ho hned zase zavřel (flapping).
  */
-const STRONGEST_WORKER_ALIAS = "worker-hard";
+const STRONGEST_WORKER_ALIAS = "worker-fallback";
 
 export interface GuardReserveInput {
   /** Alias okruhu (worker, worker-hard, …). Neznámý → nejdražší model žebříku. */
