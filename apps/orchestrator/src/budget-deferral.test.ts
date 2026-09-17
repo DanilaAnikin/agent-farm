@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   admissionBlockedScope,
+  budgetBlockTarget,
   budgetClassLabel,
   budgetWindowResetAt,
   classifyBudgetDeferral,
@@ -250,6 +251,17 @@ test("allowance totals come from the caller when given (reset lifecycle, no LIMI
   assert.equal(decideAllowanceDeferral({ committed: true, resumeRef: B, startRef: A, prior: progressedPrior, totalPrior: 1 }).action, "defer");
   // Celkový počet mimo okno 20 událostí pojistku drží.
   assert.deepEqual(decideAllowanceDeferral({ committed: true, resumeRef: B, startRef: A, prior: progressedPrior, totalPrior: 6 }), { action: "park", stalled: 0, reason: "total" });
+});
+
+test("vyčerpané přání odkládá přání, ne celý projekt", () => {
+  // Scope 'wish' se testuje až po všech širších stropech, takže projekt může
+  // pokračovat jinou prací. Ostatní scopy zavírají projekt jako dřív.
+  assert.equal(budgetBlockTarget("wish"), "wish");
+  assert.equal(budgetBlockTarget("project"), "project");
+  assert.equal(budgetBlockTarget("user"), "project");
+  assert.equal(budgetBlockTarget("farm"), "project");
+  assert.equal(budgetBlockTarget("farm_month"), "project");
+  assert.equal(budgetBlockTarget(null), "none");
 });
 
 test("texts: remaining attempts from one checkpoint and truthful park follow-ups", () => {

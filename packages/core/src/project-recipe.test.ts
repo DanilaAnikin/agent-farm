@@ -464,3 +464,24 @@ test("obsahový projekt a projekt bez repozitáře se nezkoumají", () => {
   assert.equal(isDiscoverableProject({ kind: "content", repoMode: "existing" }), false);
   assert.equal(isDiscoverableProject({ kind: "code", repoMode: "none" }), false);
 });
+
+test("model smí vrátit tolik proměnných, kolik jich sám dostal ve faktech", () => {
+  // Regrese z produkce (contentgen, 16.–17. 9. 2026): fakta o repu nabízela až 60
+  // názvů proměnných, ale validace návrhu odmítala víc než 40 — průzkum tak padal
+  // donekonečna na „env: nejvýš 40 proměnných", ačkoli přebytek stejně zahodí
+  // sanitizeRecipeEnv. Limity proto musí zůstat shodné.
+  const env = (n: number): Record<string, string> =>
+    Object.fromEntries(Array.from({ length: n }, (_, i) => [`VAR_${i}`, "x"]));
+
+  // Repo s 80 proměnnými: fakta si je sama ořežou na svůj strop. Kolik jich projde
+  // do promptu, tolik jich model smí vrátit — víc už nabídnout nemá kde.
+  const facts = buildRepoFacts({
+    paths: [".env.example"],
+    files: { ".env.example": Object.keys(env(80)).map((n) => `${n}=`).join("\n") },
+  });
+  const nabidnuto = facts.envVarNames.length;
+  assert.ok(nabidnuto >= 60, `fakta nabízejí ${nabidnuto} názvů`);
+
+  assert.equal(validateRecipeProposal({ install: "pnpm install", env: env(nabidnuto) }), true);
+  assert.equal(Object.keys(sanitizeRecipeEnv(env(nabidnuto))).length, nabidnuto);
+});
