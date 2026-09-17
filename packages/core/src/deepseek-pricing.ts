@@ -45,17 +45,26 @@ export const DEEPSEEK_PRICES: Record<PriceTier, Record<DeepseekModel, DeepseekPr
 
 /**
  * Alias okruhu → model. MUSÍ odpovídat MODEL_ALIASES v hlídači i `model` v
- * infra/litellm/config.yaml. Běžná vývojářská práce (worker) a krátká systémová
- * volání (cheap) jedou na Flash; plánování, hodnocení a eskalace po selhání na Pro.
+ * infra/litellm/config.yaml.
+ *
+ * Na Flashi jede VŠECHNO kromě poslední záchrany. Pro je ~5,4× dražší na požadavek
+ * (17. 9. 2026: 119 požadavků na Pru 0,3043 US$ vs 389 na Flashi 0,1833 US$) a sám
+ * manažer spotřeboval 26 požadavky skoro tolik co Flash 389. Eskalace na Pro se
+ * přitom neprokázala: `worker-hard` měl za 7 dní 3 pokusy a ani jeden úspěšný.
+ *
+ * `worker-fallback` zůstává na Pru schválně: sáhne se po něm až u třetího pokusu
+ * (routeWorkerModel), takže při zdravém provozu stojí 0 US$, ale úkol, který Flash
+ * dvakrát nezvládl, dostane ještě jednu šanci na silnějším modelu místo toho, aby
+ * spálil příděl a zaparkoval.
  */
 export const DEEPSEEK_MODEL_BY_ALIAS: Record<string, DeepseekModel> = {
-  manager: "deepseek-v4-pro",
+  manager: "deepseek-flash",
   worker: "deepseek-flash",
-  "worker-hard": "deepseek-v4-pro",
+  "worker-hard": "deepseek-flash",
   "worker-fallback": "deepseek-v4-pro",
-  judge: "deepseek-v4-pro",
+  judge: "deepseek-flash",
   cheap: "deepseek-flash",
-  "media-vlm": "deepseek-v4-pro",
+  "media-vlm": "deepseek-flash",
 };
 
 /** Okna špičky v UTC, půlotevřená [od, do), jen pondělí–pátek. */
