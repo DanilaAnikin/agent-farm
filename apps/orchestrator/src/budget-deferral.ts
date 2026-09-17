@@ -443,6 +443,27 @@ export function admissionBlockedScope(
   return checkBudget(spend, caps, perAttemptUsd) ?? farmGuardScope(spend, caps, perAttemptUsd, guardReserveUsd);
 }
 
+// --- Kterou vrstvu brána zavírá ------------------------------------------------------
+
+/**
+ * Co se má zastavit, když vstupní brána vrátí scope.
+ *
+ * `checkBudget` testuje stropy v pořadí farm_month → farm → user → project → wish,
+ * takže scope `wish` znamená, že všechny ŠIRŠÍ stropy jsou v pořádku — projekt může
+ * dál pracovat na jiných přáních. Dřív kvůli němu šel do `budget_hold` celý projekt,
+ * jenže rozpočet přání se s denním oknem NERESETUJE: projekt se každou půlnoc
+ * probudil a během pár minut zase zalehl, takže celý den stál kvůli jedinému přání
+ * (ivanweb 16.–17. 9. 2026: přání 0,459 z 0,600 US$, projekt 12 h bez práce).
+ *
+ * Proto se u scope `wish` odkládá PŘÁNÍ (a jeho úkol), ne projekt.
+ */
+export function budgetBlockTarget(
+  scope: ReturnType<typeof checkBudget>,
+): "none" | "wish" | "project" {
+  if (!scope) return "none";
+  return scope === "wish" ? "wish" : "project";
+}
+
 // --- Texty po zaparkování příliš velkého úkolu ---------------------------------------
 
 /** Co se s přáním stalo po zaparkování úkolu (maybeReplanStuckWish), resp. že selhalo. */

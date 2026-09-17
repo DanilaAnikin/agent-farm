@@ -628,7 +628,14 @@ export function validateRecipeCommand(command: unknown): CommandCheck {
 // --- Proměnné prostředí pro sandbox ------------------------------------------
 
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
-const MAX_ENV_ENTRIES = 40;
+/**
+ * MUSÍ souhlasit s `MAX_ENV_NAMES` (fakta o repozitáři). Když je tenhle limit nižší,
+ * dostane model v promptu víc názvů proměnných, než smí vrátit — poslušně je vypíše
+ * všechny a `validateRecipeProposal` celý návrh zahodí s „env: nejvýš 40 proměnných".
+ * Průzkum pak selhává donekonečna (contentgen, 16.–17. 9. 2026), ačkoli přebytek
+ * stejně zahodí `sanitizeRecipeEnv`, takže ta přísnost nic nechránila.
+ */
+const MAX_ENV_ENTRIES = MAX_ENV_NAMES;
 const MAX_ENV_VALUE = 200;
 /** Co vypadá jako skutečné tajemství — do sandboxu to nikdy nepatří. */
 const SECRET_LOOKING = /(sk-[A-Za-z0-9]{12,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY)/;

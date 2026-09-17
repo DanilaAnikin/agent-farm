@@ -17,6 +17,7 @@ import {
   attempts,
   reviews,
   projects,
+  wishes,
   QUEUES,
   enqueue,
   readOne,
@@ -25,7 +26,7 @@ import {
   getSql,
 } from "@farm/db";
 import { and, eq, desc, sql, isNull } from "drizzle-orm";
-import { loadConfig, taskMachine, isWallClockExceeded } from "@farm/core";
+import { loadConfig, taskMachine, wishMachine, isWallClockExceeded } from "@farm/core";
 import {
   CONSTITUTION,
   MODELS,
@@ -50,6 +51,7 @@ import { maybeReplanStuckWish } from "./judge.js";
 import {
   admissionBlockedScope,
   attemptProgressed,
+  budgetBlockTarget,
   budgetClassLabel,
   budgetWindowResetAt,
   classifyBudgetDeferral,
@@ -157,6 +159,48 @@ export async function runDispatchOnce(): Promise<void> {
   // hlídač zastaví hned u prvního většího požadavku, by jen spálil kontext.
   const guardReserveUsd = guardAdmissionReserveUsd(process.env, { alias: routedModel });
   const overscope = admissionBlockedScope(spend, caps, cfg.perAttemptBudgetUsd, guardReserveUsd);
+
+  // VYČERPANÉ PŘÁNÍ NEZAVÍRÁ PROJEKT. Scope `wish` se testuje až po všech širších
+  // stropech, takže farma, uživatel i projekt mají ještě prostor — jen tohle jedno
+  // přání dojelo. Rozpočet přání se navíc s denním oknem neresetuje, takže držet
+  // kvůli němu celý projekt znamenalo věčné poskakování: probuzení o půlnoci a
+  // hold o pár minut později (ivanweb 16.–17. 9. 2026 takhle prostál 12 hodin).
+  // Odkládá se proto přání i jeho úkol a projekt pokračuje jinou prací.
+  if (budgetBlockTarget(overscope) === "wish" && task.wishId) {
+    wishMachine.assert("active", "parked");
+    await getDb()
+      .update(wishes)
+      .set({ status: "parked" })
+      .where(and(eq(wishes.id, task.wishId), eq(wishes.status, "active")));
+    taskMachine.assert("queued", "parked");
+    await getDb()
+      .update(tasks)
+      .set({ status: "parked", parkReason: "wish_budget_exhausted", parkedAt: new Date() })
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, "queued")));
+    // Zprávu ACKujeme: znovu doručit ji nemá smysl, přání už je odložené.
+    await ackDelete(QUEUES.tasks, msgId);
+    await logEvent({
+      projectId: project.id,
+      wishId: task.wishId,
+      taskId,
+      level: "warn",
+      type: "wish_parked",
+      message:
+        `Přání vyčerpalo svůj rozpočet (${(spend.wishTotalUsd ?? 0).toFixed(3)} z ` +
+        `${(caps.wishBudgetUsd ?? 0).toFixed(2)} US$) — farma ho odkládá a projekt pokračuje jinou prací. ` +
+        `Zvedni rozpočet přání, jestli má pokračovat.`,
+      data: {
+        scope: overscope,
+        wishSpentUsd: spend.wishTotalUsd,
+        wishBudgetUsd: caps.wishBudgetUsd,
+        perAttemptUsd: cfg.perAttemptBudgetUsd,
+        guardReserveUsd,
+        model: routedModel,
+      },
+    });
+    return;
+  }
+
   if (overscope) {
     // Strop dosažen → projekt do budget_hold; zprávu NEackujeme (znovu po vt/resetu).
     // active → budget_hold (viz projectMachine).

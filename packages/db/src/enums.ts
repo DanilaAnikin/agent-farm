@@ -70,6 +70,12 @@ export const PARK_REASONS = [
   // Úkol opakovaně vyčerpal per-pokus příděl LiteLLM bez nového commitu — na jeden
   // pokus je moc velký; farma přání přeplánuje na menší kroky (dispatch.ts).
   "attempt_allowance_exhausted",
+  // Přání vyčerpalo SVŮJ rozpočet (wishes.budget_usd). Dřív kvůli tomu šel do
+  // budget_hold celý PROJEKT, ačkoli scope 'wish' se testuje až jako poslední —
+  // tedy všechny širší stropy byly v pořádku a projekt mohl dělat jiná přání.
+  // Rozpočet přání se navíc s denním oknem neresetuje, takže se projekt každou
+  // půlnoc probudil a do pár minut zas zalehl (ivanweb, 16.–17. 9. 2026).
+  "wish_budget_exhausted",
   "unknown", // důvod se nepodařilo dohledat (backfill)
 ] as const;
 export type ParkReason = (typeof PARK_REASONS)[number];
